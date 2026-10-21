@@ -3,12 +3,13 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { ArrowLeft, ArrowRight, ArrowUpRight, Check, Mail, ShoppingBag, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, ArrowUpRight, Check, ChevronDown, Mail, MessageCircle, ShoppingBag, X } from "lucide-react";
 import "./muse.css";
 
 type Product = "muse" | "muse-token";
 type Dialog = "terms" | "orders" | null;
 type Step = "details" | "review" | "payment";
+type PaymentMethod = "alipay" | "wechat";
 
 const terms = [
   { title: "仅质保首次登录", body: "不提供后续使用质保。首次登录有问题，请保留订单号和截图联系支持。" },
@@ -23,6 +24,8 @@ export function MuseStorefront() {
   const [dialog, setDialog] = useState<Dialog>(null);
   const [step, setStep] = useState<Step>("details");
   const [email, setEmail] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("alipay");
+  const paymentLabel = paymentMethod === "alipay" ? "支付宝" : "微信支付";
   const [accepted, setAccepted] = useState(false);
   const [error, setError] = useState("");
   const [orderNumber, setOrderNumber] = useState("");
@@ -55,7 +58,6 @@ export function MuseStorefront() {
 
   function submitDetails(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (isPublicDemo) return;
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
       setError("请输入有效的收件邮箱");
       return;
@@ -70,17 +72,16 @@ export function MuseStorefront() {
 
   function queryOrder(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (isPublicDemo) return;
     setOrderError(
       orderNumber.trim() && orderToken.trim()
-        ? "本地预览未连接原站订单系统，请在原站查询订单。"
+        ? "演示页面未连接订单系统，输入内容未上传，无法查询真实订单。"
         : "请填写订单号和查询口令",
     );
   }
 
   return (
     <div className="muse-storefront">
-      {isPublicDemo && <div className="muse-demo-banner" role="note">非 GPTibo 官方网站。此页面仅供学习展示，不收集信息，也无法下单。</div>}
+      {isPublicDemo && <div className="muse-demo-banner" role="note">非 GPTibo 官方网站，仅供学习。请使用测试信息；输入仅在当前页面演示，不上传、不保存，不支持真实付款。</div>}
       <header className="muse-header">
         <Link className="muse-wordmark" href="/" aria-label="GPTibo 首页">
           <Image src={assetBase + "/sites/muse/favicon.svg"} width={29} height={29} alt="" />
@@ -147,13 +148,22 @@ export function MuseStorefront() {
                 <label htmlFor="muse-email">收件邮箱</label>
                 <div className={`muse-input-wrap ${error.includes("邮箱") ? "has-error" : ""}`}>
                   <Mail size={17}/>
-                  <input id="muse-email" type="email" placeholder="you@example.com" autoComplete={isPublicDemo ? "off" : "email"} readOnly={isPublicDemo}
-                    title={isPublicDemo ? "学习展示，不接收邮箱" : undefined}
+                  <input id="muse-email" type="email" placeholder="you@example.com" autoComplete="off" maxLength={254}
                     value={email} onChange={event => { setEmail(event.target.value); setError(""); }} />
                 </div>
                 <p className="muse-field-hint">账号资料发送至邮箱</p>
               </div>
-              <div className="muse-payment-row"><strong>支付方式</strong><span><span className="muse-alipay">支</span> 支付宝 <Check size={15}/></span></div>
+              <div className="muse-payment-row">
+                <label htmlFor="muse-payment-method">支付方式</label>
+                <div className="muse-payment-select">
+                  {paymentMethod === "alipay" ? <span className="muse-alipay" aria-hidden="true">支</span> : <span className="muse-wechat" aria-hidden="true"><MessageCircle size={14}/></span>}
+                  <select id="muse-payment-method" value={paymentMethod} onChange={event => setPaymentMethod(event.target.value as PaymentMethod)}>
+                    <option value="alipay">支付宝</option>
+                    <option value="wechat">微信支付</option>
+                  </select>
+                  <ChevronDown size={15} aria-hidden="true"/>
+                </div>
+              </div>
               <div className="muse-agreement">
                 <label><input type="checkbox" checked={accepted} onChange={event => { setAccepted(event.target.checked); setError(""); }} />
                   <span className="muse-checkbox-art">{accepted && <Check size={11} strokeWidth={3}/>}</span><span>我已阅读并同意</span></label>
@@ -164,23 +174,23 @@ export function MuseStorefront() {
                 <div><span>合计</span><small>含 ¥0.18 手续费</small></div>
                 <strong><span>¥</span>12.18</strong>
               </div>
-              <button className="muse-primary" type="submit" aria-disabled={isPublicDemo} title={isPublicDemo ? "非官方学习展示，无法下单" : undefined}>确认订单 <ArrowRight size={17}/></button>
+              <button className="muse-primary" type="submit">确认订单 <ArrowRight size={17}/></button>
             </form>
           ) : step === "review" ? (
             <div className="muse-review">
               <button className="muse-back" type="button" onClick={() => setStep("details")}><ArrowLeft size={15}/> 返回修改</button>
               <h1>确认订单</h1>
               <p className="muse-subtitle">Muse AI · 成品账号</p>
-              <dl><div><dt>商品</dt><dd>Muse AI · 1 Billion</dd></div><div><dt>收件邮箱</dt><dd>{email.trim()}</dd></div><div><dt>支付方式</dt><dd>支付宝</dd></div><div><dt>合计</dt><dd>¥12.18</dd></div></dl>
-              <p className="muse-preview-note">本地预览不会创建真实订单或收取费用。</p>
+              <dl><div><dt>商品</dt><dd>Muse AI · 1 Billion</dd></div><div><dt>收件邮箱</dt><dd>{email.trim()}</dd></div><div><dt>支付方式</dt><dd>{paymentLabel}</dd></div><div><dt>合计</dt><dd>¥12.18</dd></div></dl>
+              <p className="muse-preview-note">演示订单：金额和手续费为示例，不会创建真实订单或收取费用。</p>
               <button className="muse-primary" type="button" onClick={() => setStep("payment")}>继续 <ArrowRight size={16}/></button>
             </div>
           ) : (
             <div className="muse-review">
               <button className="muse-back" type="button" onClick={() => setStep("review")}><ArrowLeft size={15}/> 返回订单</button>
-              <h1>本地预览</h1>
+              <h1>支付演示</h1>
               <p className="muse-subtitle">Muse AI · 成品账号</p>
-              <div className="muse-payment-preview">暂未连接支付服务</div>
+              <div className="muse-payment-preview">{paymentLabel}尚未接入，未生成付款二维码</div>
               <p className="muse-preview-note">此页面仅复刻原站界面。真实购买请前往原站。</p>
               <a className="muse-primary" href="https://muse.gptibo.com/" target="_blank" rel="noopener noreferrer">前往原站 <ArrowRight size={16}/></a>
             </div>
@@ -207,12 +217,12 @@ export function MuseStorefront() {
             <h2 id="muse-dialog-title">我的订单</h2>
             <form className="muse-order-lookup" onSubmit={queryOrder}>
               <label htmlFor="muse-order-number">订单号</label>
-              <input id="muse-order-number" placeholder="填写订单号" readOnly={isPublicDemo} autoComplete="off" value={orderNumber} onChange={event => setOrderNumber(event.target.value)}/>
+              <input id="muse-order-number" placeholder="填写订单号" maxLength={64} autoComplete="off" value={orderNumber} onChange={event => setOrderNumber(event.target.value)}/>
               <label htmlFor="muse-order-token">查询口令</label>
-              <input id="muse-order-token" type="password" placeholder="查询凭据中的口令" readOnly={isPublicDemo} autoComplete="off" value={orderToken} onChange={event => setOrderToken(event.target.value)}/>
+              <input id="muse-order-token" type="password" placeholder="查询凭据中的口令" maxLength={64} autoComplete="off" value={orderToken} onChange={event => setOrderToken(event.target.value)}/>
               <p>查询口令见已下载的查询凭据。</p>
               {orderError && <p className="muse-error" role="alert">{orderError}</p>}
-              <button className="muse-primary" type="submit" aria-disabled={isPublicDemo} title={isPublicDemo ? "公开预览无法查询真实订单" : undefined}>查询订单 <ArrowRight size={16}/></button>
+              <button className="muse-primary" type="submit">查询订单 <ArrowRight size={16}/></button>
             </form>
           </>}
       </dialog>}

@@ -44,3 +44,11 @@ The public export retains the prominent non-affiliation banner. Its email and or
 
 Validation: `npm run check` with the GitHub Pages export environment; browser checks at desktop/mobile for readonly fields, tab keyboard navigation, dialog focus and Escape, horizontal overflow, page errors, and missing assets.
 
+## Input and payment selector fix — 2026-10-22
+
+Supersedes the read-only preview behavior above: the user requested editable inputs and a WeChat payment option. Public/local builds now allow temporary test input, validation, and the demonstration confirmation/payment flow. Values remain in React memory only, are never submitted to a backend or browser storage, and reset on reload. The disclosure explicitly requests test information. Order lookup responds with an explicit not-connected message instead of silently ignoring clicks.
+
+Rechecked the live source payment row: its Alipay indicator is a Lucide check, with no select/listbox after clicking. The new native Alipay/WeChat selector is a user-requested addition, not an observed source feature. The selected provider carries through confirmation and the unconnected payment screen. The displayed fee is illustrative, not a verified provider rate.
+
+Verification: production `npm run check`; browser checks at 390/1440px for typing, email/consent validation, both payment choices, confirmation/back navigation, editable order lookup, no form-data network submission or local/session storage, and reset on reload. Evidence: `interactive-390.png`, `interactive-1440.png`. Real payment integration remains pending merchant onboarding, provider documentation, and backend hosting.
+
