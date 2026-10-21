@@ -1,33 +1,20 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
+const geist = localFont({
+  src: "../../public/sites/muse/geist-latin.woff2",
+  variable: "--font-geist",
+  display: "swap",
 });
 
 export const metadata: Metadata = {
-  title: "Website Clone",
-  description: "Pixel-perfect website clone",
+  title: process.env.NEXT_PUBLIC_PUBLIC_DEMO === "true" ? "Muse 页面学习项目（非官方）" : "Muse · GPTibo",
+  description: process.env.NEXT_PUBLIC_PUBLIC_DEMO === "true"
+    ? "非官方界面学习项目，不收集信息，不提供订单或付款功能。"
+    : "Muse AI 与 Muse Token。",
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
-  return (
-    <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
-      <body className="min-h-full flex flex-col">{children}</body>
-    </html>
-  );
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+  return <html lang="zh-CN" className={geist.variable}><body>{children}</body></html>;
 }

@@ -1,0 +1,238 @@
+{
+  "title": "Muse · GPTibo",
+  "scrollHeight": 900,
+  "bodyText": "GPTibo.\nMuse AI\nMuse Token\n我的订单\n✦\n✦\nMuse AI\nMuse AI\n\n成品账号\n\n成品账号\n1 Billion\n¥12.00\n一次购买\n收件邮箱\n\n账号资料发送至邮箱\n\n支付方式\n支\n支付宝\n我已阅读并同意\n购买须知\n合计\n含 ¥0.18 手续费\n¥12.18\n确认订单\n© 2026 GPTibo\n联系支持",
+  "links": [
+    {
+      "text": "GPTibo.",
+      "href": "https://muse.gptibo.com/#"
+    },
+    {
+      "text": "联系支持",
+      "href": "https://t.me/coolkhz"
+    }
+  ],
+  "images": [
+    {
+      "tag": "IMG",
+      "src": "https://muse.gptibo.com/favicon.svg",
+      "alt": "玉米须",
+      "width": 29,
+      "height": 29
+    },
+    {
+      "tag": "IMG",
+      "src": "https://muse.gptibo.com/muse-logo.svg",
+      "alt": "",
+      "width": 20,
+      "height": 20
+    },
+    {
+      "tag": "IMG",
+      "src": "https://muse.gptibo.com/muse-logo.svg",
+      "alt": "",
+      "width": 20,
+      "height": 20
+    },
+    {
+      "tag": "svg",
+      "src": "",
+      "alt": "",
+      "width": 16,
+      "height": 16
+    },
+    {
+      "tag": "IMG",
+      "src": "https://muse.gptibo.com/muse-logo.svg",
+      "alt": "",
+      "width": 367.2814636230469,
+      "height": 371.2236022949219
+    },
+    {
+      "tag": "svg",
+      "src": "",
+      "alt": "",
+      "width": 236.98428344726562,
+      "height": 236.98431396484375
+    },
+    {
+      "tag": "svg",
+      "src": "",
+      "alt": "",
+      "width": 12,
+      "height": 12
+    },
+    {
+      "tag": "svg",
+      "src": "",
+      "alt": "",
+      "width": 15.6875,
+      "height": 17
+    },
+    {
+      "tag": "svg",
+      "src": "",
+      "alt": "",
+      "width": 15,
+      "height": 15
+    },
+    {
+      "tag": "svg",
+      "src": "",
+      "alt": "",
+      "width": 6.5999755859375,
+      "height": 6.5999755859375
+    },
+    {
+      "tag": "svg",
+      "src": "",
+      "alt": "",
+      "width": 17,
+      "height": 17
+    },
+    {
+      "tag": "svg",
+      "src": "",
+      "alt": "",
+      "width": 12,
+      "height": 12
+    }
+  ],
+  "controls": [
+    {
+      "tag": "BUTTON",
+      "text": "Muse AI",
+      "placeholder": "",
+      "type": "button",
+      "className": ""
+    },
+    {
+      "tag": "BUTTON",
+      "text": "Muse Token",
+      "placeholder": "",
+      "type": "button",
+      "className": ""
+    },
+    {
+      "tag": "BUTTON",
+      "text": "我的订单",
+      "placeholder": "",
+      "type": "button",
+      "className": "orders-link"
+    },
+    {
+      "tag": "INPUT",
+      "text": "",
+      "placeholder": "you@example.com",
+      "type": "email",
+      "className": ""
+    },
+    {
+      "tag": "INPUT",
+      "text": "",
+      "placeholder": "",
+      "type": "checkbox",
+      "className": ""
+    },
+    {
+      "tag": "BUTTON",
+      "text": "购买须知",
+      "placeholder": "",
+      "type": "button",
+      "className": "terms-link"
+    },
+    {
+      "tag": "BUTTON",
+      "text": "确认订单",
+      "placeholder": "",
+      "type": "submit",
+      "className": "primary-button"
+    }
+  ],
+  "blocks": [
+    {
+      "tag": "SECTION",
+      "text": "",
+      "x": 0,
+      "y": 0,
+      "w": 1425,
+      "h": 0,
+      "font": "-apple-system, BlinkMacSystemFont, \"Geist Variable\", \"Helvetica Neue\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif",
+      "fontSize": "14px",
+      "color": "rgb(29, 29, 31)",
+      "background": "rgba(0, 0, 0, 0)"
+    },
+    {
+      "tag": "HEADER",
+      "text": "GPTibo.\nMuse AI\nMuse Token\n我的订单",
+      "x": 112.5,
+      "y": 0,
+      "w": 1200,
+      "h": 100,
+      "font": "-apple-system, BlinkMacSystemFont, \"Geist Variable\", \"Helvetica Neue\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif",
+      "fontSize": "14px",
+      "color": "rgb(29, 29, 31)",
+      "background": "rgba(0, 0, 0, 0)"
+    },
+    {
+      "tag": "MAIN",
+      "text": "✦\n✦\nMuse AI\nMuse AI\n\n成品账号\n\n成品账号\n1 Billion\n¥12.00\n一次购买\n收件邮箱\n\n账号资料发送至邮箱\n\n支付方式\n支\n支付宝\n我已阅读并同意\n购买须知\n合计\n含 ",
+      "x": 152.5,
+      "y": 100,
+      "w": 1120,
+      "h": 735,
+      "font": "-apple-system, BlinkMacSystemFont, \"Geist Variable\", \"Helvetica Neue\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif",
+      "fontSize": "14px",
+      "color": "rgb(29, 29, 31)",
+      "background": "rgba(0, 0, 0, 0)"
+    },
+    {
+      "tag": "SECTION",
+      "text": "✦\n✦\nMuse AI",
+      "x": 152.5,
+      "y": 180.5,
+      "w": 580,
+      "h": 560,
+      "font": "-apple-system, BlinkMacSystemFont, \"Geist Variable\", \"Helvetica Neue\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif",
+      "fontSize": "14px",
+      "color": "rgb(29, 29, 31)",
+      "background": "rgba(0, 0, 0, 0)"
+    },
+    {
+      "tag": "SECTION",
+      "text": "Muse AI\n\n成品账号\n\n成品账号\n1 Billion\n¥12.00\n一次购买\n收件邮箱\n\n账号资料发送至邮箱\n\n支付方式\n支\n支付宝\n我已阅读并同意\n购买须知\n合计\n含 ¥0.18 手续费\n¥1",
+      "x": 842.5,
+      "y": 164,
+      "w": 430,
+      "h": 593,
+      "font": "-apple-system, BlinkMacSystemFont, \"Geist Variable\", \"Helvetica Neue\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif",
+      "fontSize": "14px",
+      "color": "rgb(29, 29, 31)",
+      "background": "rgb(255, 255, 255)"
+    },
+    {
+      "tag": "H1",
+      "text": "Muse AI",
+      "x": 875.5,
+      "y": 197,
+      "w": 364,
+      "h": 43.6875,
+      "font": "-apple-system, BlinkMacSystemFont, \"Geist Variable\", \"Helvetica Neue\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif",
+      "fontSize": "38px",
+      "color": "rgb(29, 29, 31)",
+      "background": "rgba(0, 0, 0, 0)"
+    },
+    {
+      "tag": "FOOTER",
+      "text": "© 2026 GPTibo\n联系支持",
+      "x": 112.5,
+      "y": 835,
+      "w": 1200,
+      "h": 65,
+      "font": "-apple-system, BlinkMacSystemFont, \"Geist Variable\", \"Helvetica Neue\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif",
+      "fontSize": "10px",
+      "color": "rgb(154, 159, 170)",
+      "background": "rgba(0, 0, 0, 0)"
+    }
+  ]
+}
