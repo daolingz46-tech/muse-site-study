@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { ArrowLeft, ArrowRight, Check, Mail, ShoppingBag, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, ArrowUpRight, Check, Mail, ShoppingBag, X } from "lucide-react";
 import "./muse.css";
 
 type Product = "muse" | "muse-token";
@@ -12,7 +12,7 @@ type Step = "details" | "review" | "payment";
 
 const terms = [
   { title: "仅质保首次登录", body: "不提供后续使用质保。首次登录有问题，请保留订单号和截图联系支持。" },
-  { title: "交付邮箱与接码链接", body: "账号邮箱和接码链接发送至收件邮箱，通过接码链接获取登录验证码。" },
+  { title: "交付邮箱与接码链接", body: "账号发送至收件邮箱，通过接码链接获取登录验证码或者密码登录。" },
   { title: "登录后立即更换邮箱", body: "首次登录成功后，请立即在 Muse 内更换为自己的邮箱，并删除旧邮箱。" },
 ];
 const assetBase = process.env.NEXT_PUBLIC_BASE_PATH || "";
@@ -28,14 +28,23 @@ export function MuseStorefront() {
   const [orderNumber, setOrderNumber] = useState("");
   const [orderToken, setOrderToken] = useState("");
   const [orderError, setOrderError] = useState("");
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const checkoutRef = useRef<HTMLDivElement>(null);
+  const [checkoutHeight, setCheckoutHeight] = useState<number>();
+
+  useEffect(() => {
+    const content = checkoutRef.current;
+    if (!content) return;
+    const observer = new ResizeObserver(() => {
+      setCheckoutHeight(Math.round(content.getBoundingClientRect().height));
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     if (!dialog) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setDialog(null);
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    dialogRef.current?.showModal();
   }, [dialog]);
 
   function selectProduct(next: Product) {
@@ -82,6 +91,15 @@ export function MuseStorefront() {
           {([["muse", "Muse AI"], ["muse-token", "Muse Token"]] as const).map(([id, label]) => (
             <button key={id} id={`tab-${id}`} type="button" role="tab"
               aria-selected={product === id} aria-controls="muse-product-panel"
+              tabIndex={product === id ? 0 : -1}
+              onKeyDown={event => {
+                if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+                  event.preventDefault();
+                  const next = event.key === "Home" ? "muse" : event.key === "End" ? "muse-token" : product === "muse" ? "muse-token" : "muse";
+                  selectProduct(next);
+                  document.getElementById(`tab-${next}`)?.focus();
+                }
+              }}
               onClick={() => selectProduct(id)}>
               <Image src={assetBase + "/sites/muse/muse-logo.svg"} width={20} height={20} alt="" />
               {label}
@@ -89,7 +107,7 @@ export function MuseStorefront() {
           ))}
         </div>
         <button className="muse-orders-link" type="button" onClick={() => { setOrderError(""); setDialog("orders"); }}>
-          <ShoppingBag size={16} strokeWidth={1.8} /> <span>我的订单</span>
+          <ShoppingBag size={16} /> <span>我的订单</span>
         </button>
       </header>
 
@@ -99,13 +117,15 @@ export function MuseStorefront() {
           <div className="muse-logo-composition">
             <span className="muse-logo-inner"><Image src={assetBase + "/sites/muse/muse-logo.svg"} fill sizes="(max-width: 650px) 158px, 354px" alt="" loading="eager" /></span>
           </div>
-          <div className="muse-stage-caption">
+          <div className="muse-stage-caption" key={product}>
             <strong>{product === "muse" ? "Muse AI" : "Muse Token"}</strong>
-            <div className="muse-pagination" aria-hidden="true"><i className={product === "muse" ? "active" : ""}/><i className={product === "muse-token" ? "active" : ""}/></div>
           </div>
+          <div className="muse-pagination" aria-hidden="true"><i className={product === "muse" ? "active" : ""}/><i className={product === "muse-token" ? "active" : ""}/></div>
         </section>
 
         <section className="muse-checkout-card" aria-label="下单信息">
+          <div className="muse-checkout-viewport" style={{ height: checkoutHeight }}>
+          <div ref={checkoutRef} className="muse-checkout-content">
           {product === "muse-token" ? (
             <div className="muse-token-card">
               <h1>Muse Token</h1>
@@ -118,7 +138,7 @@ export function MuseStorefront() {
               <p className="muse-subtitle">成品账号</p>
               <div className="muse-selected-plan">
                 <div className="muse-plan-description">
-                  <span className="muse-selected-circle"><Check size={12} strokeWidth={2.5}/></span>
+                  <span className="muse-selected-circle"><Check size={12} strokeWidth={3}/></span>
                   <div><strong>成品账号</strong><span>1 Billion</span></div>
                 </div>
                 <div className="muse-plan-price"><span>¥</span>12.00<small>一次购买</small></div>
@@ -126,20 +146,17 @@ export function MuseStorefront() {
               <div className="muse-email-field">
                 <label htmlFor="muse-email">收件邮箱</label>
                 <div className={`muse-input-wrap ${error.includes("邮箱") ? "has-error" : ""}`}>
-                  <Mail size={16} strokeWidth={1.8}/>
-                  {isPublicDemo
-                    ? <span className="muse-demo-placeholder">公开预览不接收邮箱</span>
-                    : <input id="muse-email" type="email" placeholder="you@example.com" autoComplete="email"
-                        value={email} onChange={event => { setEmail(event.target.value); setError(""); }} />}
+                  <Mail size={17}/>
+                  <input id="muse-email" type="email" placeholder="you@example.com" autoComplete={isPublicDemo ? "off" : "email"} readOnly={isPublicDemo}
+                    title={isPublicDemo ? "学习展示，不接收邮箱" : undefined}
+                    value={email} onChange={event => { setEmail(event.target.value); setError(""); }} />
                 </div>
-                <p className="muse-field-hint">{isPublicDemo ? "演示页面不会发送账号资料" : "账号资料发送至邮箱"}</p>
+                <p className="muse-field-hint">账号资料发送至邮箱</p>
               </div>
               <div className="muse-payment-row"><strong>支付方式</strong><span><span className="muse-alipay">支</span> 支付宝 <Check size={15}/></span></div>
               <div className="muse-agreement">
-                {isPublicDemo
-                  ? <span>仅供学习展示</span>
-                  : <label><input type="checkbox" checked={accepted} onChange={event => { setAccepted(event.target.checked); setError(""); }} />
-                      <span className="muse-checkbox-art">{accepted && <Check size={12}/>}</span><span>我已阅读并同意</span></label>}
+                <label><input type="checkbox" checked={accepted} onChange={event => { setAccepted(event.target.checked); setError(""); }} />
+                  <span className="muse-checkbox-art">{accepted && <Check size={11} strokeWidth={3}/>}</span><span>我已阅读并同意</span></label>
                 <button type="button" onClick={() => setDialog("terms")}>购买须知</button>
               </div>
               {error && <p className="muse-error" role="alert">{error}</p>}
@@ -147,7 +164,7 @@ export function MuseStorefront() {
                 <div><span>合计</span><small>含 ¥0.18 手续费</small></div>
                 <strong><span>¥</span>12.18</strong>
               </div>
-              <button className="muse-primary" type="submit" disabled={isPublicDemo}>{isPublicDemo ? "演示页面无法下单" : <>确认订单 <ArrowRight size={16}/></>}</button>
+              <button className="muse-primary" type="submit" aria-disabled={isPublicDemo} title={isPublicDemo ? "非官方学习展示，无法下单" : undefined}>确认订单 <ArrowRight size={17}/></button>
             </form>
           ) : step === "review" ? (
             <div className="muse-review">
@@ -168,13 +185,18 @@ export function MuseStorefront() {
               <a className="muse-primary" href="https://muse.gptibo.com/" target="_blank" rel="noopener noreferrer">前往原站 <ArrowRight size={16}/></a>
             </div>
           )}
+          </div>
+          </div>
         </section>
       </main>
 
-      <footer className="muse-footer"><span>© 2026 GPTibo</span><a href="https://t.me/coolkhz" target="_blank" rel="noopener noreferrer">联系支持 ↗</a></footer>
+      <footer className="muse-footer"><span>© 2026 GPTibo</span><a href="https://t.me/coolkhz" target="_blank" rel="noopener noreferrer">联系支持 <ArrowUpRight size={12}/></a></footer>
 
-      {dialog && <div className="muse-modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setDialog(null); }}>
-        <div className="muse-dialog" role="dialog" aria-modal="true" aria-labelledby="muse-dialog-title">
+      {dialog && <dialog ref={dialogRef} className="muse-dialog" aria-labelledby="muse-dialog-title" onCancel={() => setDialog(null)} onClick={event => {
+        if (event.target !== event.currentTarget) return;
+        const bounds = event.currentTarget.getBoundingClientRect();
+        if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) setDialog(null);
+      }}>
           <button className="muse-dialog-x" type="button" aria-label="关闭" onClick={() => setDialog(null)}><X size={18}/></button>
           {dialog === "terms" ? <>
             <h2 id="muse-dialog-title">购买须知</h2>
@@ -183,18 +205,17 @@ export function MuseStorefront() {
             <button className="muse-primary" type="button" onClick={() => setDialog(null)}>关闭</button>
           </> : <>
             <h2 id="muse-dialog-title">我的订单</h2>
-            {isPublicDemo ? <p className="muse-preview-note">公开预览不接收订单信息，也无法查询真实订单。</p> : <form className="muse-order-lookup" onSubmit={queryOrder}>
+            <form className="muse-order-lookup" onSubmit={queryOrder}>
               <label htmlFor="muse-order-number">订单号</label>
-              <input id="muse-order-number" placeholder="填写订单号" value={orderNumber} onChange={event => setOrderNumber(event.target.value)}/>
+              <input id="muse-order-number" placeholder="填写订单号" readOnly={isPublicDemo} autoComplete="off" value={orderNumber} onChange={event => setOrderNumber(event.target.value)}/>
               <label htmlFor="muse-order-token">查询口令</label>
-              <input id="muse-order-token" placeholder="查询凭据中的口令" value={orderToken} onChange={event => setOrderToken(event.target.value)}/>
+              <input id="muse-order-token" type="password" placeholder="查询凭据中的口令" readOnly={isPublicDemo} autoComplete="off" value={orderToken} onChange={event => setOrderToken(event.target.value)}/>
               <p>查询口令见已下载的查询凭据。</p>
               {orderError && <p className="muse-error" role="alert">{orderError}</p>}
-              <button className="muse-primary" type="submit">查询订单 <ArrowRight size={16}/></button>
-            </form>}
+              <button className="muse-primary" type="submit" aria-disabled={isPublicDemo} title={isPublicDemo ? "公开预览无法查询真实订单" : undefined}>查询订单 <ArrowRight size={16}/></button>
+            </form>
           </>}
-        </div>
-      </div>}
+      </dialog>}
     </div>
   );
 }

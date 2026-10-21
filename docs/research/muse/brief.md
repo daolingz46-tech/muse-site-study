@@ -34,3 +34,13 @@ Owned assets: `public/sites/muse/*`
 
 The source checkout and order lookup use a separate live API. This standalone frontend deliberately does not create orders, query real orders, or process payments. It shows an explicit local preview message instead of implying a real transaction. The reference site intermittently closed browser connections after the initial screenshots, so alternate-state screenshots were captured using locally served copies of the site's publicly fetched reference assets for inspection only; those production bundles are not part of the implementation.
 
+## Refinement — 2026-10-22
+
+Live source access was restored. The new `source-*-refined.png` screenshots and measurements come directly from the live website, including its terms and order dialogs. Compared at widths 390, 768, 1280, 1440, and 1920 with a 900px viewport height and reduced motion to remove animation timing differences. `refined-measurements.json` records the source/local geometry. Local reference screenshots use the development server and may include its development indicator; `public-*-refined.png` uses the actual static production export.
+
+Corrected normal line height, responsive logo sizes and offsets, independently centered pagination, exact total/button spacing, source terms text, and dialog layouts. Reproduced floating/rotating/scaling logo motion, breathing halo, entrance effects, and animated checkout height. Native dialogs constrain focus, restore the trigger focus, and support Escape/backdrop dismissal. Tabs support arrow keys, Home, and End.
+
+The public export retains the prominent non-affiliation banner. Its email and order fields preserve the source appearance but are read-only, with no submission or data collection. This banner changes vertical geometry compared with the source. Backend purchase, delivery, and order lookup are not reproduced; the local review/payment steps remain demonstrative. Animation curves and states have been implemented, but no claim of frame-by-frame identity is made.
+
+Validation: `npm run check` with the GitHub Pages export environment; browser checks at desktop/mobile for readonly fields, tab keyboard navigation, dialog focus and Escape, horizontal overflow, page errors, and missing assets.
+
