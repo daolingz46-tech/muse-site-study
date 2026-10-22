@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { ArrowUpRight, Download, LockKeyhole, LogOut, RefreshCw, Search, X } from "lucide-react";
+import { ArrowUpRight, Download, LockKeyhole, LogOut, RefreshCw, Search, X, Bell } from "lucide-react";
 import Link from "next/link";
 import { formatMoney, storeName } from "./catalog";
 import "./workbench.css";
@@ -28,7 +28,9 @@ export function Workbench() {
   const [result, setResult] = useState<Result | null>(null), [query, setQuery] = useState(""), [search, setSearch] = useState(""), [status, setStatus] = useState(""), [page, setPage] = useState(0);
   const [selected, setSelected] = useState<AdminOrder | null>(null), [checked, setChecked] = useState(false), [reference, setReference] = useState("");
   const [delivery, setDelivery] = useState({ email: "", password: "", codeUrl: "" }), [actionError, setActionError] = useState("");
+  const [alert, setAlert] = useState(""), [desktopAlerts, setDesktopAlerts] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null), sequence = useRef(0);
+  const knownReported = useRef<Set<string> | null>(null);
   const load = useCallback(async () => {
     const current = ++sequence.current;
     try {
@@ -41,7 +43,38 @@ export function Workbench() {
       else setError(e instanceof Error ? e.message : "连接失败，请稍后重试");
     }
   }, [search, status, page]);
-  useEffect(() => { const initial = window.setTimeout(() => void load(), 0); const timer = window.setInterval(() => { if (!document.hidden) void load(); }, 30000); return () => { window.clearTimeout(initial); window.clearInterval(timer); }; }, [load]);
+  useEffect(() => {
+    const refresh = () => { if (!document.hidden) void load(); };
+    const initial = window.setTimeout(refresh, 0);
+    const timer = window.setInterval(refresh, 5000);
+    document.addEventListener("visibilitychange", refresh);
+    return () => { window.clearTimeout(initial); window.clearInterval(timer); document.removeEventListener("visibilitychange", refresh); };
+  }, [load]);
+  useEffect(() => {
+    if (auth !== "ready") return;
+    let active = true;
+    const checkReported = async () => {
+      try {
+        const data: Result = await api("orders?status=reported&page=0");
+        if (!active) return;
+        const current = new Set(data.orders.map(order => order.id));
+        if (knownReported.current === null) { knownReported.current = current; return; }
+        const fresh = data.orders.filter(order => !knownReported.current?.has(order.id));
+        knownReported.current = current;
+        if (fresh.length) {
+          const message = fresh.length === 1 ? `新订单 ${fresh[0].code} 已提交付款，请核实` : `有 ${fresh.length} 笔新订单已提交付款，请核实`;
+          setAlert(message);
+          if (typeof Notification !== "undefined" && Notification.permission === "granted") new Notification("收到新的付款核实申请", { body: message, tag: fresh[0].id });
+          void load();
+        }
+      } catch { /* 主订单列表会显示连接错误；下一轮继续检查。 */ }
+    };
+    void checkReported();
+    const timer = window.setInterval(() => { if (!document.hidden) void checkReported(); }, 5000);
+    const visible = () => { if (!document.hidden) void checkReported(); };
+    document.addEventListener("visibilitychange", visible);
+    return () => { active = false; window.clearInterval(timer); document.removeEventListener("visibilitychange", visible); };
+  }, [auth, load]);
   useEffect(() => { if (selected) dialog.current?.showModal(); }, [selected]);
   async function login(event: FormEvent) {
     event.preventDefault(); if (busy) return; setBusy(true); setError("");
@@ -52,6 +85,12 @@ export function Workbench() {
   async function logout() {
     try { await api("logout", {}); ++sequence.current; setAuth("login"); setResult(null); }
     catch (e) { setError(e instanceof Error ? e.message : "退出失败"); }
+  }
+  async function enableDesktopAlerts() {
+    if (typeof Notification === "undefined") { setAlert("当前浏览器不支持桌面通知，请保持工作台页面打开"); return; }
+    const permission = await Notification.requestPermission();
+    setDesktopAlerts(permission === "granted");
+    setAlert(permission === "granted" ? "桌面提醒已开启；新付款核实申请会弹出通知" : "浏览器未允许通知；页面内仍会显示新订单提醒");
   }
   function open(order: AdminOrder) { setSelected(order); setChecked(false); setReference(""); setDelivery({ email: "", password: "", codeUrl: "" }); setActionError(""); }
   async function save(event: FormEvent) {
@@ -72,12 +111,14 @@ export function Workbench() {
     {error && <p role="alert" className="wb-error">{error}</p>}<Link href="/">返回商店 <ArrowUpRight size={14}/></Link>
   </form></main>;
   return <main className="workbench">
-    <header className="wb-header"><div><p className="wb-eyebrow">{storeName} / 管理中心</p><h1>订单工作台</h1></div><nav><a href="/" target="_blank" rel="noreferrer">打开商店 <ArrowUpRight size={15}/></a><button onClick={() => void logout()}><LogOut size={15}/>退出</button></nav></header>
+    <header className="wb-header"><div><p className="wb-eyebrow">{storeName} / 管理中心</p><h1>订单工作台</h1></div><nav><button onClick={() => void enableDesktopAlerts()}><Bell size={15}/>{desktopAlerts ? "桌面提醒已开" : "开启桌面提醒"}</button><a href="/" target="_blank" rel="noreferrer">打开商店 <ArrowUpRight size={15}/></a><button onClick={() => void logout()}><LogOut size={15}/>退出</button></nav></header>
     <p className="wb-description">以微信、支付宝收款记录核实到账，再处理充值或账号交付。</p>
+    {alert && <div className="wb-alert" role="status"><span>{alert}</span><button aria-label="关闭提醒" onClick={() => setAlert("")}>×</button></div>}
+    {!!result?.summary.awaiting && <button className="wb-awaiting" onClick={() => { setStatus("reported"); setSearch(""); setQuery(""); setPage(0); }}><strong>待核实到账：{result.summary.awaiting} 笔</strong><span>买家已提交付款反馈，点击查看并核对收款记录 →</span></button>}
     <section className="wb-metrics" aria-label="经营数据">{[
       ["累计确认收款", `¥${formatMoney(result?.summary.revenueCents || 0)}`, "已核实到账的订单"],
       ["今日确认收款", `¥${formatMoney(result?.summary.todayCents || 0)}`, "北京时间今日"],
-      ["待核实到账", result?.summary.awaiting || 0, "买家已反馈付款"],
+      ["待核实到账", result?.summary.awaiting || 0, "买家已反馈付款 · 5 秒自动刷新"],
       ["待交付", result?.summary.processing || 0, `${result?.summary.completed || 0} 笔已完成 · 共 ${result?.summary.total || 0} 笔订单`],
     ].map(([title, value, note]) => <article key={title}><span>{title}</span><strong>{value}</strong><small>{note}</small></article>)}</section>
     <section className="wb-order-section"><div className="wb-toolbar"><h2>订单列表</h2><div><button onClick={() => void load()}><RefreshCw size={15}/>刷新</button><button onClick={exportCsv} disabled={!result?.orders.length}><Download size={15}/>导出当前页</button></div></div>
