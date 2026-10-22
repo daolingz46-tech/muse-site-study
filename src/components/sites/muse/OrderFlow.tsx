@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Image from "next/image";
 import { ArrowLeft, ArrowRight, Check, CircleCheck, Clock3, Copy, Download, Mail, QrCode, RefreshCw, ShoppingBag } from "lucide-react";
-import { formatMoney, type OrderDetails } from "./catalog";
+import { formatMoney, supportQQ, type OrderDetails } from "./catalog";
 
 export type DemoOrder = OrderDetails & {
   id: string;
@@ -14,6 +14,7 @@ export type DemoOrder = OrderDetails & {
 };
 export type DemoStatus = "pending" | "processing" | "complete" | "expired";
 const assetBase = process.env.NEXT_PUBLIC_BASE_PATH || "";
+const isPublicDemo = process.env.NEXT_PUBLIC_PUBLIC_DEMO === "true";
 
 export function PurchaseNotice({ onBack, onContinue, terms, title }: {
   onBack: () => void;
@@ -52,6 +53,8 @@ export function OrderPayment({ order, onBack, onNotify, onStatusChange }: {
   const label = order.method === "alipay" ? "支付宝" : "微信";
   const isToken = order.product === "muse-token";
   const total = formatMoney(order.amountCents + order.feeCents);
+  const showPersonalCode = !isPublicDemo;
+  const personalCodePath = order.method === "wechat" ? "/sites/muse/wechat-collection.local.png" : "/sites/muse/alipay-collection.local.png";
   const expired = status === "expired" || (status === "pending" && remaining === 0);
   const countdown = `${Math.floor(remaining / 60).toString().padStart(2, "0")}:${(remaining % 60).toString().padStart(2, "0")}`;
 
@@ -97,9 +100,9 @@ export function OrderPayment({ order, onBack, onNotify, onStatusChange }: {
     {status === "pending" && !expired ? <>
       <div className="muse-payment-summary"><h1>支付订单</h1><p>{order.title}</p><div className="muse-payment-amount"><span>¥</span><strong>{total}</strong></div></div>
       <div className="muse-scan-panel">
-        <div className="muse-demo-qr"><Image src={assetBase + "/sites/muse/demo-qr.svg"} width={240} height={240} alt="演示二维码，不可付款"/><span>DEMO</span></div>
+        <div className="muse-demo-qr"><Image src={assetBase + (showPersonalCode ? personalCodePath : "/sites/muse/demo-qr.svg")} width={240} height={240} alt={showPersonalCode ? `${label}个人收款码，需人工核对到账` : "演示二维码，不可付款"}/>{!showPersonalCode && <span>DEMO</span>}</div>
         <p className="muse-scan-hint"><span className={order.method === "alipay" ? "muse-alipay" : "muse-wechat"}>{order.method === "alipay" ? "支" : "微"}</span> 使用{label}扫码支付</p>
-        <p className="muse-qr-disclosure">示例码，仅展示界面，无法付款</p>
+        <p className="muse-qr-disclosure">{showPersonalCode ? `请手动填写 ¥${total}；付款后联系 QQ：${supportQQ} 人工核对，本页面不会自动确认到账。` : "示例码，仅展示界面，无法付款"}</p>
         <div className="muse-payment-countdown" data-tone={remaining < 60 ? "urgent" : remaining < 180 ? "warning" : "normal"}><Clock3 size={15}/> 剩余支付时间 <strong>{countdown}</strong></div>
       </div>
     </> : <div className="muse-order-status">

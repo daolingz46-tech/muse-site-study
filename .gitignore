@@ -47,3 +47,7 @@ next-env.d.ts
 
 # Local temp files
 temp/
+
+# Personal collection code is supplied separately for the local storefront.
+public/sites/muse/wechat-collection.local.png
+public/sites/muse/alipay-collection.local.png

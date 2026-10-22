@@ -5,11 +5,11 @@ import Image from "next/image";
 import Link from "next/link";
 import { ArrowRight, ArrowUpRight, Check, ChevronDown, Mail, MessageCircle, ShoppingBag, Ticket, X } from "lucide-react";
 import { OrderPayment, PurchaseNotice, RecentOrders, type DemoOrder, type DemoStatus } from "./OrderFlow";
-import { formatMoney, tokenPlans, tokenTerms, type OrderDetails } from "./catalog";
+import { accountPriceCents, formatMoney, supportQQ, tokenPlans, tokenTerms, type OrderDetails } from "./catalog";
 import "./muse.css";
 
 type Product = "muse" | "muse-token";
-type Dialog = "terms" | "orders" | null;
+type Dialog = "terms" | "orders" | "support" | null;
 type Step = "details" | "notice" | "payment";
 type PaymentMethod = "alipay" | "wechat";
 
@@ -32,8 +32,8 @@ export function MuseStorefront() {
   const isToken = product === "muse-token";
   const productTitle = isToken ? `Muse Token · ${selectedTokenPlan.label}` : "Muse AI · 成品账号";
   const purchaseTerms = isToken ? tokenTerms : terms;
-  const amountCents = isToken ? selectedTokenPlan.amountCents : 1200;
-  const feeCents = isToken ? 0 : 18;
+  const amountCents = isToken ? selectedTokenPlan.amountCents : accountPriceCents;
+  const feeCents = 0;
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("alipay");
   const [accepted, setAccepted] = useState(false);
   const [error, setError] = useState("");
@@ -211,7 +211,7 @@ export function MuseStorefront() {
                   <span className="muse-selected-circle"><Check size={12} strokeWidth={3}/></span>
                   <div><strong>成品账号</strong><span>1 Billion</span></div>
                 </div>
-                <div className="muse-plan-price"><span>¥</span>12.00<small>一次购买</small></div>
+                <div className="muse-plan-price"><span>¥</span>{formatMoney(accountPriceCents)}<small>一次购买</small></div>
               </div>
               <div className="muse-email-field">
                 <label htmlFor="muse-email">收件邮箱</label>
@@ -240,7 +240,7 @@ export function MuseStorefront() {
               </div>
               {error && <p className="muse-error" role="alert">{error}</p>}
               <div className="muse-order-total">
-                <div><span>合计</span><small>{isToken ? "仅充值 Token，不含账号" : "含 ¥0.18 手续费"}</small></div>
+                <div><span>合计</span><small>{isToken ? "仅充值 Token，不含账号" : "成品账号，一次购买"}</small></div>
                 <strong><span>¥</span>{formatMoney(amountCents + feeCents)}</strong>
               </div>
               <button className="muse-primary" type="submit">确认订单 <ArrowRight size={17}/></button>
@@ -251,7 +251,7 @@ export function MuseStorefront() {
         </section>
       </main>
 
-      <footer className="muse-footer"><span>© 2026 GPTibo</span><a href="https://t.me/coolkhz" target="_blank" rel="noopener noreferrer">联系支持 <ArrowUpRight size={12}/></a></footer>
+      <footer className="muse-footer"><span>© 2026 GPTibo</span><button className="muse-support-link" type="button" onClick={() => setDialog("support")}>联系支持 · QQ：{supportQQ} <ArrowUpRight size={12}/></button></footer>
 
       {dialog && <dialog ref={dialogRef} className="muse-dialog" aria-labelledby="muse-dialog-title" onCancel={() => setDialog(null)} onClick={event => {
         if (event.target !== event.currentTarget) return;
@@ -264,6 +264,14 @@ export function MuseStorefront() {
             <p className="muse-dialog-subtitle">{productTitle}</p>
             <ul className="muse-terms-list">{purchaseTerms.map(item => <li key={item.title}><strong>{item.title}</strong><p>{item.body}</p></li>)}</ul>
             <button className="muse-primary" type="button" onClick={() => setDialog(null)}>关闭</button>
+          </> : dialog === "support" ? <>
+            <h2 id="muse-dialog-title">联系支持</h2>
+            <p className="muse-dialog-subtitle">复制 QQ 号，在 QQ 中搜索添加</p>
+            <p className="muse-support-number">QQ：{supportQQ}</p>
+            <button className="muse-primary" type="button" onClick={async () => {
+              try { await navigator.clipboard.writeText(supportQQ); setDialog(null); notify("QQ 号已复制"); }
+              catch { notify("请选中 QQ 号手动复制"); }
+            }}>复制 QQ 号</button>
           </> : <>
             <h2 id="muse-dialog-title">我的订单</h2>
             <form className="muse-order-lookup" onSubmit={queryOrder}>

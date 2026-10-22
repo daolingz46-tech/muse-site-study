@@ -70,3 +70,11 @@ User-authored addition to the previously unavailable Muse Token tab: 300亿 / ¥
 
 Validation: GitHub Pages production `npm run check` passed. Browser tests at 320, 390 and 1440px exercised all four tiers end to end, empty invitation-code validation, terms, exact payment/download totals, recharge completion, reopening an older order after selecting another tier, returning to its original input/price, and switching back to the account form. No horizontal overflow or page errors. Screenshots: `token-plans-*`, `token-payment-*`.
 
+## Revised prices, support, and personal collection codes
+
+User changed the account product to ¥15 total and confirmed the existing 100亿 Token tier should be ¥29 (not renamed 110亿). Removed the account's old sample surcharge so the quote, checkout total, payment summary and credentials all use ¥15. The other token tiers are unchanged. Replaced the original Telegram support link with QQ 3557785836 and a modal with a copy-number action.
+
+User supplied personal WeChat and Alipay collection codes. They were decoded locally to verify the intended providers; their original pixels were copied unchanged to ignored `wechat-collection.local.png` and `alipay-collection.local.png` files in the local asset folder. Local builds select the appropriate image and state the exact amount and QQ contact for manual reconciliation. There is no automatic payment verification. These two local files are not committed or deployed by GitHub Actions. Public GitHub Pages builds retain DEMO codes and educational disclosure.
+
+Validation covers both build modes: ¥15 account and ¥29 100亿 tier through checkout/payment, correct local QR choice for both methods, DEMO-only QR selection in the public build, QQ clipboard contents, and mobile overflow/runtime errors. Real payments, durable orders and fulfillment are still unconnected.
+
