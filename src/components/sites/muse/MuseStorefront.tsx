@@ -6,7 +6,8 @@ import Link from "next/link";
 import { ArrowRight, ArrowUpRight, Check, ChevronDown, Mail, MessageCircle, ShoppingBag, Ticket, X } from "lucide-react";
 import { OrderPayment, PurchaseNotice, RecentOrders, orderLink, type StoreOrder } from "./OrderFlow";
 import { accountPriceCents, formatMoney, storeName, supportQQ, tokenPlans, tokenTerms } from "./catalog";
-import { createStoreOrder, lookupStoreOrder } from "./store-api";
+import { createStoreOrder, lookupStoreOrder, findStoreOrder, type OrderSummary } from "./store-api";
+import { readSavedOrders, saveOrder, type SavedOrder } from "./saved-orders";
 import "./muse.css";
 
 type Product = "muse" | "muse-token";
@@ -38,7 +39,8 @@ export function MuseStorefront() {
   const [accepted, setAccepted] = useState(false);
   const [error, setError] = useState("");
   const [orderNumber, setOrderNumber] = useState("");
-  const [orderToken, setOrderToken] = useState("");
+  const [orderSummary, setOrderSummary] = useState<OrderSummary | null>(null);
+  const [savedOrders, setSavedOrders] = useState<SavedOrder[]>([]);
   const [orderError, setOrderError] = useState("");
   const dialogRef = useRef<HTMLDialogElement>(null);
   const checkoutRef = useRef<HTMLDivElement>(null);
@@ -116,6 +118,7 @@ export function MuseStorefront() {
           method: paymentMethod, acceptedTerms: true }, orderRequestRef.current);
         setOrders(previous => [order, ...previous.filter(item => item.id !== order.id)]);
         setActiveOrder(order);
+        setSavedOrders(saveOrder(order));
         setStep("payment");
         window.history.replaceState(null, "", orderLink(order));
       } catch (cause) { setError(cause instanceof Error ? cause.message : "创建订单失败，请联系支持。"); }
@@ -125,6 +128,7 @@ export function MuseStorefront() {
   }
 
   const openOrder = useCallback((order: StoreOrder) => {
+    setSavedOrders(saveOrder(order));
     setActiveOrder(order);
     setProduct(order.product);
     setPaymentMethod(order.method);
@@ -142,6 +146,7 @@ export function MuseStorefront() {
 
   useEffect(() => {
     let disposed = false;
+    queueMicrotask(() => { if (!disposed) setSavedOrders(readSavedOrders()); });
     const load = () => {
       const params = new URLSearchParams(window.location.hash.slice(1));
       const id = params.get("order"), token = params.get("token");
@@ -159,11 +164,19 @@ export function MuseStorefront() {
   async function queryOrder(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     {
-      if (!orderNumber.trim() || !orderToken.trim()) { setOrderError("请填写订单号和查询口令"); return; }
+      if (!orderNumber.trim()) { setOrderError("请填写 4 位订单码或订单编号，任选一个即可"); return; }
       if (queryingOrder) return;
       setQueryingOrder(true);
       setOrderError("");
-      try { openOrder(await lookupStoreOrder(orderNumber.trim(), orderToken.trim())); }
+      setOrderSummary(null);
+      try {
+        const identifier = orderNumber.trim();
+        const saved = readSavedOrders().find(r => r.code === identifier || r.id === identifier);
+        if (saved) { openOrder(await lookupStoreOrder(saved.id, saved.token)); return; }
+        const found = await findStoreOrder(identifier);
+        if (found.kind === "full") openOrder(found.order);
+        else setOrderSummary(found);
+      }
       catch (cause) { setOrderError(cause instanceof Error ? cause.message : "订单查询失败，请联系支持。"); }
       finally { setQueryingOrder(false); }
       return;
@@ -306,15 +319,14 @@ export function MuseStorefront() {
           </> : <>
             <h2 id="muse-dialog-title">我的订单</h2>
             <form className="muse-order-lookup" onSubmit={queryOrder}>
-              <label htmlFor="muse-order-number">订单号</label>
-              <input id="muse-order-number" placeholder="填写订单号" maxLength={64} autoComplete="off" value={orderNumber} onChange={event => setOrderNumber(event.target.value)}/>
-              <label htmlFor="muse-order-token">查询口令</label>
-              <input id="muse-order-token" type="password" placeholder="查询凭据中的口令" maxLength={64} autoComplete="off" value={orderToken} onChange={event => setOrderToken(event.target.value)}/>
-              <p>查询口令见已下载的查询凭据。</p>
+              <label htmlFor="muse-order-number">4 位订单码 / 订单编号</label>
+              <input id="muse-order-number" placeholder="任选一个填写，例如 0123" maxLength={64} autoComplete="off" autoCapitalize="off" spellCheck={false} value={orderNumber} onChange={event => { setOrderNumber(event.target.value); setOrderSummary(null); }}/>
+              <p>只需填写其中一个，无需另外复制查询口令。当前浏览器会自动保存最近的订单入口。</p>
               {orderError && <p className="muse-error" role="alert">{orderError}</p>}
               <button className="muse-primary" type="submit" disabled={queryingOrder}>{queryingOrder ? "查询中…" : "查询订单"} <ArrowRight size={16}/></button>
             </form>
-            <RecentOrders orders={orders} onOpen={openOrder}/>
+            {orderSummary && <div className="muse-token-notice" role="status"><strong>订单码 {orderSummary.code} · {{ pending: "待付款", reported: "等待核实到账", processing: "已收款，处理中", complete: "订单已完成", expired: "订单已超时" }[orderSummary.status]}</strong><p>{orderSummary.title} · ¥{formatMoney(orderSummary.amountCents)}</p><p>账号资料请在原下单浏览器打开“已保存的订单”，或用完整订单编号查询。需要协助请联系 QQ：{supportQQ}。</p></div>}
+            {savedOrders.length > 0 ? <div className="muse-saved-orders"><h3>已保存的订单 · 无需复制</h3>{savedOrders.map(saved => <button key={saved.id} type="button" onClick={async () => { try { openOrder(await lookupStoreOrder(saved.id, saved.token)); } catch { setOrderError("订单暂时无法打开，请稍后重试"); } }}><ShoppingBag size={14}/><span>{saved.code} · {saved.title}</span><ArrowRight size={15}/></button>)}</div> : <RecentOrders orders={orders} onOpen={openOrder}/>}
           </>}
       </dialog>}
       {notification && <div className="muse-toast" role="status">{notification}</div>}

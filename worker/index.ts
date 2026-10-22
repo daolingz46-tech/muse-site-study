@@ -35,7 +35,6 @@ async function expire(env: Env) {
   const now = Date.now();
   await env.DB.batch([
     env.DB.prepare("UPDATE orders SET status='expired',updatedAt=? WHERE status='pending' AND expiresAt<=?").bind(now, now),
-    env.DB.prepare("UPDATE orders SET activeCode=0 WHERE activeCode=1 AND status IN ('expired','complete') AND createdAt<?").bind(now - 30 * 86400000),
     env.DB.prepare("DELETE FROM sessions WHERE expiresAt<?").bind(now),
     env.DB.prepare("DELETE FROM rate_limits WHERE expiresAt<?").bind(now),
   ]);
@@ -51,7 +50,8 @@ function publicOrder(row: Row, token: string) {
 async function getOrder(env: Env, input: Record<string, unknown>) {
   const id = str(input.id, 64), token = str(input.token, 64);
   if (!id || !token) throw new HttpError(400, "请填写订单号和查询口令");
-  const row = await env.DB.prepare("SELECT * FROM orders WHERE id=? AND tokenHash=?").bind(id, await hash(token)).first<Row>();
+  const row = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).first<Row>();
+  if (row && !same(row.tokenHash, await hash(token)) && !same(token, await hash(`order-id-access:${id}`))) throw new HttpError(404, "订单不存在或查询口令不正确");
   if (!row) throw new HttpError(404, "订单不存在或查询口令不正确");
   return { row, token };
 }
@@ -72,7 +72,12 @@ async function createOrder(env: Env, request: Request, input: Record<string, unk
   await expire(env);
   const now = Date.now(), id = `M${crypto.randomUUID().replaceAll("-", "")}`;
   for (let attempt = 0; attempt < 40; attempt++) {
-    const code = (crypto.getRandomValues(new Uint32Array(1))[0] % 10000).toString().padStart(4, "0");
+    let code = (crypto.getRandomValues(new Uint32Array(1))[0] % 10000).toString().padStart(4, "0");
+    if (attempt >= 35) {
+      const free = await env.DB.prepare("WITH RECURSIVE numbers(n) AS (SELECT 0 UNION ALL SELECT n+1 FROM numbers WHERE n<9999) SELECT printf('%04d',n) AS code FROM numbers WHERE NOT EXISTS(SELECT 1 FROM orders WHERE code=printf('%04d',n)) LIMIT 1").first<{code: string}>();
+      if (!free) throw new HttpError(503, "四位订单码已用完，请联系店主升级订单编号规则");
+      code = free.code;
+    }
     const result = await env.DB.prepare("INSERT OR IGNORE INTO orders(id,requestHash,inputHash,tokenHash,code,product,title,amountCents,target,method,createdAt,expiresAt,updatedAt) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)")
       .bind(id, requestHash, inputHash, await hash(token), code, input.product, title, amount, target, input.method, now, now + 15 * 60000, now).run();
     const row = await env.DB.prepare("SELECT * FROM orders WHERE requestHash=?").bind(requestHash).first<Row>();
@@ -149,6 +154,17 @@ const worker = {
       if (request.method !== "POST") throw new HttpError(405, "请求方式无效");
       const input = await body(request);
       if (path === "/api/orders") return await createOrder(env, request, input);
+      if (path === "/api/orders/find") {
+        const identifier = str(input.identifier, 64);
+        if (!/^\d{4}$/.test(identifier) && !/^M[a-f0-9]{32}$/i.test(identifier)) throw new HttpError(400, "请输入 4 位订单码或完整订单编号");
+        const short = /^\d{4}$/.test(identifier);
+        await limit(env, request, short ? "short-code" : "order-id", short ? 20 : 60, 3600);
+        const row = await env.DB.prepare(short ? "SELECT * FROM orders WHERE code=?" : "SELECT * FROM orders WHERE id=?").bind(short ? identifier : `M${identifier.slice(1).toLowerCase()}`).first<Row>();
+        if (!row) throw new HttpError(404, "未找到订单，请检查输入");
+        if (!short) return json({ kind: "full", order: publicOrder(row, await hash(`order-id-access:${row.id}`)) });
+        const status = row.status === "pending" && row.expiresAt <= Date.now() ? "expired" : row.status;
+        return json({ kind: "summary", code: row.code, title: row.title, amountCents: row.amountCents, status });
+      }
       if (path === "/api/orders/lookup" || path === "/api/orders/report") {
         await limit(env, request, "lookup", 180, 60);
         const { row, token } = await getOrder(env, input);

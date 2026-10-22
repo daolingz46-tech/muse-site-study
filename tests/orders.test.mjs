@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID, createHash } from "node:crypto";
-import { readFileSync, mkdirSync } from "node:fs";
+import { readFileSync, mkdirSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 
@@ -13,7 +13,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
   const mf = new Miniflare(convertV4MiniflareOptions({ workers: [{ name: "test-store", modules: true, scriptPath: "temp/worker/index.js", compatibilityDate: "2026-10-01", d1Databases: { DB: "test-orders" }, bindings: { ADMIN_PASSWORD_HASH: createHash("sha256").update(password).digest("hex") } }] }));
   t.after(() => mf.dispose());
   const db = await mf.getD1Database("DB");
-  for (const statement of readFileSync("migrations/0001_orders.sql", "utf8").split(";").filter(s => s.trim())) await db.prepare(statement).run();
+  for (const migration of readdirSync("migrations").filter(f => f.endsWith(".sql")).sort()) for (const statement of readFileSync(`migrations/${migration}`, "utf8").split(";").filter(s => s.trim())) await db.prepare(statement).run();
   const call = async (path, payload, cookie = "", origin = "https://shop.example") => {
     const response = await mf.dispatchFetch(`https://shop.example${path}`, { method: payload === undefined ? "GET" : "POST", headers: { "Content-Type": "application/json", Origin: origin, Cookie: cookie }, body: payload === undefined ? undefined : JSON.stringify(payload) });
     return { status: response.status, data: await response.json(), cookie: response.headers.get("set-cookie")?.split(";")[0] };
@@ -69,12 +69,24 @@ test("订单、收款核实和交付的数据库流程", async t => {
     const delivery = { email: "delivered@example.com", password: "test-only", codeUrl: "https://example.com/code" };
     assert.equal((await call("/api/admin/update", { id: account.id, action: "complete", checked: true, delivery }, session)).status, 200);
     assert.deepEqual((await call("/api/orders/lookup", account)).data.delivery, delivery);
+    const byId = await call("/api/orders/find", { identifier: account.id });
+    assert.equal(byId.data.kind, "full"); assert.deepEqual(byId.data.order.delivery, delivery);
+    assert.equal((await call("/api/orders/lookup", byId.data.order)).data.status, "complete");
+    const byCode = await call("/api/orders/find", { identifier: account.code });
+    assert.equal(byCode.data.kind, "summary"); assert.equal(byCode.data.status, "complete");
+    for (const secret of ["id", "token", "email", "target", "delivery", "tokenHash"]) assert.equal(secret in byCode.data, false);
+    assert.equal((await call("/api/orders/report", { id: account.code, token: account.code, remarkConfirmed: true })).status, 404);
   });
-  await t.test("过期订单不显示付款码流程，允许核查迟到付款，已用码保留 30 天", async () => {
+  await t.test("过期订单允许核查迟到付款，已用码永不复用", async () => {
     await db.prepare("UPDATE orders SET expiresAt=? WHERE id=?").bind(Date.now() - 1000, other.id).run();
     assert.equal((await call("/api/orders/lookup", other)).data.status, "expired");
     assert.equal((await call("/api/orders/report", { ...other, remarkConfirmed: true })).data.status, "reported");
     assert.equal((await db.prepare("SELECT activeCode FROM orders WHERE id=?").bind(other.id).first()).activeCode, 1);
+    await db.prepare("UPDATE orders SET createdAt=? WHERE id=?").bind(Date.now() - 40 * 86400000, order.id).run();
+    await call("/api/admin/orders", undefined, session);
+    assert.equal((await db.prepare("SELECT activeCode FROM orders WHERE id=?").bind(order.id).first()).activeCode, 1);
+    const duplicate = await db.prepare("UPDATE OR IGNORE orders SET code=? WHERE id=?").bind(order.code, other.id).run();
+    assert.equal(duplicate.meta.changes, 0);
     await call("/api/admin/logout", {}, session);
     assert.equal((await call("/api/admin/orders", undefined, session)).status, 401);
   });

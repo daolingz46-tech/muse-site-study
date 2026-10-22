@@ -68,3 +68,14 @@ export async function lookupStoreOrder(id: string, token: string) {
 export function reportStorePayment(id: string, token: string) {
   return requestOrder("/api/orders/report", { id, token, remarkConfirmed: true });
 }
+
+export type OrderSummary = { kind: "summary"; code: string; title: string; amountCents: number; status: StoreOrder["status"] };
+export async function findStoreOrder(identifier: string): Promise<OrderSummary | { kind: "full"; order: StoreOrder }> {
+  const response = await fetch("/api/orders/find", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ identifier }), cache: "no-store", signal: AbortSignal.timeout(15000) });
+  const value: unknown = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(isRecord(value) && typeof value.message === "string" ? value.message : "查询失败，请稍后重试");
+  if (!isRecord(value)) throw new Error("订单查询返回异常");
+  if (value.kind === "full") return { kind: "full", order: readOrder(value.order) };
+  if (value.kind !== "summary" || value.code !== identifier || typeof value.title !== "string" || !Number.isSafeInteger(value.amountCents) || !["pending", "reported", "processing", "complete", "expired"].includes(String(value.status))) throw new Error("订单查询返回异常");
+  return value as OrderSummary;
+}

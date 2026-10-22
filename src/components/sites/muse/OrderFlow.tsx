@@ -66,7 +66,7 @@ export function OrderPayment({ order, onBack, onNotify, onOrderUpdate }: {
     finally { setReporting(false); }
   }
   function download() {
-    const text = ["Muse 商店订单凭据", `订单链接：${orderLink(order)}`, `订单码（付款备注）：${order.code}`, `订单号：${order.id}`, `查询口令：${order.token}`, `商品：${order.title}`, `金额：¥${total}`, order.product === "muse-token" ? `邀请码：${order.inviteCode}` : `邮箱：${order.email}`, `支持 QQ：${supportQQ}`, "订单链接包含查询口令，请勿公开。"].join("\n");
+    const text = ["Muse 商店订单凭据", `订单链接：${orderLink(order)}`, `订单码（付款备注）：${order.code}`, `订单号：${order.id}`, `商品：${order.title}`, `金额：¥${total}`, order.product === "muse-token" ? `邀请码：${order.inviteCode}` : `邮箱：${order.email}`, `支持 QQ：${supportQQ}`, "订单链接包含查询口令，请勿公开。"].join("\n");
     const url = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" })); const a = document.createElement("a"); a.href = url; a.download = `订单-${order.code}.txt`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   return <div className="muse-order-stage muse-step">
@@ -84,6 +84,7 @@ export function OrderPayment({ order, onBack, onNotify, onOrderUpdate }: {
     {order.status === "complete" && order.delivery && <div className="muse-delivery-fields">{[["账号邮箱", order.delivery.email], ["密码", order.delivery.password], ["接码链接", order.delivery.codeUrl]].map(([name, value]) => <div key={name}><span>{name}</span><div><code>{value}</code><button type="button" aria-label={`复制${name}`} onClick={() => void copy(value)}><Copy size={14}/></button></div></div>)}</div>}
     <dl className="muse-payment-details"><div><dt>4 位订单码</dt><dd><b>{order.code}</b></dd></div><div><dt>订单号</dt><dd>{order.id}</dd></div><div><dt>{order.product === "muse-token" ? "账号邀请码" : "收件邮箱"}</dt><dd>{order.product === "muse-token" ? order.inviteCode : order.email}</dd></div><div><dt>支付方式</dt><dd>{label}</dd></div><div><dt>金额</dt><dd>¥{total}</dd></div></dl>
     <div className="muse-order-actions"><button type="button" onClick={() => void copy(orderLink(order))}><Copy size={15}/>复制订单链接</button><button type="button" onClick={download}><Download size={15}/>保存订单凭据</button></div>
+    <div className="muse-order-tools"><button type="button" onClick={() => void copy(order.id)}><Copy size={15}/>复制订单编号（单独可查）</button></div>
     <div className="muse-order-tools"><button type="button" disabled={refreshing} onClick={() => void refresh()}><RefreshCw size={14}/>{refreshing ? "查询中…" : "刷新订单状态"}</button></div>
     {paymentError && <p className="muse-error" role="alert">{paymentError}</p>}
     {expired && <><button className="muse-primary" type="button" onClick={onBack}>重新下单</button><button className="muse-report-button" type="button" disabled={!copied || !remark || reporting} onClick={() => void report()}>我已付款，请店主核查</button></>}
