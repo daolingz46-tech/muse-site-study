@@ -216,7 +216,7 @@ export function MuseStorefront() {
                 }
               }}
               onClick={() => selectProduct(id)}>
-              <Image src={assetBase + "/sites/muse/store-logo.png"} width={20} height={20} alt="" />
+              <Image src={assetBase + "/sites/muse/store-logo.png"} width={20} height={20} alt="" draggable={false} />
               {label}
             </button>
           ))}
@@ -230,7 +230,7 @@ export function MuseStorefront() {
         <section className="muse-product-stage" aria-label={product === "muse" ? "Muse AI" : "Muse Token"}>
           <div className="muse-stage-halo" />
           <div className="muse-logo-composition">
-            <span className="muse-logo-inner"><Image src={assetBase + "/sites/muse/muse-logo.svg"} fill sizes="(max-width: 650px) 158px, 354px" alt="" loading="eager" /></span>
+            <span className="muse-logo-inner"><Image src={assetBase + "/sites/muse/muse-logo.svg"} fill sizes="(max-width: 650px) 158px, 354px" alt="" loading="eager" draggable={false} /></span>
           </div>
           <div className="muse-stage-caption" key={product}>
             <strong>{product === "muse" ? "Muse AI" : "Muse Token"}</strong>
