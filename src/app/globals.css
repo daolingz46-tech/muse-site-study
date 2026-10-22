@@ -9,8 +9,8 @@
   -webkit-font-smoothing: antialiased;
 }
 * { box-sizing: border-box; }
-html { scrollbar-gutter: stable; }
-body { min-width: 320px; margin: 0; }
+html { scrollbar-gutter: stable; touch-action: pan-x pan-y; }
+body { min-width: 320px; margin: 0; touch-action: pan-x pan-y; }
 button, input { font: inherit; }
 button { cursor: pointer; }
 a { color: inherit; text-decoration: none; }

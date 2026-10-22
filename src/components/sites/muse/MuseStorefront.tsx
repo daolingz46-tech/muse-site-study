@@ -198,7 +198,7 @@ export function MuseStorefront() {
     <div className="muse-storefront">
       <header className="muse-header">
         <Link className="muse-wordmark" href="/" aria-label={`${storeName}首页`}>
-          <Image src={assetBase + "/sites/muse/favicon.svg"} width={29} height={29} alt="" />
+          <Image src={assetBase + "/sites/muse/store-logo.png"} width={34} height={34} alt="" />
           <span>{storeName}</span>
         </Link>
         <div className="muse-switch" role="tablist" aria-label="商品">
@@ -216,7 +216,7 @@ export function MuseStorefront() {
                 }
               }}
               onClick={() => selectProduct(id)}>
-              <Image src={assetBase + "/sites/muse/muse-logo.svg"} width={20} height={20} alt="" />
+              <Image src={assetBase + "/sites/muse/store-logo.png"} width={20} height={20} alt="" />
               {label}
             </button>
           ))}
@@ -230,7 +230,7 @@ export function MuseStorefront() {
         <section className="muse-product-stage" aria-label={product === "muse" ? "Muse AI" : "Muse Token"}>
           <div className="muse-stage-halo" />
           <div className="muse-logo-composition">
-            <span className="muse-logo-inner"><Image src={assetBase + "/sites/muse/muse-logo.svg"} fill sizes="(max-width: 650px) 158px, 354px" alt="" loading="eager" /></span>
+            <span className="muse-logo-inner"><Image src={assetBase + "/sites/muse/store-logo.png"} fill sizes="(max-width: 650px) 158px, 354px" alt="" loading="eager" /></span>
           </div>
           <div className="muse-stage-caption" key={product}>
             <strong>{product === "muse" ? "Muse AI" : "Muse Token"}</strong>
