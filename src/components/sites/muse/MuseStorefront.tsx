@@ -198,7 +198,7 @@ export function MuseStorefront() {
     <div className="muse-storefront">
       <header className="muse-header">
         <Link className="muse-wordmark" href="/" aria-label={`${storeName}首页`}>
-          <Image src={assetBase + "/sites/muse/store-logo.png"} width={34} height={34} alt="" />
+          <Image src={assetBase + "/sites/muse/store-logo.png"} width={34} height={34} alt="" draggable={false} />
           <span>{storeName}</span>
         </Link>
         <div className="muse-switch" role="tablist" aria-label="商品">

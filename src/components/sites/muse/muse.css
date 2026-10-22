@@ -313,9 +313,8 @@
 .muse-checkout-card { animation: muse-arrive .85s var(--ease) .14s both; }
 .muse-stage-caption { animation: muse-caption .65s var(--ease) both; }
 .muse-stage-halo { animation: muse-halo 9s ease-in-out infinite; }
-.muse-product-stage:hover .muse-logo-composition img, .muse-product-stage:hover .muse-stage-halo { animation-play-state: paused; }
 .muse-footer a { display: flex; align-items: center; gap: 3px; }
-.muse-wordmark > img { border-radius: 9px; background: #202124; box-shadow: 0 2px 5px #0000000d; }
+.muse-wordmark > img { border-radius: 9px; background: #202124; box-shadow: 0 2px 5px #0000000d; -webkit-user-drag: none; user-select: none; }
 .muse-primary svg { transition: transform .3s var(--ease); }
 .muse-primary:hover:not(:disabled) svg { transform: translateX(3px); }
 .muse-primary:active:not(:disabled) { transform: scale(.985); }
