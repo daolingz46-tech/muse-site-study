@@ -58,6 +58,17 @@ export function MuseStorefront() {
   }, []);
 
   useEffect(() => {
+    const storageKey = "muse-visit-session";
+    let id = sessionStorage.getItem(storageKey);
+    if (!id) { id = crypto.randomUUID(); sessionStorage.setItem(storageKey, id); }
+    const referrer = document.referrer.toLowerCase();
+    const source = !referrer ? "direct" : /baidu|bing|google|sogou|so\.com/.test(referrer) ? "search" : /weixin|wechat|douyin|xiaohongshu|weibo|zhihu/.test(referrer) ? "social" : "external";
+    const ua = navigator.userAgent.toLowerCase();
+    const device = /ipad|tablet/.test(ua) ? "tablet" : /mobile|android|iphone/.test(ua) ? "mobile" : "desktop";
+    void fetch("/api/visit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, page: "/", source, device }), keepalive: true }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
     if (!notification) return;
     const timer = window.setTimeout(() => setNotification(""), 3000);
     return () => window.clearTimeout(timer);

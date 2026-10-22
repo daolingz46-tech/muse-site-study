@@ -113,6 +113,12 @@ async function admin(env: Env, request: Request, path: string) {
     const summary = await env.DB.prepare("SELECT COUNT(*) AS total, COALESCE(SUM(status='reported'),0) AS awaiting, COALESCE(SUM(status='processing'),0) AS processing, COALESCE(SUM(status='complete'),0) AS completed, COALESCE(SUM(CASE WHEN paidAt IS NOT NULL THEN amountCents ELSE 0 END),0) AS revenueCents, COALESCE(SUM(CASE WHEN paidAt>=? THEN amountCents ELSE 0 END),0) AS todayCents FROM orders").bind(Math.floor((Date.now() + 8 * 3600000) / 86400000) * 86400000 - 8 * 3600000).first();
     return json({ orders: rows.results, count, summary, page });
   }
+  if (path === "/api/admin/visits" && request.method === "GET") {
+    const now = Date.now(), day = Math.floor((now + 8 * 3600000) / 86400000) * 86400000 - 8 * 3600000;
+    const summary = await env.DB.prepare("SELECT COUNT(*) AS total, COALESCE(SUM(createdAt>=?),0) AS today, COALESCE(SUM(createdAt>=?),0) AS last7Days FROM visits").bind(day, now - 7 * 86400000).first();
+    const recent = await env.DB.prepare("SELECT id,page,source,device,createdAt FROM visits ORDER BY createdAt DESC LIMIT 50").all();
+    return json({ summary, recent: recent.results });
+  }
   if (path === "/api/admin/update" && request.method === "POST") {
     const input = await body(request); const row = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(str(input.id, 64)).first<Row>();
     if (!row) throw new HttpError(404, "订单不存在");
@@ -146,6 +152,16 @@ const worker = {
       if (!path.startsWith("/api/")) return env.ASSETS.fetch(request);
       if (request.method !== "GET" && request.headers.get("Origin") !== url.origin) throw new HttpError(403, "请求来源无效，请刷新页面");
       if (path.startsWith("/api/admin/")) return await admin(env, request, path);
+      if (path === "/api/visit" && request.method === "POST") {
+        await limit(env, request, "visit", 60, 60);
+        const input = await body(request);
+        const id = str(input.id, 64), page = input.page === "/" ? "/" : "";
+        const source = ["direct", "search", "social", "external"].includes(String(input.source)) ? String(input.source) : "external";
+        const device = ["mobile", "tablet", "desktop"].includes(String(input.device)) ? String(input.device) : "desktop";
+        if (!/^[a-f0-9-]{36}$/i.test(id) || !page) throw new HttpError(400, "访问记录无效");
+        await env.DB.prepare("INSERT OR IGNORE INTO visits(id,page,source,device,createdAt) VALUES(?,?,?,?,?)").bind(id, page, source, device, Date.now()).run();
+        return json({ ok: true }, 201);
+      }
       if (/^\/api\/payment-qr\/(wechat|alipay)$/.test(path) && request.method === "GET") {
         const imageUrl = new URL(`/sites/muse/${path.split("/").pop()}-collection.png`, url);
         const response = await env.ASSETS.fetch(new Request(imageUrl));

@@ -13,7 +13,11 @@ type AdminOrder = {
 };
 type Result = { orders: AdminOrder[]; count: { total: number }; page: number;
   summary: { total: number; awaiting: number; processing: number; completed: number; revenueCents: number; todayCents: number } };
+type Visit = { id: string; page: string; source: string; device: string; createdAt: number };
+type VisitResult = { summary: { total: number; today: number; last7Days: number }; recent: Visit[] };
 const labels: Record<string, string> = { pending: "待付款", reported: "待核实到账", processing: "待交付", complete: "已完成", expired: "已超时" };
+const visitSourceLabels: Record<string, string> = { direct: "直接访问", search: "搜索引擎", social: "社交平台", external: "其他网站" };
+const visitDeviceLabels: Record<string, string> = { mobile: "手机", tablet: "平板", desktop: "电脑" };
 function date(value: number | null) { return value ? new Intl.DateTimeFormat("zh-CN", { dateStyle: "short", timeStyle: "short", timeZone: "Asia/Shanghai" }).format(value) : "—"; }
 class ApiError extends Error { constructor(public status: number, message: string) { super(message); } }
 async function api(path: string, input?: unknown) {
@@ -29,6 +33,7 @@ export function Workbench() {
   const [selected, setSelected] = useState<AdminOrder | null>(null), [checked, setChecked] = useState(false), [reference, setReference] = useState("");
   const [delivery, setDelivery] = useState({ email: "", password: "", codeUrl: "" }), [actionError, setActionError] = useState("");
   const [alert, setAlert] = useState(""), [desktopAlerts, setDesktopAlerts] = useState(false);
+  const [visits, setVisits] = useState<VisitResult | null>(null);
   const dialog = useRef<HTMLDialogElement>(null), sequence = useRef(0);
   const knownReported = useRef<Set<string> | null>(null);
   const load = useCallback(async () => {
@@ -75,6 +80,14 @@ export function Workbench() {
     document.addEventListener("visibilitychange", visible);
     return () => { active = false; window.clearInterval(timer); document.removeEventListener("visibilitychange", visible); };
   }, [auth, load]);
+  useEffect(() => {
+    if (auth !== "ready") return;
+    let active = true;
+    const refreshVisits = async () => { try { const data: VisitResult = await api("visits"); if (active) setVisits(data); } catch { /* 下一轮自动重试 */ } };
+    void refreshVisits();
+    const timer = window.setInterval(() => void refreshVisits(), 15000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [auth]);
   useEffect(() => { if (selected) dialog.current?.showModal(); }, [selected]);
   async function login(event: FormEvent) {
     event.preventDefault(); if (busy) return; setBusy(true); setError("");
@@ -121,6 +134,7 @@ export function Workbench() {
       ["待核实到账", result?.summary.awaiting || 0, "买家已反馈付款 · 5 秒自动刷新"],
       ["待交付", result?.summary.processing || 0, `${result?.summary.completed || 0} 笔已完成 · 共 ${result?.summary.total || 0} 笔订单`],
     ].map(([title, value, note]) => <article key={title}><span>{title}</span><strong>{value}</strong><small>{note}</small></article>)}</section>
+    <section className="wb-visitors"><div className="wb-visitor-heading"><div><h2>访客数据</h2><p>匿名统计访问次数，不记录访客姓名、联系方式或完整来源网址。</p></div><div className="wb-visitor-stats"><span>今日 <b>{visits?.summary.today ?? "—"}</b></span><span>近 7 天 <b>{visits?.summary.last7Days ?? "—"}</b></span><span>累计 <b>{visits?.summary.total ?? "—"}</b></span></div></div><div className="wb-visit-list"><div className="wb-visit-row wb-visit-head"><span>访问时间</span><span>页面</span><span>来源</span><span>设备</span></div>{visits?.recent.map(visit => <div className="wb-visit-row" key={visit.id}><span>{date(visit.createdAt)}</span><span>{visit.page === "/" ? "商店首页" : visit.page}</span><span>{visitSourceLabels[visit.source] || "其他网站"}</span><span>{visitDeviceLabels[visit.device] || "电脑"}</span></div>)}{visits && visits.recent.length === 0 && <p className="wb-visit-empty">还没有访客记录；访客打开商店后会自动统计。</p>}</div></section>
     <section className="wb-order-section"><div className="wb-toolbar"><h2>订单列表</h2><div><button onClick={() => void load()}><RefreshCw size={15}/>刷新</button><button onClick={exportCsv} disabled={!result?.orders.length}><Download size={15}/>导出当前页</button></div></div>
       <form className="wb-filters" onSubmit={e => { e.preventDefault(); setPage(0); setSearch(query.trim()); }}><div><Search size={17}/><input aria-label="搜索订单" placeholder="订单码、订单号、邮箱或邀请码" value={query} onChange={e => setQuery(e.target.value)} maxLength={128}/></div><select aria-label="订单状态" value={status} onChange={e => { setStatus(e.target.value); setPage(0); }}><option value="">全部状态</option>{Object.entries(labels).map(([key, text]) => <option key={key} value={key}>{text}</option>)}</select><button className="wb-primary">查询</button></form>
       {error && <p className="wb-error" role="alert">{error}</p>}
