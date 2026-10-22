@@ -34,6 +34,7 @@ export function Workbench() {
   const [delivery, setDelivery] = useState({ email: "", password: "", codeUrl: "" }), [actionError, setActionError] = useState("");
   const [alert, setAlert] = useState(""), [desktopAlerts, setDesktopAlerts] = useState(false);
   const [visits, setVisits] = useState<VisitResult | null>(null);
+  const [emailConfigured, setEmailConfigured] = useState<boolean | null>(null);
   const dialog = useRef<HTMLDialogElement>(null), sequence = useRef(0);
   const knownReported = useRef<Set<string> | null>(null);
   const load = useCallback(async () => {
@@ -88,6 +89,12 @@ export function Workbench() {
     const timer = window.setInterval(() => void refreshVisits(), 15000);
     return () => { active = false; window.clearInterval(timer); };
   }, [auth]);
+  useEffect(() => {
+    if (auth !== "ready") return;
+    let active = true;
+    void api("email-status").then((data: { configured: boolean }) => { if (active) setEmailConfigured(data.configured); }).catch(() => {});
+    return () => { active = false; };
+  }, [auth]);
   useEffect(() => { if (selected) dialog.current?.showModal(); }, [selected]);
   async function login(event: FormEvent) {
     event.preventDefault(); if (busy) return; setBusy(true); setError("");
@@ -126,6 +133,7 @@ export function Workbench() {
   return <main className="workbench">
     <header className="wb-header"><div><p className="wb-eyebrow">{storeName} / 管理中心</p><h1>订单工作台</h1></div><nav><button onClick={() => void enableDesktopAlerts()}><Bell size={15}/>{desktopAlerts ? "桌面提醒已开" : "开启桌面提醒"}</button><a href="/" target="_blank" rel="noreferrer">打开商店 <ArrowUpRight size={15}/></a><button onClick={() => void logout()}><LogOut size={15}/>退出</button></nav></header>
     <p className="wb-description">以微信、支付宝收款记录核实到账，再处理充值或账号交付。</p>
+    {emailConfigured === false && <div className="wb-email-setup" role="status"><strong>订单邮件提醒还未启用</strong><span>邮件服务密钥尚未配置。配置 Resend API Key 后，新订单和买家付款反馈会自动发到 daolingz46@gmail.com。</span></div>}
     {alert && <div className="wb-alert" role="status"><span>{alert}</span><button aria-label="关闭提醒" onClick={() => setAlert("")}>×</button></div>}
     {!!result?.summary.awaiting && <button className="wb-awaiting" onClick={() => { setStatus("reported"); setSearch(""); setQuery(""); setPage(0); }}><strong>待核实到账：{result.summary.awaiting} 笔</strong><span>买家已提交付款反馈，点击查看并核对收款记录 →</span></button>}
     <section className="wb-metrics" aria-label="经营数据">{[

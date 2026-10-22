@@ -1,7 +1,8 @@
 import type { D1Database } from "@cloudflare/workers-types";
 import { tokenPlans, accountPriceCents } from "../src/lib/products";
 
-type Env = { DB: D1Database; ASSETS: { fetch(request: Request): Promise<Response> }; ADMIN_PASSWORD_HASH: string };
+type Env = { DB: D1Database; ASSETS: { fetch(request: Request): Promise<Response> }; ADMIN_PASSWORD_HASH: string; RESEND_API_KEY?: string };
+type ExecutionContextLike = { waitUntil(promise: Promise<unknown>): void };
 type Row = {
   id: string; requestHash: string; inputHash: string; tokenHash: string; code: string;
   product: "muse" | "muse-token"; title: string; amountCents: number; target: string;
@@ -39,6 +40,35 @@ async function expire(env: Env) {
     env.DB.prepare("DELETE FROM rate_limits WHERE expiresAt<?").bind(now),
   ]);
 }
+async function queueOrderEmail(env: Env, order: Row, eventType: "created" | "reported", ctx: ExecutionContextLike) {
+  const id = `${order.id}:${eventType}`, now = Date.now();
+  await env.DB.prepare("INSERT OR IGNORE INTO email_outbox(id,orderId,eventType,nextAttemptAt,createdAt) VALUES(?,?,?,?,?)").bind(id, order.id, eventType, now, now).run();
+  if (env.RESEND_API_KEY) ctx.waitUntil(sendOrderEmails(env));
+}
+async function sendOrderEmails(env: Env) {
+  if (!env.RESEND_API_KEY) return;
+  const now = Date.now();
+  const pending = await env.DB.prepare("SELECT id,orderId,eventType,attempts FROM email_outbox WHERE sentAt IS NULL AND nextAttemptAt<=? ORDER BY createdAt LIMIT 5").bind(now).all<{ id: string; orderId: string; eventType: string; attempts: number }>();
+  for (const item of pending.results) {
+    const claimed = await env.DB.prepare("UPDATE email_outbox SET attempts=attempts+1,nextAttemptAt=? WHERE id=? AND sentAt IS NULL AND nextAttemptAt<=?").bind(now + 60000, item.id, now).run();
+    if (!claimed.meta.changes) continue;
+    try {
+      const order = await env.DB.prepare("SELECT id,code,title,amountCents,method,createdAt,status FROM orders WHERE id=?").bind(item.orderId).first<{ id: string; code: string; title: string; amountCents: number; method: string; createdAt: number; status: string }>();
+      if (!order) throw new Error("order_missing");
+      const esc = (value: string) => value.replace(/[&<>\"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[char]!);
+      const eventText = item.eventType === "reported" ? "买家已提交付款，请核实到账" : "有新订单，请留意后续付款";
+      const subject = item.eventType === "reported" ? `待核实付款：订单 ${order.code}` : `新订单：${order.title} · ${order.code}`;
+      const html = `<div style="font-family:Arial,sans-serif;line-height:1.8;color:#202634"><h2>${esc(eventText)}</h2><p>订单码：<strong>${esc(order.code)}</strong></p><p>订单编号：${esc(order.id)}</p><p>商品：${esc(order.title)}</p><p>金额：¥${(order.amountCents / 100).toFixed(2)}</p><p>付款方式：${order.method === "wechat" ? "微信" : "支付宝"}</p><p>状态：${item.eventType === "reported" ? "等待店主核实" : "等待买家付款"}</p><p><a href="https://daolingz46-tech.github.io/muse-site-study/admin/">打开店主工作台</a></p></div>`;
+      const response = await fetch("https://api.resend.com/emails", { method: "POST", headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json", "Idempotency-Key": item.id }, body: JSON.stringify({ from: "Muse 商店 <onboarding@resend.dev>", to: ["daolingz46@gmail.com"], subject, html }) });
+      if (!response.ok) throw new Error(`resend_${response.status}`);
+      await env.DB.prepare("UPDATE email_outbox SET sentAt=?,lastError=NULL WHERE id=?").bind(Date.now(), item.id).run();
+    } catch (error) {
+      const retryAt = Date.now() + Math.min(3600000, 15000 * 2 ** Math.min(item.attempts, 8));
+      const reason = error instanceof Error ? error.message.slice(0, 120) : "send_failed";
+      await env.DB.prepare("UPDATE email_outbox SET nextAttemptAt=?,lastError=? WHERE id=? AND sentAt IS NULL").bind(retryAt, reason, item.id).run();
+    }
+  }
+}
 function publicOrder(row: Row, token: string) {
   const status = row.status === "pending" && row.expiresAt <= Date.now() ? "expired" : row.status;
   return { id: row.id, token, code: row.code, product: row.product, title: row.title,
@@ -55,7 +85,7 @@ async function getOrder(env: Env, input: Record<string, unknown>) {
   if (!row) throw new HttpError(404, "订单不存在或查询口令不正确");
   return { row, token };
 }
-async function createOrder(env: Env, request: Request, input: Record<string, unknown>) {
+async function createOrder(env: Env, request: Request, input: Record<string, unknown>, ctx: ExecutionContextLike) {
   const requestId = str(input.requestId, 64);
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId)) throw new HttpError(400, "请重新提交订单");
   if (input.acceptedTerms !== true) throw new HttpError(400, "请先同意购买须知");
@@ -67,7 +97,7 @@ async function createOrder(env: Env, request: Request, input: Record<string, unk
   const requestHash = await hash(requestId), token = await hash(`order-lookup:${requestId}`);
   const inputHash = await hash(JSON.stringify([input.product, title, amount, target, input.method]));
   const existing = await env.DB.prepare("SELECT * FROM orders WHERE requestHash=?").bind(requestHash).first<Row>();
-  if (existing) { if (existing.inputHash !== inputHash) throw new HttpError(409, "订单内容已改变，请重新下单"); return json(publicOrder(existing, token)); }
+  if (existing) { if (existing.inputHash !== inputHash) throw new HttpError(409, "订单内容已改变，请重新下单"); await queueOrderEmail(env, existing, "created", ctx); return json(publicOrder(existing, token)); }
   await limit(env, request, "create", 20, 3600);
   await expire(env);
   const now = Date.now(), id = `M${crypto.randomUUID().replaceAll("-", "")}`;
@@ -81,7 +111,7 @@ async function createOrder(env: Env, request: Request, input: Record<string, unk
     const result = await env.DB.prepare("INSERT OR IGNORE INTO orders(id,requestHash,inputHash,tokenHash,code,product,title,amountCents,target,method,createdAt,expiresAt,updatedAt) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)")
       .bind(id, requestHash, inputHash, await hash(token), code, input.product, title, amount, target, input.method, now, now + 15 * 60000, now).run();
     const row = await env.DB.prepare("SELECT * FROM orders WHERE requestHash=?").bind(requestHash).first<Row>();
-    if (row) { if (row.inputHash !== inputHash) throw new HttpError(409, "订单内容已改变，请重新下单"); return json(publicOrder(row, token), result.meta.changes ? 201 : 200); }
+    if (row) { if (row.inputHash !== inputHash) throw new HttpError(409, "订单内容已改变，请重新下单"); await queueOrderEmail(env, row, "created", ctx); return json(publicOrder(row, token), result.meta.changes ? 201 : 200); }
   }
   throw new HttpError(503, "当前订单较多，请稍后再试或联系支持");
 }
@@ -102,6 +132,7 @@ async function admin(env: Env, request: Request, path: string) {
     return json({ ok: true }, 200, { "Set-Cookie": cookieHeader(request, session, 28800) });
   }
   await requireAdmin(env, request);
+  if (path === "/api/admin/email-status" && request.method === "GET") return json({ configured: Boolean(env.RESEND_API_KEY) });
   if (path === "/api/admin/logout" && request.method === "POST") { await env.DB.prepare("DELETE FROM sessions WHERE hash=?").bind(await hash(cookie(request))).run(); return json({ ok: true }, 200, { "Set-Cookie": cookieHeader(request, "", 0) }); }
   if (path === "/api/admin/orders" && request.method === "GET") {
     await expire(env);
@@ -146,7 +177,7 @@ async function admin(env: Env, request: Request, path: string) {
   throw new HttpError(404, "接口不存在");
 }
 const worker = {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContextLike): Promise<Response> {
     const url = new URL(request.url), path = url.pathname.replace(/\/$/, "");
     try {
       if (!path.startsWith("/api/")) return env.ASSETS.fetch(request);
@@ -169,7 +200,7 @@ const worker = {
       }
       if (request.method !== "POST") throw new HttpError(405, "请求方式无效");
       const input = await body(request);
-      if (path === "/api/orders") return await createOrder(env, request, input);
+      if (path === "/api/orders") return await createOrder(env, request, input, ctx);
       if (path === "/api/orders/find") {
         const identifier = str(input.identifier, 64);
         if (!/^\d{4}$/.test(identifier) && !/^M[a-f0-9]{32}$/i.test(identifier)) throw new HttpError(400, "请输入 4 位订单码或完整订单编号");
@@ -191,6 +222,7 @@ const worker = {
             await env.DB.prepare("UPDATE orders SET status='reported',reportedAt=?,updatedAt=? WHERE id=? AND status IN ('pending','expired')").bind(now, now, row.id).run();
           }
           const updated = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(row.id).first<Row>();
+          await queueOrderEmail(env, updated!, "reported", ctx);
           return json(publicOrder(updated!, token));
         }
         return json(publicOrder(row, token));
@@ -202,6 +234,6 @@ const worker = {
       return json({ message: "订单服务暂时不可用，请稍后重试" }, 500);
     }
   },
-  async scheduled(_event: unknown, env: Env) { await expire(env); },
+  async scheduled(_event: unknown, env: Env) { await expire(env); await sendOrderEmails(env); },
 };
 export default worker;
