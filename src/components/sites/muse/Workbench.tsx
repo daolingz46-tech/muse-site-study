@@ -35,6 +35,7 @@ export function Workbench() {
   const [alert, setAlert] = useState(""), [desktopAlerts, setDesktopAlerts] = useState(false);
   const [visits, setVisits] = useState<VisitResult | null>(null);
   const [emailConfigured, setEmailConfigured] = useState<boolean | null>(null);
+  const [emailTestBusy, setEmailTestBusy] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null), sequence = useRef(0);
   const knownReported = useRef<Set<string> | null>(null);
   const load = useCallback(async () => {
@@ -112,6 +113,13 @@ export function Workbench() {
     setDesktopAlerts(permission === "granted");
     setAlert(permission === "granted" ? "桌面提醒已开启；新付款核实申请会弹出通知" : "浏览器未允许通知；页面内仍会显示新订单提醒");
   }
+  async function sendTestEmail() {
+    if (emailTestBusy) return;
+    setEmailTestBusy(true);
+    try { await api("email-test", {}); setAlert("测试邮件已提交发送，请检查 daolingz46@gmail.com 收件箱和垃圾邮件"); }
+    catch (e) { setAlert(e instanceof Error ? e.message : "测试邮件发送失败"); }
+    finally { setEmailTestBusy(false); }
+  }
   function open(order: AdminOrder) { setSelected(order); setChecked(false); setReference(""); setDelivery({ email: "", password: "", codeUrl: "" }); setActionError(""); }
   async function save(event: FormEvent) {
     event.preventDefault(); if (!selected || busy) return; setBusy(true); setActionError("");
@@ -134,6 +142,7 @@ export function Workbench() {
     <header className="wb-header"><div><p className="wb-eyebrow">{storeName} / 管理中心</p><h1>订单工作台</h1></div><nav><button onClick={() => void enableDesktopAlerts()}><Bell size={15}/>{desktopAlerts ? "桌面提醒已开" : "开启桌面提醒"}</button><a href="/" target="_blank" rel="noreferrer">打开商店 <ArrowUpRight size={15}/></a><button onClick={() => void logout()}><LogOut size={15}/>退出</button></nav></header>
     <p className="wb-description">以微信、支付宝收款记录核实到账，再处理充值或账号交付。</p>
     {emailConfigured === false && <div className="wb-email-setup" role="status"><strong>订单邮件提醒还未启用</strong><span>邮件服务密钥尚未配置。配置 Resend API Key 后，新订单和买家付款反馈会自动发到 daolingz46@gmail.com。</span></div>}
+    {emailConfigured === true && <div className="wb-email-ready"><span>邮件提醒已连接 · 新订单和付款反馈将发送到 daolingz46@gmail.com</span><button onClick={() => void sendTestEmail()} disabled={emailTestBusy}>{emailTestBusy ? "发送中…" : "发送测试邮件"}</button></div>}
     {alert && <div className="wb-alert" role="status"><span>{alert}</span><button aria-label="关闭提醒" onClick={() => setAlert("")}>×</button></div>}
     {!!result?.summary.awaiting && <button className="wb-awaiting" onClick={() => { setStatus("reported"); setSearch(""); setQuery(""); setPage(0); }}><strong>待核实到账：{result.summary.awaiting} 笔</strong><span>买家已提交付款反馈，点击查看并核对收款记录 →</span></button>}
     <section className="wb-metrics" aria-label="经营数据">{[

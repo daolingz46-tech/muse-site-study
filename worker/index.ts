@@ -133,6 +133,12 @@ async function admin(env: Env, request: Request, path: string) {
   }
   await requireAdmin(env, request);
   if (path === "/api/admin/email-status" && request.method === "GET") return json({ configured: Boolean(env.RESEND_API_KEY) });
+  if (path === "/api/admin/email-test" && request.method === "POST") {
+    if (!env.RESEND_API_KEY) throw new HttpError(503, "邮件服务密钥尚未配置");
+    const response = await fetch("https://api.resend.com/emails", { method: "POST", headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json", "Idempotency-Key": `muse-email-test-${crypto.randomUUID()}` }, body: JSON.stringify({ from: "Muse 商店 <onboarding@resend.dev>", to: ["daolingz46@gmail.com"], subject: "Muse 商店邮件提醒测试", html: "<p>邮件提醒已成功连接。新订单和买家付款反馈将自动发送到此邮箱。</p>" }) });
+    if (!response.ok) throw new HttpError(502, `邮件服务发送失败（${response.status}），请检查 API Key 和 Resend 账户设置`);
+    return json({ ok: true });
+  }
   if (path === "/api/admin/logout" && request.method === "POST") { await env.DB.prepare("DELETE FROM sessions WHERE hash=?").bind(await hash(cookie(request))).run(); return json({ ok: true }, 200, { "Set-Cookie": cookieHeader(request, "", 0) }); }
   if (path === "/api/admin/orders" && request.method === "GET") {
     await expire(env);
