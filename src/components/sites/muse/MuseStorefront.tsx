@@ -80,6 +80,7 @@ export function MuseStorefront() {
     event.preventDefault();
     if (isToken && !inviteCode.trim()) {
       setError("请填写需要充值的账号邀请码");
+      document.getElementById("muse-invite-code")?.focus();
       return;
     }
     if (!isToken && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
@@ -200,10 +201,10 @@ export function MuseStorefront() {
                   </label>)}
                 </fieldset>
                 <div className="muse-token-notice"><strong>需已有 Muse 账号</strong><p>填写账号邀请码即可充值，不包含账号。支付后 10 分钟内到账，拥挤时可能需要 30 分钟。</p></div>
-                <div className="muse-email-field">
-                  <label htmlFor="muse-invite-code">账号邀请码</label>
-                  <div className={`muse-input-wrap ${error.includes("邀请码") ? "has-error" : ""}`}><Ticket size={17}/><input id="muse-invite-code" placeholder="填写需要充值的账号邀请码" autoComplete="off" maxLength={128} spellCheck={false} value={inviteCode} onChange={event => { setInviteCode(event.target.value); setError(""); }}/></div>
-                  <p className="muse-field-hint">请核对邀请码，Token 将充值到对应账号</p>
+                <div className="muse-email-field muse-invite-field">
+                  <label htmlFor="muse-invite-code">账号邀请码 <span className="muse-required-badge">* 必填</span></label>
+                  <div className={`muse-input-wrap ${error.includes("邀请码") ? "has-error" : ""}`}><Ticket size={17}/><input id="muse-invite-code" placeholder="必填：请输入需要充值的账号邀请码" required aria-invalid={error.includes("邀请码")} aria-describedby="muse-invite-hint" autoComplete="off" maxLength={128} spellCheck={false} value={inviteCode} onChange={event => { setInviteCode(event.target.value); setError(""); }}/></div>
+                  <p className="muse-field-hint" id="muse-invite-hint">请务必填写并核对邀请码，Token 将充值到对应账号</p>
                 </div>
               </> : <><div className="muse-selected-plan">
                 <div className="muse-plan-description">
