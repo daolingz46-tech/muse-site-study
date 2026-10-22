@@ -2,6 +2,10 @@
 
 账号与 Token 充值商店，包含个人收款二维码、订单链接、4 位付款备注码、订单数据库和店主管理工作台。
 
+正式商店：https://muse-store.muse-site-study.workers.dev/
+
+店主工作台：https://muse-store.muse-site-study.workers.dev/admin/
+
 ## 商品
 
 | 商品 | 价格 |

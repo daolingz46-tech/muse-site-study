@@ -1,5 +1,13 @@
 # 个人收款版部署与管理
 
+## 正式部署记录（2026-10-22）
+
+- 商店：https://muse-store.muse-site-study.workers.dev/
+- 工作台：https://muse-store.muse-site-study.workers.dev/admin/
+- Cloudflare D1 `muse-orders` 已创建并完成迁移，管理密码摘要已作为 Worker secret 发布。
+- 已通过公网首页、工作台页面、浏览器表单渲染、收款码文件哈希匹配、管理接口未登录拦截、登录后数据库查询及退出验证。验收没有创建虚假收款或交付记录。
+- 网站托管在 Cloudflare，访问不依赖本机服务。
+
 ## 架构及上线条件
 
 - GitHub：源代码和 CI，Pages 入口在正式站发布后跳转。
