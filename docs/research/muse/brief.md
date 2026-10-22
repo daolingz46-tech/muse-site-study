@@ -62,3 +62,11 @@ Added clearly marked controls to inspect pending, processing, complete, and expi
 
 Validation: production `npm run check` passed. Desktop 1440px and mobile 390px browser checks exercise notice timing and consent, both input/return behavior and selected provider, credential download contents, clipboard copying, failed and successful query tokens, recent-order reopening, refresh notification, delivery states, automatic timeout and restarting. No form submissions or personal-data network requests are made. Evidence: `flow-notice-*`, `flow-payment-*`, `flow-orders-*`, `flow-delivery-*` screenshots. The public non-affiliation banner and safe demo differences remain intentional.
 
+## Token recharge catalog
+
+User-authored addition to the previously unavailable Muse Token tab: 300亿 / ¥79, 200亿 / ¥52, 150亿 / ¥45, 100亿 / ¥30. Requires an existing account and its invitation code, with no email field and no included account. User-specified fulfillment copy: 10 minutes after payment, up to 30 minutes under congestion. This remains descriptive copy in the demonstration; no recharge API is connected.
+
+`catalog.ts` owns tier prices in integer cents, token terms, and discriminated account/recharge order details. Tier, exact total, invitation code and product-specific notices flow through checkout, downloaded credentials, and reopening saved demo orders. Recharge completion displays a recharge result without account passwords or email delivery. Listed recharge prices have no added fee; the existing account-product fee remains separate.
+
+Validation: GitHub Pages production `npm run check` passed. Browser tests at 320, 390 and 1440px exercised all four tiers end to end, empty invitation-code validation, terms, exact payment/download totals, recharge completion, reopening an older order after selecting another tier, returning to its original input/price, and switching back to the account form. No horizontal overflow or page errors. Screenshots: `token-plans-*`, `token-payment-*`.
+

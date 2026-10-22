@@ -260,6 +260,19 @@
 .muse-token-card dl > div { display: flex; justify-content: space-between; gap: 16px; padding: 18px 0; border-bottom: 1px solid #edf0f3; font-size: 13px; }
 .muse-token-card dt { color: #747883; }
 .muse-token-card dd { margin: 0; color: #424955; font-weight: 500; }
+.muse-token-plans { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 25px 0 16px; padding: 0; border: 0; }
+.muse-token-plans label { position: relative; display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 16px; border: 1px solid #e1e3e9; border-radius: 14px; background: #fcfcfd; cursor: pointer; transition: border-color .2s, background .2s; }
+.muse-token-plans label.is-selected { border-color: #88a5e8; background: linear-gradient(115deg, #f7faff, #fcfcff); box-shadow: 0 0 0 1px #88a5e8; }
+.muse-token-plans input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.muse-token-plans label:has(input:focus-visible) { outline: 3px solid #7297ee; outline-offset: 3px; }
+.muse-token-plan-name { color: #505866; font-size: 13px; font-weight: 500; }
+.muse-token-plans strong { font-size: 25px; font-weight: 550; line-height: 1.2; letter-spacing: -.7px; }
+.muse-token-plans strong > span { margin-right: 3px; font-size: 13px; font-weight: 400; }
+.muse-token-plan-check { position: absolute; right: 12px; bottom: 16px; display: grid; place-items: center; width: 15px; height: 15px; border: 1px solid #d9dce3; border-radius: 50%; }
+.muse-token-plans .is-selected .muse-token-plan-check { border-color: var(--accent); background: var(--accent); color: #fff; }
+.muse-token-notice { margin-bottom: 20px; padding: 12px 14px; border: 1px solid #e4ebf8; border-radius: 11px; background: #f7faff; color: #65748c; font-size: 11px; line-height: 1.8; }
+.muse-token-notice strong { display: block; color: #4b5d79; font-weight: 550; }
+.muse-token-notice p { margin: 3px 0 0; }
 .muse-back { display: flex; align-items: center; gap: 6px; margin: 0 0 20px; padding: 3px 0; border: 0; background: none; color: #7a8290; font-size: 12px; }
 .muse-review h1 { font-size: 28px; letter-spacing: -.9px; }
 .muse-review .muse-subtitle { font-size: 13px; }
@@ -355,6 +368,10 @@
   .muse-dialog h2 { font-size: 24px; }
 }
 @media (max-width: 360px) {
+  .muse-payment-summary { grid-template-columns: minmax(0, 1fr) minmax(96px, auto); column-gap: 8px; }
+  .muse-checkout-card .muse-payment-summary h1 { font-size: 23px; }
+  .muse-payment-summary > p { font-size: 10px; }
+  .muse-payment-amount strong { font-size: 28px; }
   .muse-header, .muse-footer { width: calc(100% - 32px); }
   .muse-product-layout { width: calc(100% - 28px); }
   .muse-checkout-card { padding: 21px; }

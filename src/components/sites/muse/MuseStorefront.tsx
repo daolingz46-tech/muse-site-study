@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { ArrowRight, ArrowUpRight, Check, ChevronDown, Mail, MessageCircle, ShoppingBag, X } from "lucide-react";
+import { ArrowRight, ArrowUpRight, Check, ChevronDown, Mail, MessageCircle, ShoppingBag, Ticket, X } from "lucide-react";
 import { OrderPayment, PurchaseNotice, RecentOrders, type DemoOrder, type DemoStatus } from "./OrderFlow";
+import { formatMoney, tokenPlans, tokenTerms, type OrderDetails } from "./catalog";
 import "./muse.css";
 
 type Product = "muse" | "muse-token";
@@ -25,6 +26,14 @@ export function MuseStorefront() {
   const [dialog, setDialog] = useState<Dialog>(null);
   const [step, setStep] = useState<Step>("details");
   const [email, setEmail] = useState("");
+  const [inviteCode, setInviteCode] = useState("");
+  const [tokenPlanId, setTokenPlanId] = useState<string>(tokenPlans[0].id);
+  const selectedTokenPlan = tokenPlans.find(plan => plan.id === tokenPlanId) || tokenPlans[0];
+  const isToken = product === "muse-token";
+  const productTitle = isToken ? `Muse Token · ${selectedTokenPlan.label}` : "Muse AI · 成品账号";
+  const purchaseTerms = isToken ? tokenTerms : terms;
+  const amountCents = isToken ? selectedTokenPlan.amountCents : 1200;
+  const feeCents = isToken ? 0 : 18;
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("alipay");
   const [accepted, setAccepted] = useState(false);
   const [error, setError] = useState("");
@@ -63,12 +72,17 @@ export function MuseStorefront() {
   function selectProduct(next: Product) {
     setProduct(next);
     setStep("details");
+    setAccepted(false);
     setError("");
   }
 
   function submitDetails(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+    if (isToken && !inviteCode.trim()) {
+      setError("请填写需要充值的账号邀请码");
+      return;
+    }
+    if (!isToken && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
       setError("请输入有效的收件邮箱");
       return;
     }
@@ -81,7 +95,10 @@ export function MuseStorefront() {
   }
 
   function createDemoOrder() {
-    const order: DemoOrder = { id: `DEMO-${crypto.randomUUID()}`, token: crypto.randomUUID(), email: email.trim(), method: paymentMethod, expiresAt: Date.now() + 15 * 60 * 1000, status: "pending" };
+    const details: OrderDetails = isToken
+      ? { product: "muse-token", title: productTitle, amountCents, feeCents, inviteCode: inviteCode.trim() }
+      : { product: "muse", title: productTitle, amountCents, feeCents, email: email.trim() };
+    const order: DemoOrder = { ...details, id: `DEMO-${crypto.randomUUID()}`, token: crypto.randomUUID(), method: paymentMethod, expiresAt: Date.now() + 15 * 60 * 1000, status: "pending" };
     setOrders(previous => [order, ...previous]);
     setActiveOrder(order);
     setStep("payment");
@@ -89,7 +106,14 @@ export function MuseStorefront() {
 
   function openOrder(order: DemoOrder) {
     setActiveOrder(order);
-    setProduct("muse");
+    setProduct(order.product);
+    setPaymentMethod(order.method);
+    if (order.product === "muse-token") {
+      setInviteCode(order.inviteCode);
+      setTokenPlanId(tokenPlans.find(plan => plan.amountCents === order.amountCents)?.id || tokenPlans[0].id);
+    } else {
+      setEmail(order.email);
+    }
     setStep("payment");
     setDialog(null);
     setOrderError("");
@@ -161,17 +185,27 @@ export function MuseStorefront() {
         <section className="muse-checkout-card" aria-label="下单信息">
           <div className="muse-checkout-viewport" style={{ height: checkoutHeight }}>
           <div ref={checkoutRef} className="muse-checkout-content">
-          {product === "muse-token" ? (
-            <div className="muse-token-card">
-              <h1>Muse Token</h1>
-              <dl><div><dt>规格</dt><dd>待定</dd></div><div><dt>售价</dt><dd>待定</dd></div></dl>
-              <button className="muse-primary" type="button" disabled>暂未开售</button>
-            </div>
-          ) : step === "details" ? (
+          {step === "details" ? (
             <form onSubmit={submitDetails} noValidate>
-              <h1>Muse AI</h1>
-              <p className="muse-subtitle">成品账号</p>
-              <div className="muse-selected-plan">
+              <h1>{isToken ? "Muse Token" : "Muse AI"}</h1>
+              <p className="muse-subtitle">{isToken ? "Token 充值 · 不含账号" : "成品账号"}</p>
+              {isToken ? <>
+                <fieldset className="muse-token-plans">
+                  <legend className="sr-only">充值档次</legend>
+                  {tokenPlans.map(plan => <label key={plan.id} className={tokenPlanId === plan.id ? "is-selected" : ""}>
+                    <input type="radio" name="token-plan" value={plan.id} checked={tokenPlanId === plan.id} onChange={() => { setTokenPlanId(plan.id); setError(""); }}/>
+                    <span className="muse-token-plan-name">{plan.label}</span>
+                    <strong><span>¥</span>{plan.amountCents / 100}</strong>
+                    <span className="muse-token-plan-check" aria-hidden="true">{tokenPlanId === plan.id && <Check size={11}/>}</span>
+                  </label>)}
+                </fieldset>
+                <div className="muse-token-notice"><strong>需已有 Muse 账号</strong><p>填写账号邀请码即可充值，不包含账号。支付后 10 分钟内到账，拥挤时可能需要 30 分钟。</p></div>
+                <div className="muse-email-field">
+                  <label htmlFor="muse-invite-code">账号邀请码</label>
+                  <div className={`muse-input-wrap ${error.includes("邀请码") ? "has-error" : ""}`}><Ticket size={17}/><input id="muse-invite-code" placeholder="填写需要充值的账号邀请码" autoComplete="off" maxLength={128} spellCheck={false} value={inviteCode} onChange={event => { setInviteCode(event.target.value); setError(""); }}/></div>
+                  <p className="muse-field-hint">请核对邀请码，Token 将充值到对应账号</p>
+                </div>
+              </> : <><div className="muse-selected-plan">
                 <div className="muse-plan-description">
                   <span className="muse-selected-circle"><Check size={12} strokeWidth={3}/></span>
                   <div><strong>成品账号</strong><span>1 Billion</span></div>
@@ -186,7 +220,7 @@ export function MuseStorefront() {
                     value={email} onChange={event => { setEmail(event.target.value); setError(""); }} />
                 </div>
                 <p className="muse-field-hint">账号资料发送至邮箱</p>
-              </div>
+              </div></>}
               <div className="muse-payment-row">
                 <label htmlFor="muse-payment-method">支付方式</label>
                 <div className="muse-payment-select">
@@ -205,12 +239,12 @@ export function MuseStorefront() {
               </div>
               {error && <p className="muse-error" role="alert">{error}</p>}
               <div className="muse-order-total">
-                <div><span>合计</span><small>含 ¥0.18 手续费</small></div>
-                <strong><span>¥</span>12.18</strong>
+                <div><span>合计</span><small>{isToken ? "仅充值 Token，不含账号" : "含 ¥0.18 手续费"}</small></div>
+                <strong><span>¥</span>{formatMoney(amountCents + feeCents)}</strong>
               </div>
               <button className="muse-primary" type="submit">确认订单 <ArrowRight size={17}/></button>
             </form>
-          ) : step === "notice" ? <PurchaseNotice terms={terms} onBack={() => setStep("details")} onContinue={createDemoOrder}/> : activeOrder ? <OrderPayment key={activeOrder.id} order={activeOrder} onBack={() => setStep("details")} onNotify={notify} onStatusChange={changeOrderStatus}/> : null}
+          ) : step === "notice" ? <PurchaseNotice title={productTitle} terms={purchaseTerms} onBack={() => setStep("details")} onContinue={createDemoOrder}/> : activeOrder ? <OrderPayment key={activeOrder.id} order={activeOrder} onBack={() => setStep("details")} onNotify={notify} onStatusChange={changeOrderStatus}/> : null}
           </div>
           </div>
         </section>
@@ -226,8 +260,8 @@ export function MuseStorefront() {
           <button className="muse-dialog-x" type="button" aria-label="关闭" onClick={() => setDialog(null)}><X size={18}/></button>
           {dialog === "terms" ? <>
             <h2 id="muse-dialog-title">购买须知</h2>
-            <p className="muse-dialog-subtitle">Muse AI · 成品账号</p>
-            <ul className="muse-terms-list">{terms.map(item => <li key={item.title}><strong>{item.title}</strong><p>{item.body}</p></li>)}</ul>
+            <p className="muse-dialog-subtitle">{productTitle}</p>
+            <ul className="muse-terms-list">{purchaseTerms.map(item => <li key={item.title}><strong>{item.title}</strong><p>{item.body}</p></li>)}</ul>
             <button className="muse-primary" type="button" onClick={() => setDialog(null)}>关闭</button>
           </> : <>
             <h2 id="muse-dialog-title">我的订单</h2>
