@@ -174,7 +174,7 @@ async function admin(env: Env, request: Request, path: string) {
     const now = Date.now(); let sql: string; let args: (string | number | null)[];
     if (input.action === "confirm") {
       if (!["pending", "reported", "expired"].includes(row.status)) throw new HttpError(409, "订单状态已更新，请刷新");
-      const reference = str(input.reference, 100); if (reference.length < 6 || input.checked !== true) throw new HttpError(400, "请核对收款金额、时间、备注订单码，并填写支付交易单号");
+      const reference = input.reference ? str(input.reference, 100) : null; if (reference && reference.length < 6) throw new HttpError(400, "支付交易单号格式不正确");
       sql = "UPDATE orders SET status='processing',paidAt=?,reference=?,updatedAt=? WHERE id=? AND status=?"; args = [now, reference, now, row.id, row.status];
     } else if (input.action === "complete") {
       if (row.status !== "processing") throw new HttpError(409, "请先核对并确认收款");
