@@ -1,4 +1,4 @@
-import type { DemoOrder } from "./OrderFlow";
+import type { StoreOrder } from "./OrderFlow";
 
 export type CreateStoreOrder = {
   product: "muse" | "muse-token";
@@ -13,13 +13,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function readOrder(value: unknown): DemoOrder {
+function readOrder(value: unknown): StoreOrder {
   if (!isRecord(value) || typeof value.id !== "string" || typeof value.token !== "string"
-    || value.id.startsWith("DEMO-") || !value.id || !value.token
+    || !value.id || !value.token || typeof value.code !== "string" || !/^\d{4}$/.test(value.code)
     || typeof value.title !== "string" || !Number.isSafeInteger(value.amountCents) || Number(value.amountCents) <= 0
     || !Number.isSafeInteger(value.feeCents) || Number(value.feeCents) < 0
     || typeof value.expiresAt !== "number" || !Number.isFinite(value.expiresAt)
-    || !["pending", "processing", "complete", "expired"].includes(String(value.status))
+    || !["pending", "reported", "processing", "complete", "expired"].includes(String(value.status))
     || !["alipay", "wechat"].includes(String(value.method))
     || (value.product !== "muse" && value.product !== "muse-token")
     || (value.product === "muse" && typeof value.email !== "string")
@@ -35,10 +35,10 @@ function readOrder(value: unknown): DemoOrder {
     || typeof value.delivery.codeUrl !== "string")) {
     throw new Error("交付资料返回异常，请联系支持。");
   }
-  return value as DemoOrder;
+  return value as StoreOrder;
 }
 
-async function requestOrder(path: string, payload: unknown): Promise<DemoOrder> {
+async function requestOrder(path: string, payload: unknown): Promise<StoreOrder> {
   let response: Response;
   try {
     response = await fetch(path, {
@@ -47,9 +47,6 @@ async function requestOrder(path: string, payload: unknown): Promise<DemoOrder> 
     });
   } catch {
     throw new Error("暂时无法连接订单服务，请稍后重试或联系支持。");
-  }
-  if (response.status === 404 || response.status === 405 || response.status === 503) {
-    throw new Error("在线支付尚未开通，请联系 QQ：3557785836。");
   }
   const data: unknown = await response.json().catch(() => null);
   if (!response.ok) {
@@ -66,4 +63,8 @@ export async function lookupStoreOrder(id: string, token: string) {
   const order = await requestOrder("/api/orders/lookup", { id, token });
   if (order.id !== id || order.token !== token) throw new Error("订单信息不匹配，请联系支持。");
   return order;
+}
+
+export function reportStorePayment(id: string, token: string) {
+  return requestOrder("/api/orders/report", { id, token, remarkConfirmed: true });
 }

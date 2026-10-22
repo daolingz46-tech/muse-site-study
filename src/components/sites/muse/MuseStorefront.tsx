@@ -4,8 +4,8 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 import Image from "next/image";
 import Link from "next/link";
 import { ArrowRight, ArrowUpRight, Check, ChevronDown, Mail, MessageCircle, ShoppingBag, Ticket, X } from "lucide-react";
-import { OrderPayment, PurchaseNotice, RecentOrders, type DemoOrder, type DemoStatus } from "./OrderFlow";
-import { accountPriceCents, formatMoney, storeName, supportQQ, tokenPlans, tokenTerms, type OrderDetails } from "./catalog";
+import { OrderPayment, PurchaseNotice, RecentOrders, orderLink, type StoreOrder } from "./OrderFlow";
+import { accountPriceCents, formatMoney, storeName, supportQQ, tokenPlans, tokenTerms } from "./catalog";
 import { createStoreOrder, lookupStoreOrder } from "./store-api";
 import "./muse.css";
 
@@ -16,11 +16,10 @@ type PaymentMethod = "alipay" | "wechat";
 
 const terms = [
   { title: "仅质保首次登录", body: "不提供后续使用质保。首次登录有问题，请保留订单号和截图联系支持。" },
-  { title: "交付邮箱与接码链接", body: "账号发送至收件邮箱，通过接码链接获取登录验证码或者密码登录。" },
+  { title: "交付邮箱与接码链接", body: "店主确认收款后准备账号，在订单页面查看账号与接码链接。" },
   { title: "登录后立即更换邮箱", body: "首次登录成功后，请立即在 Muse 内更换为自己的邮箱，并删除旧邮箱。" },
 ];
 const assetBase = process.env.NEXT_PUBLIC_BASE_PATH || "";
-const isPublicDemo = process.env.NEXT_PUBLIC_PUBLIC_DEMO === "true";
 
 export function MuseStorefront() {
   const [product, setProduct] = useState<Product>("muse");
@@ -44,14 +43,14 @@ export function MuseStorefront() {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const checkoutRef = useRef<HTMLDivElement>(null);
   const [checkoutHeight, setCheckoutHeight] = useState<number>();
-  const [orders, setOrders] = useState<DemoOrder[]>([]);
-  const [activeOrder, setActiveOrder] = useState<DemoOrder | null>(null);
+  const [orders, setOrders] = useState<StoreOrder[]>([]);
+  const [activeOrder, setActiveOrder] = useState<StoreOrder | null>(null);
   const [notification, setNotification] = useState("");
   const [creatingOrder, setCreatingOrder] = useState(false);
   const [queryingOrder, setQueryingOrder] = useState(false);
   const orderRequestRef = useRef("");
   const notify = useCallback((message: string) => setNotification(message), []);
-  const updateOrder = useCallback((order: DemoOrder) => {
+  const updateOrder = useCallback((order: StoreOrder) => {
     setActiveOrder(current => current?.id === order.id ? order : current);
     setOrders(previous => previous.map(item => item.id === order.id ? order : item));
   }, []);
@@ -80,6 +79,7 @@ export function MuseStorefront() {
   function selectProduct(next: Product) {
     setProduct(next);
     setStep("details");
+    window.history.replaceState(null, "", window.location.pathname);
     setAccepted(false);
     setError("");
   }
@@ -106,7 +106,7 @@ export function MuseStorefront() {
 
   async function createOrder() {
     if (creatingOrder) return;
-    if (!isPublicDemo) {
+    {
       setCreatingOrder(true);
       setError("");
       orderRequestRef.current ||= crypto.randomUUID();
@@ -117,20 +117,14 @@ export function MuseStorefront() {
         setOrders(previous => [order, ...previous.filter(item => item.id !== order.id)]);
         setActiveOrder(order);
         setStep("payment");
+        window.history.replaceState(null, "", orderLink(order));
       } catch (cause) { setError(cause instanceof Error ? cause.message : "创建订单失败，请联系支持。"); }
       finally { setCreatingOrder(false); }
       return;
     }
-    const details: OrderDetails = isToken
-      ? { product: "muse-token", title: productTitle, amountCents, feeCents, inviteCode: inviteCode.trim() }
-      : { product: "muse", title: productTitle, amountCents, feeCents, email: email.trim() };
-    const order: DemoOrder = { ...details, id: `DEMO-${crypto.randomUUID()}`, token: crypto.randomUUID(), method: paymentMethod, expiresAt: Date.now() + 15 * 60 * 1000, status: "pending" };
-    setOrders(previous => [order, ...previous]);
-    setActiveOrder(order);
-    setStep("payment");
   }
 
-  function openOrder(order: DemoOrder) {
+  const openOrder = useCallback((order: StoreOrder) => {
     setActiveOrder(order);
     setProduct(order.product);
     setPaymentMethod(order.method);
@@ -143,18 +137,28 @@ export function MuseStorefront() {
     setStep("payment");
     setDialog(null);
     setOrderError("");
-  }
+    window.history.replaceState(null, "", orderLink(order));
+  }, []);
 
-  function changeOrderStatus(status: DemoStatus) {
-    if (!isPublicDemo || !activeOrder) return;
-    const updated = { ...activeOrder, status };
-    setActiveOrder(updated);
-    setOrders(previous => previous.map(order => order.id === updated.id ? updated : order));
-  }
+  useEffect(() => {
+    let disposed = false;
+    const load = () => {
+      const params = new URLSearchParams(window.location.hash.slice(1));
+      const id = params.get("order"), token = params.get("token");
+      if (!id || !token) return;
+      void lookupStoreOrder(id, token).then(order => {
+        if (disposed) return;
+        openOrder(order);
+        setOrders(previous => [order, ...previous.filter(item => item.id !== order.id)]);
+      }).catch(cause => { if (!disposed) notify(cause instanceof Error ? cause.message : "订单链接无法打开"); });
+    };
+    load(); window.addEventListener("hashchange", load);
+    return () => { disposed = true; window.removeEventListener("hashchange", load); };
+  }, [openOrder, notify]);
 
   async function queryOrder(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!isPublicDemo) {
+    {
       if (!orderNumber.trim() || !orderToken.trim()) { setOrderError("请填写订单号和查询口令"); return; }
       if (queryingOrder) return;
       setQueryingOrder(true);
@@ -164,22 +168,14 @@ export function MuseStorefront() {
       finally { setQueryingOrder(false); }
       return;
     }
-    const found = orders.find(order => order.id === orderNumber.trim() && order.token === orderToken.trim());
-    if (found) { openOrder(found); return; }
-    setOrderError(
-      orderNumber.trim() && orderToken.trim()
-        ? "未找到匹配的演示订单。请检查查询凭据；仅支持当前页面创建的订单。"
-        : "请填写订单号和查询口令",
-    );
   }
 
   return (
     <div className="muse-storefront">
-      {isPublicDemo && <div className="muse-demo-banner" role="note">非 GPTibo 官方网站，仅供学习。请使用测试信息；输入仅在当前页面演示，不上传、不保存，不支持真实付款。</div>}
       <header className="muse-header">
-        <Link className="muse-wordmark" href="/" aria-label={isPublicDemo ? "GPTibo 首页" : `${storeName}首页`}>
+        <Link className="muse-wordmark" href="/" aria-label={`${storeName}首页`}>
           <Image src={assetBase + "/sites/muse/favicon.svg"} width={29} height={29} alt="" />
-          <span>{isPublicDemo ? <>GPTibo<span className="muse-wordmark-dot">.</span></> : storeName}</span>
+          <span>{storeName}</span>
         </Link>
         <div className="muse-switch" role="tablist" aria-label="商品">
           <span className={`muse-switch-indicator ${product === "muse-token" ? "is-token" : ""}`} />
@@ -255,7 +251,7 @@ export function MuseStorefront() {
                   <input id="muse-email" type="email" placeholder="you@example.com" autoComplete="off" maxLength={254}
                     value={email} onChange={event => { setEmail(event.target.value); setError(""); }} />
                 </div>
-                <p className="muse-field-hint">账号资料发送至邮箱</p>
+                <p className="muse-field-hint">交付后在订单页面查看账号资料</p>
               </div></>}
               <div className="muse-payment-row">
                 <label htmlFor="muse-payment-method">支付方式</label>
@@ -280,13 +276,13 @@ export function MuseStorefront() {
               </div>
               <button className="muse-primary" type="submit">确认订单 <ArrowRight size={17}/></button>
             </form>
-          ) : step === "notice" ? <PurchaseNotice title={productTitle} terms={purchaseTerms} busy={creatingOrder} error={error} onBack={() => setStep("details")} onContinue={createOrder}/> : activeOrder ? <OrderPayment key={activeOrder.id} order={activeOrder} onBack={() => setStep("details")} onNotify={notify} onStatusChange={changeOrderStatus} onOrderUpdate={updateOrder}/> : null}
+          ) : step === "notice" ? <PurchaseNotice title={productTitle} terms={purchaseTerms} busy={creatingOrder} error={error} onBack={() => setStep("details")} onContinue={createOrder}/> : activeOrder ? <OrderPayment key={activeOrder.id} order={activeOrder} onBack={() => setStep("details")} onNotify={notify} onOrderUpdate={updateOrder}/> : null}
           </div>
           </div>
         </section>
       </main>
 
-      <footer className="muse-footer"><span>© 2026 {isPublicDemo ? "GPTibo" : storeName}</span><button className="muse-support-link" type="button" onClick={() => setDialog("support")}>联系支持 · QQ：{supportQQ} <ArrowUpRight size={12}/></button></footer>
+      <footer className="muse-footer"><span>© 2026 {storeName}</span><button className="muse-support-link" type="button" onClick={() => setDialog("support")}>联系支持 · QQ：{supportQQ} <ArrowUpRight size={12}/></button></footer>
 
       {dialog && <dialog ref={dialogRef} className="muse-dialog" aria-labelledby="muse-dialog-title" onCancel={() => setDialog(null)} onClick={event => {
         if (event.target !== event.currentTarget) return;

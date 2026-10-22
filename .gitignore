@@ -47,6 +47,12 @@ next-env.d.ts
 
 # Local temp files
 temp/
+.wrangler/
+.dev.vars
+.dev.vars.*
+admin-access.local.txt
+wrangler.production.json
+orders-backup*.sql
 
 # Personal collection code is supplied separately for the local storefront.
 public/sites/muse/wechat-collection.local.png

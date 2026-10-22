@@ -1,9 +1,4 @@
-export const tokenPlans = [
-  { id: "300", label: "300亿 Token", amountCents: 7900 },
-  { id: "200", label: "200亿 Token", amountCents: 5200 },
-  { id: "150", label: "150亿 Token", amountCents: 4500 },
-  { id: "100", label: "100亿 Token", amountCents: 2900 },
-] as const;
+export { tokenPlans, accountPriceCents } from "@/lib/products";
 
 export const tokenTerms = [
   { title: "不包含账号", body: "本商品仅提供 Token 充值，请先准备已有的 Muse 账号。" },
@@ -20,7 +15,6 @@ export type OrderDetails = {
 export function formatMoney(cents: number) {
   return (cents / 100).toFixed(2);
 }
-export const accountPriceCents = 1500;
 export const supportQQ = "3557785836";
 export const storeName = process.env.NEXT_PUBLIC_STORE_NAME || "Muse 商店";
 

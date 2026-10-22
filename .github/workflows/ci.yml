@@ -33,4 +33,7 @@ jobs:
         run: npm run typecheck
 
       - name: Build
-        run: npm run build
+        run: npm run build:store
+
+      - name: Order database tests
+        run: npm run test:orders
