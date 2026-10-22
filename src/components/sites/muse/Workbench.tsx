@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 import { ArrowUpRight, Download, LockKeyhole, LogOut, RefreshCw, Search, X, Bell } from "lucide-react";
 import Link from "next/link";
 import { formatMoney, storeName } from "./catalog";
+import { storeApiUrl } from "./store-api";
 import "./workbench.css";
 
 type AdminOrder = {
@@ -21,7 +22,7 @@ const visitDeviceLabels: Record<string, string> = { mobile: "手机", tablet: "�
 function date(value: number | null) { return value ? new Intl.DateTimeFormat("zh-CN", { dateStyle: "short", timeStyle: "short", timeZone: "Asia/Shanghai" }).format(value) : "—"; }
 class ApiError extends Error { constructor(public status: number, message: string) { super(message); } }
 async function api(path: string, input?: unknown) {
-  const response = await fetch(`/api/admin/${path}`, { method: input === undefined ? "GET" : "POST", headers: input === undefined ? {} : { "Content-Type": "application/json" }, body: input === undefined ? undefined : JSON.stringify(input), cache: "no-store", signal: AbortSignal.timeout(15000) });
+  const response = await fetch(storeApiUrl(`/api/admin/${path}`), { method: input === undefined ? "GET" : "POST", headers: input === undefined ? {} : { "Content-Type": "application/json" }, body: input === undefined ? undefined : JSON.stringify(input), credentials: "include", cache: "no-store", signal: AbortSignal.timeout(15000) });
   const data = await response.json().catch(() => null);
   if (!response.ok) throw new ApiError(response.status, data?.message || "工作台连接失败，请稍后重试");
   return data;
@@ -139,7 +140,7 @@ export function Workbench() {
     {error && <p role="alert" className="wb-error">{error}</p>}<Link href="/">返回商店 <ArrowUpRight size={14}/></Link>
   </form></main>;
   return <main className="workbench">
-    <header className="wb-header"><div><p className="wb-eyebrow">{storeName} / 管理中心</p><h1>订单工作台</h1></div><nav><button onClick={() => void enableDesktopAlerts()}><Bell size={15}/>{desktopAlerts ? "桌面提醒已开" : "开启桌面提醒"}</button><a href="/" target="_blank" rel="noreferrer">打开商店 <ArrowUpRight size={15}/></a><button onClick={() => void logout()}><LogOut size={15}/>退出</button></nav></header>
+    <header className="wb-header"><div><p className="wb-eyebrow">{storeName} / 管理中心</p><h1>订单工作台</h1></div><nav><button onClick={() => void enableDesktopAlerts()}><Bell size={15}/>{desktopAlerts ? "桌面提醒已开" : "开启桌面提醒"}</button><a href={`${process.env.NEXT_PUBLIC_BASE_PATH || ""}/`} target="_blank" rel="noreferrer">打开商店 <ArrowUpRight size={15}/></a><button onClick={() => void logout()}><LogOut size={15}/>退出</button></nav></header>
     <p className="wb-description">以微信、支付宝收款记录核实到账，再处理充值或账号交付。</p>
     {emailConfigured === false && <div className="wb-email-setup" role="status"><strong>订单邮件提醒还未启用</strong><span>邮件服务尚未配置。可用个人 Gmail 的 Apps Script 免域名发信，或配置 Resend API Key；新订单和买家付款反馈会发到 daolingz46@gmail.com。</span></div>}
     {emailConfigured === true && <div className="wb-email-ready"><span>邮件提醒已连接 · 新订单和付款反馈将发送到 daolingz46@gmail.com</span><button onClick={() => void sendTestEmail()} disabled={emailTestBusy}>{emailTestBusy ? "发送中…" : "发送测试邮件"}</button></div>}

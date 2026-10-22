@@ -1,5 +1,10 @@
 import type { StoreOrder } from "./OrderFlow";
 
+const storeApiBase = (process.env.NEXT_PUBLIC_STORE_API_BASE_URL || "").replace(/\/+$/, "");
+export function storeApiUrl(path: string) {
+  return storeApiBase ? `${storeApiBase}${path.startsWith("/") ? path : `/${path}`}` : path;
+}
+
 export type CreateStoreOrder = {
   product: "muse" | "muse-token";
   planId?: string;
@@ -35,13 +40,14 @@ function readOrder(value: unknown): StoreOrder {
     || typeof value.delivery.codeUrl !== "string")) {
     throw new Error("交付资料返回异常，请联系支持。");
   }
-  return value as StoreOrder;
+  const order = value as StoreOrder;
+  return order.qrImageUrl && storeApiBase ? { ...order, qrImageUrl: storeApiUrl(order.qrImageUrl) } : order;
 }
 
 async function requestOrder(path: string, payload: unknown): Promise<StoreOrder> {
   let response: Response;
   try {
-    response = await fetch(path, {
+    response = await fetch(storeApiUrl(path), {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload), cache: "no-store", signal: AbortSignal.timeout(15000),
     });
@@ -71,7 +77,7 @@ export function reportStorePayment(id: string, token: string) {
 
 export type OrderSummary = { kind: "summary"; code: string; title: string; amountCents: number; status: StoreOrder["status"] };
 export async function findStoreOrder(identifier: string): Promise<OrderSummary | { kind: "full"; order: StoreOrder }> {
-  const response = await fetch("/api/orders/find", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ identifier }), cache: "no-store", signal: AbortSignal.timeout(15000) });
+  const response = await fetch(storeApiUrl("/api/orders/find"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ identifier }), cache: "no-store", signal: AbortSignal.timeout(15000) });
   const value: unknown = await response.json().catch(() => null);
   if (!response.ok) throw new Error(isRecord(value) && typeof value.message === "string" ? value.message : "查询失败，请稍后重试");
   if (!isRecord(value)) throw new Error("订单查询返回异常");

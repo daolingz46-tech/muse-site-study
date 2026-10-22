@@ -6,7 +6,7 @@ import Link from "next/link";
 import { ArrowRight, ArrowUpRight, Check, ChevronDown, Mail, MessageCircle, ShoppingBag, Ticket, X } from "lucide-react";
 import { OrderPayment, PurchaseNotice, RecentOrders, orderLink, type StoreOrder } from "./OrderFlow";
 import { accountPriceCents, formatMoney, storeName, supportQQ, tokenPlans, tokenTerms } from "./catalog";
-import { createStoreOrder, lookupStoreOrder, findStoreOrder, type OrderSummary } from "./store-api";
+import { createStoreOrder, lookupStoreOrder, findStoreOrder, storeApiUrl, type OrderSummary } from "./store-api";
 import { readSavedOrders, saveOrder, type SavedOrder } from "./saved-orders";
 import "./muse.css";
 
@@ -65,7 +65,7 @@ export function MuseStorefront() {
     const source = !referrer ? "direct" : /baidu|bing|google|sogou|so\.com/.test(referrer) ? "search" : /weixin|wechat|douyin|xiaohongshu|weibo|zhihu/.test(referrer) ? "social" : "external";
     const ua = navigator.userAgent.toLowerCase();
     const device = /ipad|tablet/.test(ua) ? "tablet" : /mobile|android|iphone/.test(ua) ? "mobile" : "desktop";
-    void fetch("/api/visit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, page: "/", source, device }), keepalive: true }).catch(() => {});
+    void fetch(storeApiUrl("/api/visit"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, page: "/", source, device }), keepalive: true }).catch(() => {});
   }, []);
 
   useEffect(() => {

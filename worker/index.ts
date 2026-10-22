@@ -128,7 +128,7 @@ async function createOrder(env: Env, request: Request, input: Record<string, unk
   throw new HttpError(503, "当前订单较多，请稍后再试或联系支持");
 }
 function cookie(request: Request) { return request.headers.get("Cookie")?.match(/(?:^|;\s*)muse_admin=([a-f0-9]{64})(?:;|$)/)?.[1] || ""; }
-function cookieHeader(request: Request, value: string, age: number) { return `muse_admin=${value}; HttpOnly; SameSite=Strict; Path=/api/admin; Max-Age=${age}${new URL(request.url).protocol === "https:" ? "; Secure" : ""}`; }
+function cookieHeader(request: Request, value: string, age: number) { const secure = new URL(request.url).protocol === "https:"; return `muse_admin=${value}; HttpOnly; SameSite=${secure ? "None" : "Lax"}; Path=/api/admin; Max-Age=${age}${secure ? "; Secure" : ""}`; }
 async function requireAdmin(env: Env, request: Request) {
   const session = cookie(request);
   if (!session || !await env.DB.prepare("SELECT hash FROM sessions WHERE hash=? AND expiresAt>?").bind(await hash(session), Date.now()).first()) throw new HttpError(401, "请登录工作台");
@@ -197,10 +197,29 @@ async function admin(env: Env, request: Request, path: string) {
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContextLike): Promise<Response> {
     const url = new URL(request.url), path = url.pathname.replace(/\/$/, "");
+    const origin = request.headers.get("Origin");
+    const githubPagesOrigin = "https://daolingz46-tech.github.io";
+    const corsOrigin = origin === url.origin || origin === githubPagesOrigin ? origin : "";
+    const withCors = (response: Response) => {
+      if (!corsOrigin) return response;
+      const headers = new Headers(response.headers);
+      headers.set("Access-Control-Allow-Origin", corsOrigin);
+      headers.set("Access-Control-Allow-Credentials", "true");
+      headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+      headers.set("Access-Control-Allow-Headers", "Content-Type");
+      headers.set("Access-Control-Max-Age", "86400");
+      headers.append("Vary", "Origin");
+      return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+    };
     try {
       if (!path.startsWith("/api/")) return env.ASSETS.fetch(request);
-      if (request.method !== "GET" && request.headers.get("Origin") !== url.origin) throw new HttpError(403, "请求来源无效，请刷新页面");
-      if (path.startsWith("/api/admin/")) return await admin(env, request, path);
+      if (request.method === "OPTIONS") {
+        if (!corsOrigin) throw new HttpError(403, "请求来源无效，请刷新页面");
+        return withCors(new Response(null, { status: 204 }));
+      }
+      if (request.method !== "GET" && !corsOrigin) throw new HttpError(403, "请求来源无效，请刷新页面");
+      if (request.method === "GET" && origin && !corsOrigin) throw new HttpError(403, "请求来源无效，请刷新页面");
+      if (path.startsWith("/api/admin/")) return withCors(await admin(env, request, path));
       if (path === "/api/visit" && request.method === "POST") {
         await limit(env, request, "visit", 60, 60);
         const input = await body(request);
@@ -209,16 +228,16 @@ const worker = {
         const device = ["mobile", "tablet", "desktop"].includes(String(input.device)) ? String(input.device) : "desktop";
         if (!/^[a-f0-9-]{36}$/i.test(id) || !page) throw new HttpError(400, "访问记录无效");
         await env.DB.prepare("INSERT OR IGNORE INTO visits(id,page,source,device,createdAt) VALUES(?,?,?,?,?)").bind(id, page, source, device, Date.now()).run();
-        return json({ ok: true }, 201);
+        return withCors(json({ ok: true }, 201));
       }
       if (/^\/api\/payment-qr\/(wechat|alipay)$/.test(path) && request.method === "GET") {
         const imageUrl = new URL(`/sites/muse/${path.split("/").pop()}-collection.png`, url);
         const response = await env.ASSETS.fetch(new Request(imageUrl));
-        return new Response(response.body, { status: response.status, headers: { "Content-Type": "image/png", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } });
+        return withCors(new Response(response.body, { status: response.status, headers: { "Content-Type": "image/png", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } }));
       }
       if (request.method !== "POST") throw new HttpError(405, "请求方式无效");
       const input = await body(request);
-      if (path === "/api/orders") return await createOrder(env, request, input, ctx);
+      if (path === "/api/orders") return withCors(await createOrder(env, request, input, ctx));
       if (path === "/api/orders/find") {
         const identifier = str(input.identifier, 64);
         if (!/^\d{4}$/.test(identifier) && !/^M[a-f0-9]{32}$/i.test(identifier)) throw new HttpError(400, "请输入 4 位订单码或完整订单编号");
@@ -226,9 +245,9 @@ const worker = {
         await limit(env, request, short ? "short-code" : "order-id", short ? 20 : 60, 3600);
         const row = await env.DB.prepare(short ? "SELECT * FROM orders WHERE code=?" : "SELECT * FROM orders WHERE id=?").bind(short ? identifier : `M${identifier.slice(1).toLowerCase()}`).first<Row>();
         if (!row) throw new HttpError(404, "未找到订单，请检查输入");
-        if (!short) return json({ kind: "full", order: publicOrder(row, await hash(`order-id-access:${row.id}`)) });
+        if (!short) return withCors(json({ kind: "full", order: publicOrder(row, await hash(`order-id-access:${row.id}`)) }));
         const status = row.status === "pending" && row.expiresAt <= Date.now() ? "expired" : row.status;
-        return json({ kind: "summary", code: row.code, title: row.title, amountCents: row.amountCents, status });
+        return withCors(json({ kind: "summary", code: row.code, title: row.title, amountCents: row.amountCents, status }));
       }
       if (path === "/api/orders/lookup" || path === "/api/orders/report") {
         await limit(env, request, "lookup", 180, 60);
@@ -241,15 +260,15 @@ const worker = {
           }
           const updated = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(row.id).first<Row>();
           await queueOrderEmail(env, updated!, "reported", ctx);
-          return json(publicOrder(updated!, token));
+          return withCors(json(publicOrder(updated!, token)));
         }
-        return json(publicOrder(row, token));
+        return withCors(json(publicOrder(row, token)));
       }
       throw new HttpError(404, "接口不存在");
     } catch (error) {
-      if (error instanceof HttpError) return json({ message: error.message }, error.status);
+      if (error instanceof HttpError) return withCors(json({ message: error.message }, error.status));
       console.error("store_request_failed", error instanceof Error ? error.name : "UnknownError");
-      return json({ message: "订单服务暂时不可用，请稍后重试" }, 500);
+      return withCors(json({ message: "订单服务暂时不可用，请稍后重试" }, 500));
     }
   },
   async scheduled(_event: unknown, env: Env) { await expire(env); await sendOrderEmails(env); },

@@ -1,46 +1,38 @@
-name: Publish store address
+name: Build and publish Muse storefront
+
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      store_url:
-        description: 已部署并验证的正式商店 HTTPS 地址
-        required: true
-        type: string
+
 permissions:
   contents: read
+
 concurrency:
   group: github-pages
   cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Create store redirect
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Export the storefront for GitHub Pages
         env:
-          STORE_URL: ${{ inputs.store_url }}
-        run: |
-          python3 - <<'PY'
-          import os, pathlib, html, json
-          from urllib.parse import urlsplit
-          url = os.environ['STORE_URL'].strip()
-          parsed = urlsplit(url)
-          if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
-              raise SystemExit('Require a plain HTTPS store URL')
-          target = url.rstrip('/') + '/'
-          escaped = html.escape(target, quote=True)
-          script_url = json.dumps(target).replace('<', '\\u003c')
-          pathlib.Path('out').mkdir()
-          pathlib.Path('out/index.html').write_text(f'''<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Muse 商店</title><meta http-equiv="refresh" content="0;url={escaped}"><body><p>正在前往 Muse 商店…</p><a href="{escaped}">打开商店</a><script>location.replace({script_url}+location.hash)</script></body></html>''', encoding='utf-8')
-          admin_target = target + 'admin/'
-          admin_escaped = html.escape(admin_target, quote=True)
-          admin_script_url = json.dumps(admin_target).replace('<', '\\u003c')
-          pathlib.Path('out/admin').mkdir()
-          pathlib.Path('out/admin/index.html').write_text(f'''<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Muse 店主工作台</title><meta http-equiv="refresh" content="0;url={admin_escaped}"><body><p>正在打开店主工作台…</p><a href="{admin_escaped}">打开工作台</a><script>location.replace({admin_script_url})</script></body></html>''', encoding='utf-8')
-          pathlib.Path('out/.nojekyll').touch()
-          PY
+          STATIC_EXPORT: "true"
+          NEXT_PUBLIC_BASE_PATH: /muse-site-study
+          NEXT_PUBLIC_STORE_API_BASE_URL: https://muse-store.muse-site-study.workers.dev
+        run: npm run build:store
+      - run: touch out/.nojekyll
       - uses: actions/upload-pages-artifact@v4
         with:
           path: out
+
   deploy:
     needs: build
     runs-on: ubuntu-latest
