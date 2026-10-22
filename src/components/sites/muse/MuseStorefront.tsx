@@ -197,7 +197,7 @@ export function MuseStorefront() {
   return (
     <div className="muse-storefront">
       <header className="muse-header">
-        <Link className="muse-wordmark" href="/" aria-label={`${storeName}首页`}>
+        <Link className="muse-wordmark" href="/" aria-label={`${storeName}首页`} draggable={false} onDragStart={event => event.preventDefault()}>
           <Image src={assetBase + "/sites/muse/store-logo.png"} width={34} height={34} alt="" draggable={false} />
           <span>{storeName}</span>
         </Link>
@@ -227,7 +227,7 @@ export function MuseStorefront() {
       </header>
 
       <main className="muse-product-layout" id="muse-product-panel" role="tabpanel" aria-labelledby={`tab-${product}`}>
-        <section className="muse-product-stage" aria-label={product === "muse" ? "Muse AI" : "Muse Token"}>
+        <section className="muse-product-stage" aria-label={product === "muse" ? "Muse AI" : "Muse Token"} onDragStart={event => event.preventDefault()} onMouseDown={event => event.preventDefault()}>
           <div className="muse-stage-halo" />
           <div className="muse-logo-composition">
             <span className="muse-logo-inner"><Image src={assetBase + "/sites/muse/muse-logo.svg"} fill sizes="(max-width: 650px) 158px, 354px" alt="" loading="eager" draggable={false} /></span>
