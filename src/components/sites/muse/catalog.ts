@@ -22,4 +22,5 @@ export function formatMoney(cents: number) {
 }
 export const accountPriceCents = 1500;
 export const supportQQ = "3557785836";
+export const storeName = process.env.NEXT_PUBLIC_STORE_NAME || "Muse 商店";
 

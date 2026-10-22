@@ -78,3 +78,13 @@ User supplied personal WeChat and Alipay collection codes. They were decoded loc
 
 Validation covers both build modes: ¥15 account and ¥29 100亿 tier through checkout/payment, correct local QR choice for both methods, DEMO-only QR selection in the public build, QQ clipboard contents, and mobile overflow/runtime errors. Real payments, durable orders and fulfillment are still unconnected.
 
+## Production storefront preparation and payment research
+
+User clarified this is intended as an actual store and confirmed merchant payment APIs are not open. Researched official WeChat Native creation, signed payment callbacks, order queries, the narrowly scoped personal mini-program collection product, Alipay application onboarding/precreation/query, and GitHub Pages commercial-hosting limits. Full findings and pending dependencies: `docs/production-launch.md`.
+
+Non-demo builds now use the store identity (configurable through `NEXT_PUBLIC_STORE_NAME`), server order creation/lookup, idempotency request IDs, and polling for payment/fulfillment updates. No local paid-state controls, fake delivered accounts or static personal collection codes appear in this mode. Missing order service blocks checkout with a clear message. GitHub Pages remains the explicit educational preview.
+
+This is frontend preparation and an API contract, not a working payment backend. There is no database, merchant adapter, callback verifier, stock service, mailer or formal deployment in this change. A successful test response is not evidence of a real receipt. Merchant onboarding and domain/server details remain unresolved.
+
+Validation: public-export and normal production builds; public demo price/support regression; production UI tests with mocked backend responses for service unavailability, server order creation without client-supplied price, polling/manual refresh, response-supplied delivery and credential lookup, and removal of fake controls. Evidence: `production-storefront-mobile.png`, `production-payment-unavailable.png` (the latter deliberately shows that payment is not enabled).
+
