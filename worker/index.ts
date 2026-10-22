@@ -1,7 +1,7 @@
 import type { D1Database } from "@cloudflare/workers-types";
 import { tokenPlans, accountPriceCents } from "../src/lib/products";
 
-type Env = { DB: D1Database; ASSETS: { fetch(request: Request): Promise<Response> }; ADMIN_PASSWORD_HASH: string; RESEND_API_KEY?: string };
+type Env = { DB: D1Database; ASSETS: { fetch(request: Request): Promise<Response> }; ADMIN_PASSWORD_HASH: string; RESEND_API_KEY?: string; GMAIL_SCRIPT_URL?: string; GMAIL_SCRIPT_TOKEN?: string };
 type ExecutionContextLike = { waitUntil(promise: Promise<unknown>): void };
 type Row = {
   id: string; requestHash: string; inputHash: string; tokenHash: string; code: string;
@@ -43,10 +43,22 @@ async function expire(env: Env) {
 async function queueOrderEmail(env: Env, order: Row, eventType: "created" | "reported", ctx: ExecutionContextLike) {
   const id = `${order.id}:${eventType}`, now = Date.now();
   await env.DB.prepare("INSERT OR IGNORE INTO email_outbox(id,orderId,eventType,nextAttemptAt,createdAt) VALUES(?,?,?,?,?)").bind(id, order.id, eventType, now, now).run();
-  if (env.RESEND_API_KEY) ctx.waitUntil(sendOrderEmails(env));
+  if (hasEmailConfig(env)) ctx.waitUntil(sendOrderEmails(env));
+}
+function hasEmailConfig(env: Env) { return Boolean(env.RESEND_API_KEY || (env.GMAIL_SCRIPT_URL && env.GMAIL_SCRIPT_TOKEN)); }
+async function sendEmail(env: Env, id: string, subject: string, html: string, text: string) {
+  if (env.GMAIL_SCRIPT_URL && env.GMAIL_SCRIPT_TOKEN) {
+    const response = await fetch(env.GMAIL_SCRIPT_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, token: env.GMAIL_SCRIPT_TOKEN, to: "daolingz46@gmail.com", subject, html, text }), redirect: "follow" });
+    const result = await response.json().catch(() => null) as { ok?: boolean; message?: string } | null;
+    if (!response.ok || !result?.ok) throw new Error(`gmail_script_${response.status}_${result?.message || "failed"}`);
+    return;
+  }
+  if (!env.RESEND_API_KEY) throw new Error("email_not_configured");
+  const response = await fetch("https://api.resend.com/emails", { method: "POST", headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json", "Idempotency-Key": id }, body: JSON.stringify({ from: "Muse 商店 <onboarding@resend.dev>", to: ["daolingz46@gmail.com"], subject, html, text }) });
+  if (!response.ok) throw new Error(`resend_${response.status}`);
 }
 async function sendOrderEmails(env: Env) {
-  if (!env.RESEND_API_KEY) return;
+  if (!hasEmailConfig(env)) return;
   const now = Date.now();
   const pending = await env.DB.prepare("SELECT id,orderId,eventType,attempts FROM email_outbox WHERE sentAt IS NULL AND nextAttemptAt<=? ORDER BY createdAt LIMIT 5").bind(now).all<{ id: string; orderId: string; eventType: string; attempts: number }>();
   for (const item of pending.results) {
@@ -59,8 +71,8 @@ async function sendOrderEmails(env: Env) {
       const eventText = item.eventType === "reported" ? "买家已提交付款，请核实到账" : "有新订单，请留意后续付款";
       const subject = item.eventType === "reported" ? `待核实付款：订单 ${order.code}` : `新订单：${order.title} · ${order.code}`;
       const html = `<div style="font-family:Arial,sans-serif;line-height:1.8;color:#202634"><h2>${esc(eventText)}</h2><p>订单码：<strong>${esc(order.code)}</strong></p><p>订单编号：${esc(order.id)}</p><p>商品：${esc(order.title)}</p><p>金额：¥${(order.amountCents / 100).toFixed(2)}</p><p>付款方式：${order.method === "wechat" ? "微信" : "支付宝"}</p><p>状态：${item.eventType === "reported" ? "等待店主核实" : "等待买家付款"}</p><p><a href="https://daolingz46-tech.github.io/muse-site-study/admin/">打开店主工作台</a></p></div>`;
-      const response = await fetch("https://api.resend.com/emails", { method: "POST", headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json", "Idempotency-Key": item.id }, body: JSON.stringify({ from: "Muse 商店 <onboarding@resend.dev>", to: ["daolingz46@gmail.com"], subject, html }) });
-      if (!response.ok) throw new Error(`resend_${response.status}`);
+      const text = `${eventText}\n订单码：${order.code}\n订单编号：${order.id}\n商品：${order.title}\n金额：¥${(order.amountCents / 100).toFixed(2)}\n付款方式：${order.method === "wechat" ? "微信" : "支付宝"}\n状态：${item.eventType === "reported" ? "等待店主核实" : "等待买家付款"}\n店主工作台：https://daolingz46-tech.github.io/muse-site-study/admin/`;
+      await sendEmail(env, item.id, subject, html, text);
       await env.DB.prepare("UPDATE email_outbox SET sentAt=?,lastError=NULL WHERE id=?").bind(Date.now(), item.id).run();
     } catch (error) {
       const retryAt = Date.now() + Math.min(3600000, 15000 * 2 ** Math.min(item.attempts, 8));
@@ -132,11 +144,11 @@ async function admin(env: Env, request: Request, path: string) {
     return json({ ok: true }, 200, { "Set-Cookie": cookieHeader(request, session, 28800) });
   }
   await requireAdmin(env, request);
-  if (path === "/api/admin/email-status" && request.method === "GET") return json({ configured: Boolean(env.RESEND_API_KEY) });
+  if (path === "/api/admin/email-status" && request.method === "GET") return json({ configured: hasEmailConfig(env), provider: env.GMAIL_SCRIPT_URL && env.GMAIL_SCRIPT_TOKEN ? "gmail" : env.RESEND_API_KEY ? "resend" : "none" });
   if (path === "/api/admin/email-test" && request.method === "POST") {
-    if (!env.RESEND_API_KEY) throw new HttpError(503, "邮件服务密钥尚未配置");
-    const response = await fetch("https://api.resend.com/emails", { method: "POST", headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json", "Idempotency-Key": `muse-email-test-${crypto.randomUUID()}` }, body: JSON.stringify({ from: "Muse 商店 <onboarding@resend.dev>", to: ["daolingz46@gmail.com"], subject: "Muse 商店邮件提醒测试", html: "<p>邮件提醒已成功连接。新订单和买家付款反馈将自动发送到此邮箱。</p>" }) });
-    if (!response.ok) throw new HttpError(502, `邮件服务发送失败（${response.status}），请检查 API Key 和 Resend 账户设置`);
+    if (!hasEmailConfig(env)) throw new HttpError(503, "邮件服务尚未配置");
+    try { await sendEmail(env, `muse-email-test-${crypto.randomUUID()}`, "Muse 商店邮件提醒测试", "<p>邮件提醒已成功连接。新订单和买家付款反馈将自动发送到此邮箱。</p>", "邮件提醒已成功连接。新订单和买家付款反馈将自动发送到此邮箱。"); }
+    catch { throw new HttpError(502, "邮件测试失败，请检查 Gmail 脚本部署地址和令牌，或 Resend API Key"); }
     return json({ ok: true });
   }
   if (path === "/api/admin/logout" && request.method === "POST") { await env.DB.prepare("DELETE FROM sessions WHERE hash=?").bind(await hash(cookie(request))).run(); return json({ ok: true }, 200, { "Set-Cookie": cookieHeader(request, "", 0) }); }
