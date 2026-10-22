@@ -52,3 +52,13 @@ Rechecked the live source payment row: its Alipay indicator is a Lucide check, w
 
 Verification: production `npm run check`; browser checks at 390/1440px for typing, email/consent validation, both payment choices, confirmation/back navigation, editable order lookup, no form-data network submission or local/session storage, and reset on reload. Evidence: `interactive-390.png`, `interactive-1440.png`. Real payment integration remains pending merchant onboarding, provider documentation, and backend hosting.
 
+## Recorded checkout flow — 2026-10-22
+
+Reviewed the user's 54.883-second product recording locally. It establishes: details → purchase notice with a five-second reading gate and separate consent → payment QR / 15-minute countdown → download lookup credentials / copy order ID / refresh → recent-order list and reopening an order. The earlier additional order-summary screen was removed. The recording contains no completed-payment delivery screen.
+
+Implemented these steps in `OrderFlow.tsx`. Demo orders use unique `DEMO-` IDs and random query tokens, remain in page memory, and can be reopened through credentials or the session's recent-order list. The downloadable text credentials are explicitly labeled as demo data. The QR SVG is generated from fixed explanatory text, contains no payment URL or user information, and is visibly labeled DEMO. No live source orders were created during inspection; the source currently returns a service-connection error when its order request is blocked, so the recording supplies the notice/payment transition evidence.
+
+Added clearly marked controls to inspect pending, processing, complete, and expired presentation states. Completed delivery uses only invalid test account details and does not send mail. These post-payment layouts are based on the source's previously inspected visual rules; their exact content and behavior have not been verified against a successful live purchase. State selections persist when reopening an order in the same page, and real time controls pending-order expiry. Reloading clears the entire demo session.
+
+Validation: production `npm run check` passed. Desktop 1440px and mobile 390px browser checks exercise notice timing and consent, both input/return behavior and selected provider, credential download contents, clipboard copying, failed and successful query tokens, recent-order reopening, refresh notification, delivery states, automatic timeout and restarting. No form submissions or personal-data network requests are made. Evidence: `flow-notice-*`, `flow-payment-*`, `flow-orders-*`, `flow-delivery-*` screenshots. The public non-affiliation banner and safe demo differences remain intentional.
+

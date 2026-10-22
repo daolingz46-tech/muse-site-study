@@ -124,6 +124,81 @@
 .muse-checkout-card h1 { margin: 0 0 8px; font-size: 38px; font-weight: 600; line-height: 1.15; letter-spacing: -1.6px; }
 .muse-checkout-viewport { box-sizing: content-box; margin: -8px; padding: 8px; overflow: hidden; transition: height .48s var(--ease); }
 .muse-checkout-content { display: flow-root; }
+.muse-step { animation: muse-caption .4s var(--ease) both; }
+.muse-checkout-card .muse-notice h1 { font-size: 28px; line-height: 1.2; letter-spacing: -.9px; }
+.muse-notice > .muse-subtitle { font-size: 13px; letter-spacing: 0; line-height: 1.6; }
+.muse-notice .muse-back, .muse-order-stage > .muse-back { min-height: 30px; }
+.muse-notice-agreement { border-top: 1px solid #edf0f3; padding-top: 18px; }
+.muse-notice-agreement label { align-items: flex-start; gap: 9px; font-size: 12px; line-height: 1.7; }
+.muse-notice-agreement .muse-checkbox-art { margin-top: 2px; }
+.muse-notice-continue { margin-top: 21px; }
+.muse-payment-summary { display: grid; grid-template-columns: minmax(0, 1fr) minmax(112px, auto); grid-template-rows: auto auto; align-items: end; gap: 3px 18px; min-height: 44px; margin: 0 0 25px; }
+.muse-checkout-card .muse-payment-summary h1 { grid-area: 1 / 1 / span 2; align-self: end; margin: 0; font-size: 27px; line-height: 1.2; letter-spacing: -.8px; white-space: nowrap; }
+.muse-payment-summary > p { grid-area: 1 / 2; justify-self: end; max-width: 100%; margin: 0; color: #7b8290; font-size: 12px; line-height: 1.5; text-align: right; white-space: nowrap; }
+.muse-payment-amount { grid-area: 2 / 2; justify-self: end; display: flex; align-items: baseline; gap: 3px; color: #252a33; font-variant-numeric: tabular-nums; }
+.muse-payment-amount > span { font-size: 17px; font-weight: 500; }
+.muse-payment-amount strong { font-size: 33px; font-weight: 600; line-height: 1.1; letter-spacing: -1.1px; }
+.muse-scan-panel { margin-bottom: 24px; padding: 22px 18px 0; border: 1px solid #ebedf2; border-radius: 20px; background: #f8f9fc; }
+.muse-demo-qr { position: relative; width: min(240px, 100%); margin: auto; }
+.muse-demo-qr img { display: block; width: 100%; height: auto; aspect-ratio: 1; }
+.muse-demo-qr > span { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); padding: 6px; border: 3px solid white; border-radius: 6px; background: #292c33; color: white; font-size: 11px; font-weight: 650; letter-spacing: 1px; }
+.muse-scan-hint { display: flex; justify-content: center; align-items: center; gap: 7px; margin: 14px 0 0; color: #526a90; font-size: 12px; line-height: 1.5; }
+.muse-qr-disclosure { margin: 8px 0 0; color: #8b94a3; font-size: 10px; text-align: center; }
+.muse-payment-countdown { display: flex; align-items: center; gap: 7px; margin-top: 17px; padding: 14px 0; border-top: 1px solid #e6eaf1; color: #68768b; font-size: 11px; }
+.muse-payment-countdown strong { margin-left: auto; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: .2px; }
+.muse-payment-countdown[data-tone=warning] { color: #96610d; border-color: #f1dfbc; }
+.muse-payment-countdown[data-tone=urgent] { color: #b42318; border-color: #f2d0cc; }
+.muse-payment-details { margin: 0; padding: 0; font-size: 12px; }
+.muse-payment-details > div { display: flex; justify-content: space-between; gap: 14px; margin-top: 12px; line-height: 1.7; }
+.muse-payment-details > div:first-child { margin-top: 0; }
+.muse-payment-details dt { flex-shrink: 0; color: #7f8795; }
+.muse-payment-details dd { min-width: 0; margin: 0; color: #505866; overflow-wrap: anywhere; text-align: right; }
+.muse-payment-details > div:first-child dd { font-size: 11px; font-variant-numeric: tabular-nums; }
+.muse-order-actions { display: flex; gap: 10px; margin-top: 22px; }
+.muse-order-actions button { display: flex; flex: 1; align-items: center; justify-content: center; gap: 5px; min-height: 38px; padding: 7px; border: 1px solid #e6eaf1; border-radius: 9px; background: #fff; color: #7b879b; font-size: 11px; }
+.muse-order-actions button:hover { background: #f8faff; color: #405676; }
+.muse-order-tools { display: flex; justify-content: center; gap: 18px; margin-top: 12px; }
+.muse-order-tools button { display: flex; align-items: center; justify-content: center; gap: 5px; min-height: 32px; padding: 4px 0; border: 0; background: none; color: #7b879b; font-size: 11px; }
+.muse-order-footnote { margin: 12px 0 0; color: #969daa; text-align: center; font-size: 10px; line-height: 1.7; }
+.muse-saved-orders { display: flex; flex-direction: column; gap: 10px; margin-top: 24px; }
+.muse-saved-orders h3 { margin: 2px 0 0; color: #8791a1; font-size: 12px; font-weight: 500; }
+.muse-saved-orders > button { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 15px; border: 1px solid #e3e7ef; border-radius: 12px; background: #fafbfd; color: #535e72; text-align: left; }
+.muse-saved-orders > button > span { min-width: 0; font-family: ui-monospace, monospace; font-size: 11px; overflow-wrap: anywhere; }
+.muse-saved-orders > button > svg { flex-shrink: 0; }
+.muse-toast { position: fixed; z-index: 100; bottom: 24px; right: 24px; max-width: min(360px, calc(100% - 48px)); padding: 14px 18px; border: 1px solid #e6eaf1; border-radius: 12px; background: #fff; box-shadow: 0 4px 20px #00000014; color: #535e72; font-size: 12px; line-height: 1.6; }
+.muse-order-status { padding: 20px 0 26px; text-align: center; }
+.muse-status-icon { display: grid; place-items: center; width: 64px; height: 64px; margin: 0 auto 20px; border-radius: 21px; }
+.muse-status-icon > svg { width: 31px; height: 31px; stroke-width: 1.6px; }
+.muse-status-icon.is-success { background: #edf8f1; color: #278352; }
+.muse-status-icon.is-processing { background: #eef4ff; color: #547cc7; }
+.muse-status-icon.is-expired { background: #fff5e9; color: #a66a16; }
+.muse-status-icon.is-processing > svg, .muse-spin { animation: muse-spin 1.6s linear infinite; }
+.muse-checkout-card .muse-order-status h1 { margin: 0 0 10px; font-size: 28px; line-height: 1.25; letter-spacing: -.9px; }
+.muse-order-status p { margin: 0; color: #7f8794; font-size: 12px; line-height: 1.7; }
+.muse-order-status .muse-state-disclosure { margin-top: 8px; font-size: 10px; }
+.muse-delivery-email { display: flex; align-items: center; gap: 11px; margin-bottom: 24px; padding: 14px; border: 1px solid #edf0f5; border-radius: 13px; background: #f8f9fc; color: #8b99b0; }
+.muse-delivery-email > div { min-width: 0; }
+.muse-delivery-email span { display: block; margin-bottom: 4px; color: #8a93a2; font-size: 11px; line-height: 1.6; }
+.muse-delivery-email strong { color: #4b5668; font-size: 12px; font-weight: 500; line-height: 1.7; overflow-wrap: anywhere; }
+.muse-delivery-fields { display: grid; gap: 14px; margin-bottom: 24px; }
+.muse-delivery-fields > div > span { display: block; margin-bottom: 7px; color: #7d8797; font-size: 11px; line-height: 1.6; }
+.muse-delivery-fields > div > div { display: flex; align-items: flex-start; gap: 10px; padding: 10px 11px; border: 1px solid #e5e9f0; border-radius: 10px; background: #fcfcfd; }
+.muse-delivery-fields code { flex: 1; align-self: center; min-width: 0; color: #4e5b70; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.muse-delivery-fields button { display: grid; place-items: center; flex-shrink: 0; width: 28px; height: 28px; border: 0; border-radius: 7px; background: #f0f3f8; color: #7e899a; }
+.muse-demo-states { margin-top: 16px; padding-top: 12px; border-top: 1px dashed #e6eaf1; color: #8b94a3; font-size: 10px; }
+.muse-demo-states summary { cursor: pointer; }
+.muse-demo-states summary svg { display: inline-block; margin-right: 4px; vertical-align: -2px; }
+.muse-demo-states > div { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.muse-demo-states button { padding: 6px 9px; border: 1px solid #e6eaf1; border-radius: 7px; background: #fff; color: #7b879b; }
+.muse-demo-states button[aria-pressed=true] { border-color: #88a5e8; color: #386de8; background: #f7faff; }
+@keyframes muse-spin { to { transform: rotate(360deg); } }
+@media (max-width: 480px) {
+  .muse-payment-summary { grid-template-columns: minmax(0, 1fr) minmax(104px, auto); column-gap: 12px; margin-bottom: 22px; }
+  .muse-checkout-card .muse-payment-summary h1 { font-size: 25px; }
+  .muse-payment-summary > p { font-size: 11px; }
+  .muse-payment-amount strong { font-size: 31px; }
+  .muse-scan-panel { padding: 18px 12px 0; }
+}
 .muse-subtitle { margin: 0; color: #747883; font-size: 16px; letter-spacing: .6px; }
 .muse-selected-plan {
   display: flex;
