@@ -18,7 +18,7 @@ type PaymentMethod = "alipay" | "wechat";
 const terms = [
   { title: "仅质保首次登录", body: "不提供后续使用质保。首次登录有问题，请保留订单号和截图联系支持。" },
   { title: "商品内容", body: "15 元包含 1 个 Muse AI 成品账号及该账号的 10 亿 Token，无需另购此额度。" },
-  { title: "交付邮箱与接码链接", body: "店主确认收款后准备账号，在订单页面查看账号与接码链接。" },
+  { title: "邮箱交付", body: "店主确认收款后准备成品账号卡密，发送到你填写的邮箱，请核对邮箱地址。" },
   { title: "登录后立即更换邮箱", body: "首次登录成功后，请立即在 Muse 内更换为自己的邮箱，并删除旧邮箱。" },
 ];
 const assetBase = process.env.NEXT_PUBLIC_BASE_PATH || "";
@@ -299,7 +299,7 @@ export function MuseStorefront() {
                   <input id="muse-email" type="email" placeholder="you@example.com" autoComplete="off" maxLength={254}
                     value={email} onChange={event => { setEmail(event.target.value); setError(""); }} />
                 </div>
-                <p className="muse-field-hint">交付后在订单页面查看账号资料</p>
+                  <p className="muse-field-hint">卡密和使用教程将发到此邮箱，请仔细核对</p>
               </div></>}
               <div className="muse-payment-row">
                 <label htmlFor="muse-payment-method">支付方式</label>
@@ -360,7 +360,7 @@ export function MuseStorefront() {
               {orderError && <p className="muse-error" role="alert">{orderError}</p>}
               <button className="muse-primary" type="submit" disabled={queryingOrder}>{queryingOrder ? "查询中…" : "查询订单"} <ArrowRight size={16}/></button>
             </form>
-            {orderSummary && <div className="muse-token-notice" role="status"><strong>订单码 {orderSummary.code} · {{ pending: "待付款", reported: "等待核实到账", processing: "已收款，处理中", complete: "订单已完成", expired: "订单已超时" }[orderSummary.status]}</strong><p>{orderSummary.title} · ¥{formatMoney(orderSummary.amountCents)}</p><p>账号资料请在原下单浏览器打开“已保存的订单”，或用完整订单编号查询。需要协助请联系 QQ：{supportQQ}。</p></div>}
+            {orderSummary && <div className="muse-token-notice" role="status"><strong>订单码 {orderSummary.code} · {{ pending: "待付款", reported: "等待核实到账", processing: "已收款，处理中", complete: "订单已完成", expired: "订单已超时" }[orderSummary.status]}</strong><p>{orderSummary.title} · ¥{formatMoney(orderSummary.amountCents)}</p><p>成品账号卡密会发到下单邮箱；订单状态可在原下单浏览器或用完整订单编号查询。需要协助请联系 QQ：{supportQQ}。</p></div>}
             {savedOrders.length > 0 ? <div className="muse-saved-orders"><h3>已保存的订单 · 无需复制</h3>{savedOrders.map(saved => <button key={saved.id} type="button" onClick={async () => { try { openOrder(await lookupStoreOrder(saved.id, saved.token)); } catch { setOrderError("订单暂时无法打开，请稍后重试"); } }}><ShoppingBag size={14}/><span>{saved.code} · {saved.title}</span><ArrowRight size={15}/></button>)}</div> : <RecentOrders orders={orders} onOpen={openOrder}/>}
           </>}
       </dialog>}

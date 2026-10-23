@@ -1,7 +1,8 @@
 "use client";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { ArrowUpRight, Download, LockKeyhole, LogOut, RefreshCw, Search, X, Bell, Volume2 } from "lucide-react";
+import { ArrowUpRight, Download, LockKeyhole, LogOut, RefreshCw, Search, X, Bell, Volume2, Mail, ImagePlus, Trash2, ArrowUp, ArrowDown } from "lucide-react";
 import Link from "next/link";
+import Image from "next/image";
 import { formatMoney, storeName } from "./catalog";
 import { storeApiUrl } from "./store-api";
 import "./workbench.css";
@@ -16,6 +17,8 @@ type Result = { orders: AdminOrder[]; count: { total: number }; page: number;
   summary: { total: number; awaiting: number; processing: number; completed: number; revenueCents: number; todayCents: number } };
 type Visit = { id: string; page: string; source: string; device: string; createdAt: number };
 type VisitResult = { summary: { total: number; today: number; last7Days: number }; recent: Visit[] };
+type TutorialBlock = { type: "text"; content: string } | { type: "image"; url: string; caption: string };
+type Tutorial = { title: string; blocks: TutorialBlock[]; updatedAt: number | null };
 const labels: Record<string, string> = { pending: "待付款", reported: "待核实到账", processing: "待交付", complete: "已完成", expired: "已超时" };
 const visitSourceLabels: Record<string, string> = { direct: "直接访问", wechat: "微信", search: "搜索引擎", social: "社交平台", external: "其他网站" };
 const visitDeviceLabels: Record<string, string> = { mobile: "手机", tablet: "平板", desktop: "电脑" };
@@ -40,10 +43,14 @@ export function Workbench() {
   const [alert, setAlert] = useState(""), [desktopAlerts, setDesktopAlerts] = useState(false), [soundEnabled, setSoundEnabled] = useState(false);
   const [visits, setVisits] = useState<VisitResult | null>(null);
   const [emailConfigured, setEmailConfigured] = useState<boolean | null>(null);
+  const [buyerDeliveryReady, setBuyerDeliveryReady] = useState(false);
   const [emailTestBusy, setEmailTestBusy] = useState(false);
+  const [tutorial, setTutorial] = useState<Tutorial | null>(null);
+  const [mailOrder, setMailOrder] = useState<AdminOrder | null>(null), [card, setCard] = useState(""), [mailChecked, setMailChecked] = useState(false);
+  const [mailBusy, setMailBusy] = useState(false), [mailError, setMailError] = useState("");
   const [pushEndpoint, setPushEndpoint] = useState("");
   const [pushBusy, setPushBusy] = useState(false);
-  const dialog = useRef<HTMLDialogElement>(null), sequence = useRef(0);
+  const dialog = useRef<HTMLDialogElement>(null), mailDialog = useRef<HTMLDialogElement>(null), sequence = useRef(0);
   const knownOrders = useRef<Map<string, string> | null>(null);
   const audioContext = useRef<AudioContext | null>(null);
   const playDing = useCallback(() => {
@@ -124,7 +131,13 @@ export function Workbench() {
   useEffect(() => {
     if (auth !== "ready") return;
     let active = true;
-    void api("email-status").then((data: { configured: boolean }) => { if (active) setEmailConfigured(data.configured); }).catch(() => {});
+    void api("email-status").then((data: { configured: boolean; buyerDelivery?: boolean }) => { if (active) { setEmailConfigured(data.configured); setBuyerDeliveryReady(data.buyerDelivery === true); } }).catch(() => {});
+    return () => { active = false; };
+  }, [auth]);
+  useEffect(() => {
+    if (auth !== "ready") return;
+    let active = true;
+    void api("tutorial").then((data: Tutorial) => { if (active) setTutorial(data); }).catch(() => { if (active) setTutorial({ title: "Muse 成品账号使用教程", blocks: [], updatedAt: null }); });
     return () => { active = false; };
   }, [auth]);
   useEffect(() => {
@@ -138,6 +151,7 @@ export function Workbench() {
     return () => { active = false; };
   }, [auth]);
   useEffect(() => { if (selected) dialog.current?.showModal(); }, [selected]);
+  useEffect(() => { if (mailOrder) mailDialog.current?.showModal(); }, [mailOrder]);
   async function login(event: FormEvent) {
     event.preventDefault(); if (busy) return; setBusy(true); setError("");
     try { await api("login", { password }); setPassword(""); await load(); }
@@ -200,6 +214,18 @@ export function Workbench() {
     finally { setEmailTestBusy(false); }
   }
   function open(order: AdminOrder) { setSelected(order); setChecked(false); setReference(""); setDelivery({ email: "", password: "", codeUrl: "" }); setActionError(""); }
+  function openMail(order: AdminOrder) { setMailOrder(order); setCard(""); setMailChecked(false); setMailError(""); }
+  async function sendDelivery(event: FormEvent) {
+    event.preventDefault(); if (!mailOrder || mailBusy || !mailChecked) return;
+    setMailBusy(true); setMailError("");
+    try {
+      const response = await api("send-delivery", { id: mailOrder.id, card });
+      if (!response?.ok) throw new Error("邮件发送失败");
+      setAlert(`订单 ${mailOrder.code} 的卡密已发送到 ${mailOrder.target}，订单已完成`);
+      setCard(""); setMailOrder(null); mailDialog.current?.close(); await load();
+    } catch (cause) { setMailError(cause instanceof Error ? cause.message : "邮件发送失败，请稍后重试"); }
+    finally { setMailBusy(false); }
+  }
   async function save(event: FormEvent) {
     event.preventDefault(); if (!selected || busy) return; setBusy(true); setActionError("");
     try { await api("update", { id: selected.id, action: selected.status === "processing" ? "complete" : "confirm", checked: selected.status === "processing" ? checked : true, reference, delivery }); setSelected(null); await load(); }
@@ -222,6 +248,7 @@ export function Workbench() {
     <p className="wb-description">以微信、支付宝收款记录核实到账，再处理充值或账号交付。iPhone 请用 Safari 打开此页，分享 → 添加到主屏幕，从桌面图标进入后点“开启手机推送”。工作台打开时可另点“开启订单叮声”。</p>
     {emailConfigured === false && <div className="wb-email-setup" role="status"><strong>订单邮件提醒还未启用</strong><span>邮件服务尚未配置。可用个人 Gmail 的 Apps Script 免域名发信，或配置 Resend API Key；新订单和买家付款反馈会发到 daolingz46@gmail.com。</span></div>}
     {emailConfigured === true && <div className="wb-email-ready"><span>邮件提醒已连接 · 新订单和付款反馈将发送到 daolingz46@gmail.com</span><button onClick={() => void sendTestEmail()} disabled={emailTestBusy}>{emailTestBusy ? "发送中…" : "发送测试邮件"}</button></div>}
+    {emailConfigured === true && !buyerDeliveryReady && <div className="wb-email-setup" role="status"><strong>买家卡密邮件还需更新 Google 脚本</strong><span>店主订单提醒正常；请把新版 Code.gs 发布到原来的网页应用后刷新工作台，即可向买家发卡密。</span></div>}
     {alert && <div className="wb-alert" role="status"><span>{alert}</span><button aria-label="关闭提醒" onClick={() => setAlert("")}>×</button></div>}
     {!!result?.summary.awaiting && <button className="wb-awaiting" onClick={() => { setStatus("reported"); setSearch(""); setQuery(""); setPage(0); }}><strong>待核实到账：{result.summary.awaiting} 笔</strong><span>买家已提交付款反馈，点击查看并核对收款记录 →</span></button>}
     <section className="wb-metrics" aria-label="经营数据">{[
@@ -231,13 +258,14 @@ export function Workbench() {
       ["待交付", result?.summary.processing || 0, `${result?.summary.completed || 0} 笔已完成 · 共 ${result?.summary.total || 0} 笔订单`],
     ].map(([title, value, note]) => <article key={title}><span>{title}</span><strong>{value}</strong><small>{note}</small></article>)}</section>
     <section className="wb-visitors"><div className="wb-visitor-heading"><div><h2>访客数据</h2><p>匿名统计访问次数，不记录访客姓名、联系方式或完整来源网址。</p></div><div className="wb-visitor-stats"><span>今日 <b>{visits?.summary.today ?? "—"}</b></span><span>近 7 天 <b>{visits?.summary.last7Days ?? "—"}</b></span><span>累计 <b>{visits?.summary.total ?? "—"}</b></span></div></div><div className="wb-visit-list"><div className="wb-visit-row wb-visit-head"><span>访问时间</span><span>页面</span><span>来源</span><span>设备</span></div>{visits?.recent.map(visit => <div className="wb-visit-row" key={visit.id}><span>{date(visit.createdAt)}</span><span>{visit.page === "/" ? "商店首页" : visit.page}</span><span>{visitSourceLabels[visit.source] || "其他网站"}</span><span>{visitDeviceLabels[visit.device] || "电脑"}</span></div>)}{visits && visits.recent.length === 0 && <p className="wb-visit-empty">还没有访客记录；访客打开商店后会自动统计。</p>}</div></section>
+    {tutorial && <TutorialEditor key={tutorial.updatedAt ?? "new"} tutorial={tutorial} onSaved={setTutorial}/>}
     <section className="wb-order-section"><div className="wb-toolbar"><h2>订单列表</h2><div><button onClick={() => void load()}><RefreshCw size={15}/>刷新</button><button onClick={exportCsv} disabled={!result?.orders.length}><Download size={15}/>导出当前页</button></div></div>
       <form className="wb-filters" onSubmit={e => { e.preventDefault(); setPage(0); setSearch(query.trim()); }}><div><Search size={17}/><input aria-label="搜索订单" placeholder="订单码、订单号、邮箱或邀请码" value={query} onChange={e => setQuery(e.target.value)} maxLength={128}/></div><select aria-label="订单状态" value={status} onChange={e => { setStatus(e.target.value); setPage(0); }}><option value="">全部状态</option>{Object.entries(labels).map(([key, text]) => <option key={key} value={key}>{text}</option>)}</select><button className="wb-primary">查询</button></form>
       {error && <p className="wb-error" role="alert">{error}</p>}
       <div className="wb-table-scroll"><table><thead><tr><th>订单 / 商品</th><th>买家信息</th><th>金额 / 方式</th><th>状态</th><th>下单时间</th><th>操作</th></tr></thead><tbody>{result?.orders.map(order => <tr key={order.id}>
         <td><strong className="wb-code">{order.code}</strong><span>{order.title}</span><small title={order.id}>{order.id}</small></td><td><small>{order.product === "muse-token" ? "账号邀请码" : "收件邮箱"}</small><span className="wb-target">{order.target}</span></td>
         <td><strong>¥{formatMoney(order.amountCents)}</strong><span>{order.method === "wechat" ? "微信" : "支付宝"}</span></td><td><span className={`wb-status is-${order.status}`}>{labels[order.status]}</span>{order.reference && <small title={order.reference}>交易号：{order.reference}</small>}</td><td><span>{date(order.createdAt)}</span></td>
-        <td>{order.status === "complete" ? <span className="wb-done">已交付</span> : <button className="wb-action" onClick={() => open(order)}>{order.status === "processing" ? "完成交付" : "核实收款"}</button>}</td>
+        <td><div className="wb-order-actions">{order.status === "complete" ? <span className="wb-done">已交付</span> : <>{order.status !== "processing" && <button className="wb-action" onClick={() => open(order)}>核实收款</button>}{order.product === "muse" ? <button className="wb-action" disabled={order.status !== "processing" || !buyerDeliveryReady} title={order.status !== "processing" ? "请先核实收款" : !buyerDeliveryReady ? "请先更新 Google 邮件脚本" : "发送卡密与教程到买家邮箱"} onClick={() => openMail(order)}><Mail size={13}/>发送邮件</button> : order.status === "processing" && <button className="wb-action" onClick={() => open(order)}>完成充值</button>}</>}</div></td>
       </tr>)}</tbody></table></div>
       {!result?.orders.length && <div className="wb-empty"><ShoppingBagIcon/><h3>暂无匹配订单</h3><p>客户下单后，订单会自动出现在这里。</p></div>}
       <footer className="wb-pagination"><span>共 {result?.count.total || 0} 笔 · 每页 50 笔</span><div><button disabled={page === 0} onClick={() => setPage(page - 1)}>上一页</button><span>{page + 1}</span><button disabled={(page + 1) * 50 >= (result?.count.total || 0)} onClick={() => setPage(page + 1)}>下一页</button></div></footer>
@@ -248,6 +276,75 @@ export function Workbench() {
         {actionError && <p className="wb-error" role="alert">{actionError}</p>}<button className="wb-primary" disabled={selected.status === "processing" && !checked || busy}>{busy ? "保存中…" : selected.status === "processing" ? "确认已完成交付" : "确定"}</button>
       </form>
     </dialog>}
+    {mailOrder && <dialog ref={mailDialog} className="wb-dialog wb-mail-dialog" onCancel={e => { if (mailBusy) e.preventDefault(); else setMailOrder(null); }} aria-labelledby="wb-mail-title"><button className="wb-close" aria-label="关闭" disabled={mailBusy} onClick={() => setMailOrder(null)}><X size={18}/></button>
+      <form onSubmit={sendDelivery}><p className="wb-eyebrow">订单码 {mailOrder.code}</p><h2 id="wb-mail-title">发送成品账号卡密</h2><p>收件人：<strong className="wb-target">{mailOrder.target}</strong></p><p>此邮箱来自买家订单，发送后订单自动标记为已完成。</p>
+        <label>卡密内容（必填）<textarea required value={card} maxLength={4000} rows={6} placeholder="从 1688 邮件中复制卡密，粘贴到这里" onChange={e => setCard(e.target.value)}/></label>
+        <div className="wb-mail-tutorial"><strong>{tutorial?.title || "使用教程"}</strong><span>{tutorial?.blocks.length ? `已保存 ${tutorial.blocks.length} 段图文，会随卡密发送` : "尚未添加教程，本次只发送卡密"}</span></div>
+        <label className="wb-check"><input type="checkbox" checked={mailChecked} onChange={e => setMailChecked(e.target.checked)}/>我已核实收款，并确认卡密和收件邮箱无误</label>
+        {mailError && <p className="wb-error" role="alert">{mailError}</p>}<button className="wb-primary" disabled={!card.trim() || !mailChecked || mailBusy}>{mailBusy ? "发送中…" : "确认发送邮件并完成订单"}</button>
+      </form>
+    </dialog>}
   </main>;
 }
 function ShoppingBagIcon() { return <LockKeyhole size={26}/>; }
+
+async function prepareTutorialImage(file: File): Promise<Blob> {
+  if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) throw new Error("请选择 PNG、JPG 或 WebP 图片");
+  if (file.size > 12_000_000) throw new Error("原图过大，请选择 12 MB 以内的图片");
+  if (file.size <= 700_000) return file;
+  const bitmap = await createImageBitmap(file);
+  try {
+    for (const width of [1500, 1100, 850]) {
+      const ratio = Math.min(1, width / Math.max(bitmap.width, bitmap.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(bitmap.width * ratio)); canvas.height = Math.max(1, Math.round(bitmap.height * ratio));
+      const context = canvas.getContext("2d"); if (!context) throw new Error("浏览器无法处理图片");
+      context.fillStyle = "#fff"; context.fillRect(0, 0, canvas.width, canvas.height); context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob(value => value ? resolve(value) : reject(new Error("图片处理失败")), "image/jpeg", 0.78));
+      if (blob.size <= 700_000) return blob;
+    }
+    throw new Error("图片压缩后仍超过 700 KB，请换一张更小的图片");
+  } finally { bitmap.close(); }
+}
+
+function TutorialEditor({ tutorial, onSaved }: { tutorial: Tutorial; onSaved: (value: Tutorial) => void }) {
+  const [draft, setDraft] = useState(tutorial), [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false), [uploading, setUploading] = useState(false), [error, setError] = useState(""), [notice, setNotice] = useState("");
+  function replaceBlock(index: number, block: TutorialBlock) { setDraft(current => ({ ...current, blocks: current.blocks.map((item, i) => i === index ? block : item) })); }
+  function removeBlock(index: number) { setDraft(current => ({ ...current, blocks: current.blocks.filter((_, i) => i !== index) })); }
+  function moveBlock(index: number, direction: -1 | 1) {
+    setDraft(current => { const blocks = [...current.blocks], target = index + direction; if (target < 0 || target >= blocks.length) return current; [blocks[index], blocks[target]] = [blocks[target], blocks[index]]; return { ...current, blocks }; });
+  }
+  async function upload(file: File | undefined) {
+    if (!file || uploading) return;
+    setUploading(true); setError(""); setNotice("");
+    try {
+      const image = await prepareTutorialImage(file);
+      const response = await fetch(storeApiUrl("/api/admin/tutorial-image"), { method: "POST", headers: { "Content-Type": image.type }, body: image, credentials: "include", cache: "no-store", signal: AbortSignal.timeout(30000) });
+      const data = await response.json().catch(() => null);
+      if (!response.ok || !data?.url) throw new Error(data?.message || "图片上传失败");
+      setDraft(current => ({ ...current, blocks: [...current.blocks, { type: "image", url: data.url, caption: "" }] }));
+      setNotice("图片已上传，请保存教程后才会用于交付邮件");
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "图片上传失败"); }
+    finally { setUploading(false); }
+  }
+  async function save(event: FormEvent) {
+    event.preventDefault(); if (saving || uploading) return;
+    setSaving(true); setError(""); setNotice("");
+    try {
+      const saved = await api("tutorial", { title: draft.title, blocks: draft.blocks }) as Tutorial;
+      onSaved(saved); setNotice("教程已保存，之后发送卡密时会自动附上"); setEditing(false);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "教程保存失败"); }
+    finally { setSaving(false); }
+  }
+  return <section className="wb-tutorial"><div className="wb-tutorial-heading"><div><h2>成品账号图文教程</h2><p>保存一次，之后发送成品账号卡密时自动附在邮件中。</p></div><button type="button" onClick={() => { setEditing(!editing); setError(""); setNotice(""); }}>{editing ? "收起编辑" : draft.updatedAt ? "编辑教程" : "创建教程"}</button></div>
+    {!editing && <div className="wb-tutorial-summary">{draft.blocks.length ? `${draft.title} · ${draft.blocks.length} 段图文 · 最后更新 ${date(draft.updatedAt)}` : "还没有教程。可以添加文字和上传图片。"}</div>}
+    {editing && <form onSubmit={save}><label>教程标题<input required maxLength={100} value={draft.title} onChange={event => setDraft({ ...draft, title: event.target.value })}/></label>
+      {draft.blocks.map((block, index) => <div className="wb-tutorial-block" key={`${block.type}-${index}`}><div className="wb-tutorial-block-top"><strong>{block.type === "text" ? `文字 ${index + 1}` : `图片 ${index + 1}`}</strong><div><button type="button" aria-label="上移" disabled={index === 0} onClick={() => moveBlock(index, -1)}><ArrowUp size={15}/></button><button type="button" aria-label="下移" disabled={index === draft.blocks.length - 1} onClick={() => moveBlock(index, 1)}><ArrowDown size={15}/></button><button type="button" aria-label="删除段落" onClick={() => removeBlock(index)}><Trash2 size={15}/></button></div></div>
+        {block.type === "text" ? <textarea required rows={4} maxLength={2000} value={block.content} placeholder="输入操作步骤、注意事项…" onChange={event => replaceBlock(index, { type: "text", content: event.target.value })}/> : <><Image unoptimized src={block.url} width={500} height={300} alt={block.caption || `教程图片 ${index + 1}`}/><input aria-label={`图片 ${index + 1} 的说明`} maxLength={120} value={block.caption} placeholder="图片说明（选填）" onChange={event => replaceBlock(index, { ...block, caption: event.target.value })}/></>}
+      </div>)}
+      <div className="wb-tutorial-tools"><button type="button" onClick={() => setDraft(current => ({ ...current, blocks: [...current.blocks, { type: "text", content: "" }] }))}>+ 添加文字</button><label><ImagePlus size={16}/>{uploading ? "上传中…" : "上传图片"}<input type="file" accept="image/png,image/jpeg,image/webp" disabled={uploading} onChange={event => { void upload(event.target.files?.[0]); event.target.value = ""; }}/></label><button className="wb-primary" disabled={saving || uploading || !draft.title.trim()}>{saving ? "保存中…" : "保存教程"}</button></div>
+    </form>}
+    {error && <p className="wb-error" role="alert">{error}</p>}{notice && <p className="wb-tutorial-notice" role="status">{notice}</p>}
+  </section>;
+}

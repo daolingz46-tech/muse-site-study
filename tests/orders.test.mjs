@@ -10,7 +10,14 @@ test("订单、收款核实和交付的数据库流程", async t => {
   const build = spawnSync(process.execPath, ["node_modules/wrangler/bin/wrangler.js", "deploy", "--dry-run", "--outdir", "temp/worker"], { encoding: "utf8" });
   assert.equal(build.status, 0, build.stderr);
   const password = randomUUID() + randomUUID();
-  const mf = new Miniflare(convertV4MiniflareOptions({ workers: [{ name: "test-store", modules: true, scriptPath: "temp/worker/index.js", compatibilityDate: "2026-10-01", d1Databases: { DB: "test-orders" }, bindings: { ADMIN_PASSWORD_HASH: createHash("sha256").update(password).digest("hex") } }] }));
+  const sentMessages = [];
+  const mf = new Miniflare(convertV4MiniflareOptions({ workers: [{ name: "test-store", modules: true, scriptPath: "temp/worker/index.js", compatibilityDate: "2026-10-01", d1Databases: { DB: "test-orders" }, bindings: { ADMIN_PASSWORD_HASH: createHash("sha256").update(password).digest("hex"), GMAIL_SCRIPT_URL: "https://mail.test/exec", GMAIL_SCRIPT_TOKEN: "test-token" }, outboundService: async request => {
+    assert.equal(new URL(request.url).hostname, "mail.test");
+    const input = await request.json();
+    if (input.purpose === "capability_probe") return Response.json({ ok: true, buyerDelivery: true });
+    sentMessages.push(input);
+    return Response.json({ ok: true });
+  } }] }));
   t.after(() => mf.dispose());
   const db = await mf.getD1Database("DB");
   for (const migration of readdirSync("migrations").filter(f => f.endsWith(".sql")).sort()) for (const statement of readFileSync(`migrations/${migration}`, "utf8").split(";").filter(s => s.trim())) await db.prepare(statement).run();
@@ -104,5 +111,31 @@ test("订单、收款核实和交付的数据库流程", async t => {
     await call("/api/orders/report", { ...created, remarkConfirmed: true });
     const queued = await db.prepare("SELECT eventType FROM push_outbox WHERE orderId=? ORDER BY eventType").bind(created.id).all();
     assert.deepEqual(queued.results.map(row => row.eventType), ["created", "reported"]);
+  });
+  await t.test("图文教程保存、图片读取和成品账号邮件交付权限", async () => {
+    const login = await call("/api/admin/login", { password });
+    const adminCookie = login.cookie;
+    const account = (await call("/api/orders", { product: "muse", email: "tutorial-buyer@example.com", method: "wechat", acceptedTerms: true, requestId: randomUUID() })).data;
+    assert.equal((await call("/api/admin/send-delivery", { id: account.id, card: "CARD-TEST" }, adminCookie)).status, 409);
+    const png = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3]);
+    const uploaded = await mf.dispatchFetch("https://shop.example/api/admin/tutorial-image", { method: "POST", headers: { Origin: "https://shop.example", Cookie: adminCookie, "Content-Type": "image/png" }, body: png });
+    assert.equal(uploaded.status, 201);
+    const { url } = await uploaded.json();
+    const image = await mf.dispatchFetch(`https://shop.example${new URL(url).pathname}`);
+    assert.equal(image.status, 200); assert.equal(image.headers.get("content-type"), "image/png");
+    assert.deepEqual(new Uint8Array(await image.arrayBuffer()), png);
+    assert.equal((await call("/api/admin/tutorial", { title: "教程", blocks: [{ type: "image", url: "https://evil.example/pixel.png", caption: "x" }] }, adminCookie)).status, 400);
+    assert.equal((await call("/api/admin/tutorial", { title: "教程", blocks: [{ type: "text", content: "第一步" }, { type: "image", url, caption: "截图" }] }, adminCookie)).status, 200);
+    const tutorial = await call("/api/admin/tutorial", undefined, adminCookie);
+    assert.equal(tutorial.data.blocks.length, 2);
+    assert.equal((await call("/api/admin/update", { id: account.id, action: "confirm" }, adminCookie)).status, 200);
+    assert.equal((await call("/api/admin/email-status", undefined, adminCookie)).data.buyerDelivery, true);
+    assert.equal((await call("/api/admin/send-delivery", { id: account.id, card: "CARD-TEST" }, adminCookie)).status, 200);
+    assert.equal((await call("/api/admin/send-delivery", { id: account.id, card: "CARD-TEST" }, adminCookie)).status, 409);
+    const delivered = (await call("/api/orders/lookup", account)).data;
+    assert.equal(delivered.status, "complete"); assert.equal(delivered.delivery.method, "email");
+    assert.ok(sentMessages.some(message => message.to === "tutorial-buyer@example.com" && message.html.includes("CARD-TEST") && message.html.includes(url)));
+    const stored = await db.prepare("SELECT delivery FROM orders WHERE id=?").bind(account.id).first();
+    assert.equal(stored.delivery.includes("CARD-TEST"), false);
   });
 });

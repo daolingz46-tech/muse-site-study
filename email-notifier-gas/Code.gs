@@ -10,8 +10,13 @@ function doPost(e) {
     const expected = PropertiesService.getScriptProperties().getProperty("BRIDGE_TOKEN") || "";
     const supplied = String(input.token || "");
     if (!expected || !constantTimeEqual_(expected, supplied)) return json_({ ok: false, message: "unauthorized" });
+    if (input.purpose === "capability_probe") return json_({ ok: true, buyerDelivery: true });
     if (!/^[A-Za-z0-9:_-]{12,120}$/.test(String(input.id || ""))) return json_({ ok: false, message: "invalid_id" });
-    if (String(input.to || "") !== "daolingz46@gmail.com") return json_({ ok: false, message: "invalid_recipient" });
+    const to = String(input.to || "").trim();
+    const purpose = String(input.purpose || "owner_notice");
+    if (!/^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/.test(to) || to.length > 254) return json_({ ok: false, message: "invalid_recipient" });
+    if (purpose === "owner_notice" && to !== "daolingz46@gmail.com") return json_({ ok: false, message: "invalid_recipient" });
+    if (purpose !== "owner_notice" && purpose !== "buyer_delivery") return json_({ ok: false, message: "invalid_purpose" });
 
     lock.waitLock(10000);
     const cache = CacheService.getScriptCache();
@@ -22,7 +27,7 @@ function doPost(e) {
     const html = String(input.html || "").slice(0, 20000);
     if (!subject || (!text && !html)) return json_({ ok: false, message: "empty_message" });
     MailApp.sendEmail({
-      to: "daolingz46@gmail.com",
+      to: to,
       subject: subject,
       body: text || "请使用支持 HTML 邮件的邮箱查看此通知。",
       htmlBody: html || undefined,

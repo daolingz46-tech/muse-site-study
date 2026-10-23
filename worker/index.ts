@@ -17,6 +17,27 @@ const json = (data: unknown, status = 200, headers: Record<string, string> = {})
 });
 const hash = async (value: string) => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value))), b => b.toString(16).padStart(2, "0")).join("");
 function str(value: unknown, max = 128) { return typeof value === "string" && value.trim().length <= max ? value.trim() : ""; }
+type TutorialBlock = { type: "text"; content: string } | { type: "image"; url: string; caption: string };
+const tutorialImagePattern = /^https:\/\/musetoken\.store\/api\/tutorial-images\/[a-f0-9-]{36}$/;
+const escapeHtml = (value: string) => value.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
+function validateTutorial(value: unknown): TutorialBlock[] {
+  if (!Array.isArray(value) || value.length > 30) throw new HttpError(400, "教程内容最多 30 段");
+  return value.map(item => {
+    if (!item || typeof item !== "object") throw new HttpError(400, "教程段落格式不正确");
+    if (item.type === "text") { const content = str(item.content, 2000); if (!content) throw new HttpError(400, "请填写文字内容"); return { type: "text", content }; }
+    if (item.type === "image") { const url = str(item.url, 200), caption = str(item.caption, 120); if (!tutorialImagePattern.test(url)) throw new HttpError(400, "请先上传教程图片"); return { type: "image", url, caption }; }
+    throw new HttpError(400, "教程段落格式不正确");
+  });
+}
+async function readImage(request: Request): Promise<Uint8Array> {
+  const max = 700_000;
+  if (Number(request.headers.get("Content-Length")) > max) throw new HttpError(413, "图片请控制在 700 KB 以内");
+  const reader = request.body?.getReader(); if (!reader) throw new HttpError(400, "请选择图片");
+  const parts: Uint8Array[] = []; let size = 0;
+  while (true) { const { done, value } = await reader.read(); if (done) break; size += value.length; if (size > max) { await reader.cancel(); throw new HttpError(413, "图片请控制在 700 KB 以内"); } parts.push(value); }
+  const bytes = new Uint8Array(size); let offset = 0; for (const part of parts) { bytes.set(part, offset); offset += part.length; }
+  return bytes;
+}
 function same(a: string, b: string) { let diff = a.length ^ b.length; for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ (b.charCodeAt(i) || 0); return diff === 0; }
 async function body(request: Request): Promise<Record<string, unknown>> {
   if (!request.headers.get("Content-Type")?.startsWith("application/json")) throw new HttpError(415, "请求格式错误");
@@ -47,15 +68,24 @@ async function queueOrderEmail(env: Env, order: Row, eventType: "created" | "rep
   if (hasEmailConfig(env)) ctx.waitUntil(sendOrderEmails(env));
 }
 function hasEmailConfig(env: Env) { return Boolean(env.RESEND_API_KEY || (env.GMAIL_SCRIPT_URL && env.GMAIL_SCRIPT_TOKEN)); }
-async function sendEmail(env: Env, id: string, subject: string, html: string, text: string) {
+async function hasBuyerDelivery(env: Env) {
+  if (env.RESEND_API_KEY && !env.GMAIL_SCRIPT_URL) return true;
+  if (!env.GMAIL_SCRIPT_URL || !env.GMAIL_SCRIPT_TOKEN) return false;
+  try {
+    const response = await fetch(env.GMAIL_SCRIPT_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: env.GMAIL_SCRIPT_TOKEN, purpose: "capability_probe" }), redirect: "follow", signal: AbortSignal.timeout(8000) });
+    const result = await response.json().catch(() => null) as { buyerDelivery?: boolean } | null;
+    return response.ok && result?.buyerDelivery === true;
+  } catch { return false; }
+}
+async function sendEmail(env: Env, id: string, subject: string, html: string, text: string, to = "daolingz46@gmail.com") {
   if (env.GMAIL_SCRIPT_URL && env.GMAIL_SCRIPT_TOKEN) {
-    const response = await fetch(env.GMAIL_SCRIPT_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, token: env.GMAIL_SCRIPT_TOKEN, to: "daolingz46@gmail.com", subject, html, text }), redirect: "follow" });
+    const response = await fetch(env.GMAIL_SCRIPT_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, token: env.GMAIL_SCRIPT_TOKEN, to, purpose: to === "daolingz46@gmail.com" ? "owner_notice" : "buyer_delivery", subject, html, text }), redirect: "follow" });
     const result = await response.json().catch(() => null) as { ok?: boolean; message?: string } | null;
     if (!response.ok || !result?.ok) throw new Error(`gmail_script_${response.status}_${result?.message || "failed"}`);
     return;
   }
   if (!env.RESEND_API_KEY) throw new Error("email_not_configured");
-  const response = await fetch("https://api.resend.com/emails", { method: "POST", headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json", "Idempotency-Key": id }, body: JSON.stringify({ from: "Muse 商店 <onboarding@resend.dev>", to: ["daolingz46@gmail.com"], subject, html, text }) });
+  const response = await fetch("https://api.resend.com/emails", { method: "POST", headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json", "Idempotency-Key": id }, body: JSON.stringify({ from: "Muse 商店 <onboarding@resend.dev>", to: [to], subject, html, text }) });
   if (!response.ok) throw new Error(`resend_${response.status}`);
 }
 async function sendOrderEmails(env: Env) {
@@ -197,7 +227,7 @@ async function admin(env: Env, request: Request, path: string) {
     return json({ ok: true }, 200, { "Set-Cookie": cookieHeader(request, session, 28800) });
   }
   await requireAdmin(env, request);
-  if (path === "/api/admin/email-status" && request.method === "GET") return json({ configured: hasEmailConfig(env), provider: env.GMAIL_SCRIPT_URL && env.GMAIL_SCRIPT_TOKEN ? "gmail" : env.RESEND_API_KEY ? "resend" : "none" });
+  if (path === "/api/admin/email-status" && request.method === "GET") return json({ configured: hasEmailConfig(env), buyerDelivery: await hasBuyerDelivery(env), provider: env.GMAIL_SCRIPT_URL && env.GMAIL_SCRIPT_TOKEN ? "gmail" : env.RESEND_API_KEY ? "resend" : "none" });
   if (path === "/api/admin/email-test" && request.method === "POST") {
     if (!hasEmailConfig(env)) throw new HttpError(503, "邮件服务尚未配置");
     try { await sendEmail(env, `muse-email-test-${crypto.randomUUID()}`, "Muse 商店邮件提醒测试", "<p>邮件提醒已成功连接。新订单和买家付款反馈将自动发送到此邮箱。</p>", "邮件提醒已成功连接。新订单和买家付款反馈将自动发送到此邮箱。"); }
@@ -248,6 +278,63 @@ async function admin(env: Env, request: Request, path: string) {
     const summary = await env.DB.prepare("SELECT COUNT(*) AS total, COALESCE(SUM(createdAt>=?),0) AS today, COALESCE(SUM(createdAt>=?),0) AS last7Days FROM visits").bind(day, now - 7 * 86400000).first();
     const recent = await env.DB.prepare("SELECT id,page,source,device,createdAt FROM visits ORDER BY createdAt DESC LIMIT 50").all();
     return json({ summary, recent: recent.results });
+  }
+  if (path === "/api/admin/tutorial" && request.method === "GET") {
+    const row = await env.DB.prepare("SELECT title,blocks,updatedAt FROM tutorials WHERE id='muse-account'").first<{ title: string; blocks: string; updatedAt: number }>();
+    return json(row ? { title: row.title, blocks: JSON.parse(row.blocks), updatedAt: row.updatedAt } : { title: "Muse 成品账号使用教程", blocks: [], updatedAt: null });
+  }
+  if (path === "/api/admin/tutorial" && request.method === "POST") {
+    const input = await body(request), title = str(input.title, 100), blocks = validateTutorial(input.blocks);
+    if (!title) throw new HttpError(400, "请填写教程标题");
+    const now = Date.now();
+    await env.DB.prepare("INSERT INTO tutorials(id,title,blocks,updatedAt) VALUES('muse-account',?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,blocks=excluded.blocks,updatedAt=excluded.updatedAt")
+      .bind(title, JSON.stringify(blocks), now).run();
+    return json({ ok: true, title, blocks, updatedAt: now });
+  }
+  if (path === "/api/admin/tutorial-image" && request.method === "POST") {
+    const mime = request.headers.get("Content-Type")?.split(";")[0].toLowerCase();
+    if (!mime || !["image/png", "image/jpeg", "image/webp"].includes(mime)) throw new HttpError(415, "请上传 PNG、JPG 或 WebP 图片");
+    const bytes = await readImage(request);
+    const png = mime === "image/png" && bytes.length >= 8 && [137,80,78,71,13,10,26,10].every((b, i) => bytes[i] === b);
+    const jpeg = mime === "image/jpeg" && bytes.length >= 3 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255;
+    const webp = mime === "image/webp" && bytes.length >= 12 && new TextDecoder().decode(bytes.slice(0, 4)) === "RIFF" && new TextDecoder().decode(bytes.slice(8, 12)) === "WEBP";
+    if (!(png || jpeg || webp)) throw new HttpError(400, "图片文件无效");
+    const count = await env.DB.prepare("SELECT COUNT(*) AS total FROM tutorial_images").first<{ total: number }>();
+    if ((count?.total || 0) >= 100) throw new HttpError(409, "教程图片已达上限，请联系支持清理旧图片");
+    let binary = ""; for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+    const id = crypto.randomUUID();
+    await env.DB.prepare("INSERT INTO tutorial_images(id,mime,data,createdAt) VALUES(?,?,?,?)").bind(id, mime, btoa(binary), Date.now()).run();
+    return json({ url: `https://musetoken.store/api/tutorial-images/${id}` }, 201);
+  }
+  if (path === "/api/admin/send-delivery" && request.method === "POST") {
+    const input = await body(request), id = str(input.id, 64), card = str(input.card, 4000);
+    if (!card) throw new HttpError(400, "请粘贴卡密内容");
+    const order = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).first<Row>();
+    if (!order || order.product !== "muse") throw new HttpError(404, "未找到成品账号订单");
+    if (order.status !== "processing") throw new HttpError(409, "请先核实收款；已交付订单不能重复发送");
+    if (!hasEmailConfig(env)) throw new HttpError(503, "邮件服务尚未配置");
+    const tutorial = await env.DB.prepare("SELECT title,blocks FROM tutorials WHERE id='muse-account'").first<{ title: string; blocks: string }>();
+    const blocks = tutorial ? validateTutorial(JSON.parse(tutorial.blocks)) : [];
+    const tutorialHtml = blocks.map(block => block.type === "text"
+      ? `<p style="white-space:pre-wrap">${escapeHtml(block.content)}</p>`
+      : `<figure style="margin:18px 0"><img src="${block.url}" alt="${escapeHtml(block.caption || "教程图片")}" style="max-width:100%;height:auto;border-radius:8px"><figcaption>${escapeHtml(block.caption)}</figcaption></figure>`).join("");
+    const tutorialText = blocks.map(block => block.type === "text" ? block.content : `${block.caption || "教程图片"}：${block.url}`).join("\n\n");
+    const html = `<div style="font-family:Arial,sans-serif;line-height:1.75;color:#222631;max-width:640px"><h2>Muse 成品账号交付</h2><p>订单码：${escapeHtml(order.code)}</p><p>以下是你的卡密，请妥善保管：</p><pre style="white-space:pre-wrap;overflow-wrap:anywhere;padding:16px;background:#f3f6fb;border-radius:8px">${escapeHtml(card)}</pre>${tutorial && blocks.length ? `<h3>${escapeHtml(tutorial.title)}</h3>${tutorialHtml}` : ""}<p>如有问题，请联系 QQ：3557785836。</p></div>`;
+    const text = `Muse 成品账号交付\n订单码：${order.code}\n\n卡密：\n${card}\n\n${tutorial && blocks.length ? `${tutorial.title}\n${tutorialText}\n\n` : ""}如有问题，请联系 QQ：3557785836。`;
+    const claimed = await env.DB.prepare("INSERT OR IGNORE INTO delivery_emails(orderId,status,createdAt) VALUES(?,'sending',?)").bind(order.id, Date.now()).run();
+    if (!claimed.meta.changes) throw new HttpError(409, "这笔订单的邮件正在发送或已经发送，请勿重复操作");
+    try { await sendEmail(env, `delivery:${order.id}`, `Muse 成品账号卡密 · 订单 ${order.code}`, html, text, order.target); }
+    catch {
+      await env.DB.prepare("DELETE FROM delivery_emails WHERE orderId=? AND status='sending'").bind(order.id).run();
+      throw new HttpError(502, "发信失败，订单未完成。请检查邮件服务，重试前先查看发件箱");
+    }
+    const now = Date.now();
+    await env.DB.batch([
+      env.DB.prepare("UPDATE delivery_emails SET status='sent',sentAt=? WHERE orderId=? AND status='sending'").bind(now, order.id),
+      env.DB.prepare("UPDATE orders SET status='complete',completedAt=?,delivery=?,updatedAt=? WHERE id=? AND status='processing'").bind(now, JSON.stringify({ method: "email", sentAt: now }), now, order.id),
+      env.DB.prepare("INSERT INTO audit(orderId,action,createdAt) VALUES(?,?,?)").bind(order.id, "email_delivery", now),
+    ]);
+    return json({ ok: true, sentAt: now, to: order.target });
   }
   if (path === "/api/admin/update" && request.method === "POST") {
     const input = await body(request); const row = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(str(input.id, 64)).first<Row>();
@@ -310,6 +397,12 @@ const worker = {
         if (!/^[a-f0-9-]{36}$/i.test(id) || !page) throw new HttpError(400, "访问记录无效");
         await env.DB.prepare("INSERT OR IGNORE INTO visits(id,page,source,device,createdAt) VALUES(?,?,?,?,?)").bind(id, page, source, device, Date.now()).run();
         return withCors(json({ ok: true }, 201));
+      }
+      if (/^\/api\/tutorial-images\/[a-f0-9-]{36}$/.test(path) && request.method === "GET") {
+        const image = await env.DB.prepare("SELECT mime,data FROM tutorial_images WHERE id=?").bind(path.split("/").pop()).first<{ mime: string; data: string }>();
+        if (!image) throw new HttpError(404, "图片不存在");
+        const binary = atob(image.data), bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
+        return withCors(new Response(bytes.buffer as ArrayBuffer, { headers: { "Content-Type": image.mime, "Cache-Control": "public,max-age=31536000,immutable", "X-Content-Type-Options": "nosniff" } }));
       }
       if (/^\/api\/payment-qr\/(wechat|alipay)$/.test(path) && request.method === "GET") {
         const imageUrl = new URL(`/sites/muse/${path.split("/").pop()}-collection.png`, url);

@@ -36,8 +36,10 @@ function readOrder(value: unknown): StoreOrder {
     throw new Error("付款码地址异常，请联系支持。");
   }
   if (value.delivery !== undefined && (!isRecord(value.delivery)
-    || typeof value.delivery.email !== "string" || typeof value.delivery.password !== "string"
-    || typeof value.delivery.codeUrl !== "string")) {
+    || (value.delivery.method === "email"
+      ? typeof value.delivery.sentAt !== "number"
+      : typeof value.delivery.email !== "string" || typeof value.delivery.password !== "string"
+        || typeof value.delivery.codeUrl !== "string"))) {
     throw new Error("交付资料返回异常，请联系支持。");
   }
   const order = value as StoreOrder;
