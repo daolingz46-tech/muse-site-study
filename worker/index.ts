@@ -19,7 +19,7 @@ const hash = async (value: string) => Array.from(new Uint8Array(await crypto.sub
 function str(value: unknown, max = 128) { return typeof value === "string" && value.trim().length <= max ? value.trim() : ""; }
 type TutorialBlock = { type: "text"; content: string } | { type: "image"; url: string; caption: string };
 type DeliveryFile = { id: string; orderId: string; name: string; mime: string; size: number; uploadedBytes: number };
-const maxFileBytes = 15_000_000, maxMailBytes = 20_000_000, chunkBytes = 500_000;
+const maxFileBytes = 15_000_000, maxMailBytes = 20_000_000, chunkBytes = 1_000_000;
 const fileTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif", "video/mp4", "video/quicktime", "video/webm"]);
 const tutorialImagePattern = /^https:\/\/musetoken\.store\/api\/tutorial-images\/[a-f0-9-]{36}$/;
 const escapeHtml = (value: string) => value.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);

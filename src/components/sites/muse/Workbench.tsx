@@ -51,6 +51,7 @@ export function Workbench() {
   const [mailOrder, setMailOrder] = useState<AdminOrder | null>(null), [card, setCard] = useState(""), [includeTutorial, setIncludeTutorial] = useState(true);
   const [mailFiles, setMailFiles] = useState<DeliveryFile[]>([]), [selectedFileIds, setSelectedFileIds] = useState<string[]>([]);
   const [mailBusy, setMailBusy] = useState(false), [uploadingFile, setUploadingFile] = useState(false), [mailError, setMailError] = useState("");
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [pushEndpoint, setPushEndpoint] = useState("");
   const [pushBusy, setPushBusy] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null), mailDialog = useRef<HTMLDialogElement>(null), sequence = useRef(0);
@@ -225,7 +226,7 @@ export function Workbench() {
   }
   async function addMailFiles(fileList: FileList | null) {
     if (!mailOrder || !fileList?.length || uploadingFile) return;
-    setUploadingFile(true); setMailError("");
+    setUploadingFile(true); setUploadProgress(0); setMailError("");
     try {
       for (const file of Array.from(fileList)) {
         if (file.size > 15_000_000) throw new Error(`${file.name} 超过 15 MB`);
@@ -236,6 +237,7 @@ export function Workbench() {
             const chunk = file.slice(part * started.chunkBytes, Math.min(file.size, (part + 1) * started.chunkBytes));
             const response = await fetch(storeApiUrl(`/api/admin/delivery-file/${started.id}/${part}`), { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: chunk, credentials: "include", cache: "no-store", signal: AbortSignal.timeout(60000) });
             if (!response.ok) { const data = await response.json().catch(() => null); throw new Error(data?.message || "附件上传失败"); }
+            setUploadProgress(Math.min(100, Math.round(Math.min(file.size, (part + 1) * started.chunkBytes) / file.size * 100)));
           }
         } catch (cause) { await api("delivery-file/remove", { id: started.id }).catch(() => {}); throw cause; }
         const uploaded = { id: started.id, name: file.name, mime: file.type, size: file.size, uploadedBytes: file.size };
@@ -315,7 +317,7 @@ export function Workbench() {
         <label className="wb-mail-tutorial wb-check"><input type="checkbox" checked={includeTutorial} onChange={e => setIncludeTutorial(e.target.checked)}/><span><strong>附带默认教程</strong><small>{tutorial?.blocks.length ? `${tutorial.title} · ${tutorial.blocks.length} 段图文` : "教程尚未设置，勾选也不会附带内容"}</small></span></label>
         <div className="wb-file-heading"><strong>订单专属附件</strong><span>可选图片或短视频，最多 4 个，合计 20 MB</span></div>
         {mailFiles.map(file => <div className="wb-file-row" key={file.id}><label className="wb-check"><input type="checkbox" checked={selectedFileIds.includes(file.id)} onChange={event => setSelectedFileIds(current => event.target.checked ? [...current, file.id] : current.filter(id => id !== file.id))}/><span>{file.name} · {(file.size / 1_000_000).toFixed(1)} MB</span></label><button type="button" aria-label={`删除附件 ${file.name}`} onClick={() => void removeMailFile(file.id)}><Trash2 size={15}/></button></div>)}
-        <label className="wb-add-file"><Plus size={17}/>{uploadingFile ? "正在上传附件…" : "添加附件"}<input type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/quicktime,video/webm" disabled={uploadingFile || mailBusy || !attachmentReady} onChange={event => { void addMailFiles(event.target.files); event.target.value = ""; }}/></label>
+        <label className="wb-add-file"><Plus size={17}/>{uploadingFile ? `正在上传 ${uploadProgress}%` : "添加附件"}<input type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/quicktime,video/webm" disabled={uploadingFile || mailBusy || !attachmentReady} onChange={event => { void addMailFiles(event.target.files); event.target.value = ""; }}/></label>
         {!attachmentReady && <p className="wb-file-help">附件发信需要先更新 Google 邮件脚本；卡密与默认教程仍可正常发送。</p>}
         {mailError && <p className="wb-error" role="alert">{mailError}</p>}<button className="wb-primary wb-mail-submit" disabled={!card.trim() || mailBusy || uploadingFile || (selectedFileIds.length > 0 && !attachmentReady)}>{mailBusy ? "发送中…" : mailOrder.status === "complete" ? "再次发送到买家邮箱" : "发送邮件并标记已交付"}</button>
       </form>
