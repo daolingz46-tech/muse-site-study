@@ -1,4 +1,4 @@
-export { tokenPlans, accountPriceCents } from "@/lib/products";
+export { tokenPlans, accountPriceCents, accountTitle } from "@/lib/products";
 
 export const tokenTerms = [
   { title: "不包含账号", body: "本商品仅提供 Token 充值，请先准备已有的 Muse 账号。" },

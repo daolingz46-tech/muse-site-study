@@ -5,7 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { ArrowRight, ArrowUpRight, Check, ChevronDown, Mail, MessageCircle, ShoppingBag, Ticket, X } from "lucide-react";
 import { OrderPayment, PurchaseNotice, RecentOrders, orderLink, type StoreOrder } from "./OrderFlow";
-import { accountPriceCents, formatMoney, storeName, supportQQ, tokenPlans, tokenTerms } from "./catalog";
+import { accountPriceCents, accountTitle, formatMoney, storeName, supportQQ, tokenPlans, tokenTerms } from "./catalog";
 import { createStoreOrder, lookupStoreOrder, findStoreOrder, storeApiUrl, type OrderSummary } from "./store-api";
 import { importSavedOrders, readSavedOrders, saveOrder, type SavedOrder } from "./saved-orders";
 import "./muse.css";
@@ -17,6 +17,7 @@ type PaymentMethod = "alipay" | "wechat";
 
 const terms = [
   { title: "仅质保首次登录", body: "不提供后续使用质保。首次登录有问题，请保留订单号和截图联系支持。" },
+  { title: "商品内容", body: "15 元包含 1 个 Muse AI 成品账号及该账号的 10 亿 Token，无需另购此额度。" },
   { title: "交付邮箱与接码链接", body: "店主确认收款后准备账号，在订单页面查看账号与接码链接。" },
   { title: "登录后立即更换邮箱", body: "首次登录成功后，请立即在 Muse 内更换为自己的邮箱，并删除旧邮箱。" },
 ];
@@ -32,7 +33,7 @@ export function MuseStorefront() {
   const [tokenPlanId, setTokenPlanId] = useState<string>(tokenPlans[0].id);
   const selectedTokenPlan = tokenPlans.find(plan => plan.id === tokenPlanId) || tokenPlans[0];
   const isToken = product === "muse-token";
-  const productTitle = isToken ? `Muse Token · ${selectedTokenPlan.label}` : "Muse AI · 成品账号";
+  const productTitle = isToken ? `Muse Token · ${selectedTokenPlan.label}` : accountTitle;
   const purchaseTerms = isToken ? tokenTerms : terms;
   const amountCents = isToken ? selectedTokenPlan.amountCents : accountPriceCents;
   const feeCents = 0;
@@ -267,7 +268,7 @@ export function MuseStorefront() {
           {step === "details" ? (
             <form onSubmit={submitDetails} noValidate>
               <h1>{isToken ? "Muse Token" : "Muse AI"}</h1>
-              <p className="muse-subtitle">{isToken ? "Token 充值 · 不含账号" : "成品账号"}</p>
+              <p className="muse-subtitle">{isToken ? "Token 充值 · 不含账号" : "成品账号 + 10亿 Token"}</p>
               {isToken ? <>
                 <fieldset className="muse-token-plans">
                   <legend className="sr-only">充值档次</legend>
@@ -287,7 +288,7 @@ export function MuseStorefront() {
               </> : <><div className="muse-selected-plan">
                 <div className="muse-plan-description">
                   <span className="muse-selected-circle"><Check size={12} strokeWidth={3}/></span>
-                  <div><strong>成品账号</strong><span>1 Billion</span></div>
+                  <div><strong>成品账号 + 10亿 Token</strong><span>账号与额度一同交付</span></div>
                 </div>
                 <div className="muse-plan-price"><span>¥</span>{formatMoney(accountPriceCents)}<small>一次购买</small></div>
               </div>
@@ -318,7 +319,7 @@ export function MuseStorefront() {
               </div>
               {error && <p className="muse-error" role="alert">{error}</p>}
               <div className="muse-order-total">
-                <div><span>合计</span><small>{isToken ? "仅充值 Token，不含账号" : "成品账号，一次购买"}</small></div>
+                <div><span>合计</span><small>{isToken ? "仅充值 Token，不含账号" : "含成品账号与 10亿 Token"}</small></div>
                 <strong><span>¥</span>{formatMoney(amountCents + feeCents)}</strong>
               </div>
               <button className="muse-primary" type="submit">确认订单 <ArrowRight size={17}/></button>

@@ -5,7 +5,7 @@
 ## 1. 部署邮件桥接脚本
 
 1. 用 `daolingz46@gmail.com` 登录 [Google Apps Script](https://script.google.com/) 并新建项目。
-2. 将本目录 `Code.gs` 的完整内容粘贴到编辑器，保存。
+2. 将项目中的 [`email-notifier-gas/Code.gs`](../email-notifier-gas/Code.gs) 完整内容粘贴到编辑器，保存。
 3. 在项目设置的“脚本属性”添加 `BRIDGE_TOKEN`。生成随机令牌可在 PowerShell 执行：
 
    ```powershell
@@ -15,7 +15,7 @@
    把生成结果留在本机，之后同一个值会填入 Cloudflare Secret。不要发到聊天或提交到 GitHub。
 
 4. 选择 **部署 → 新建部署 → 网页应用**；“执行身份”选你自己，“谁有权访问”选“任何人”。点击部署，并按提示授权发送邮件。
-5. 复制以 `/exec` 结尾的网页应用 URL。
+5. 复制以 `/exec` 结尾的网页应用 URL；不要复制以 `/dev` 结尾的测试地址。
 
 ## 2. 在 Cloudflare 保存两个 Secret
 

@@ -2,15 +2,15 @@
 
 账号与 Token 充值商店，包含个人收款二维码、订单链接、4 位付款备注码、订单数据库和店主管理工作台。
 
-正式商店：https://muse-store.muse-site-study.workers.dev/
+正式商店：https://musetoken.store/
 
-店主工作台：https://muse-store.muse-site-study.workers.dev/admin/
+店主工作台：https://musetoken.store/admin/
 
 ## 商品
 
 | 商品 | 价格 |
 | --- | ---: |
-| Muse AI 成品账号 | ¥15 |
+| Muse AI 成品账号 + 10 亿 Token | ¥15 |
 | 300 亿 Token | ¥79 |
 | 200 亿 Token | ¥52 |
 | 150 亿 Token | ¥45 |
@@ -56,7 +56,7 @@ npm run deploy:store
 5. 订单进入“待核实到账”；店主在工作台对照账单核对金额、备注和时间，填写支付交易单号并确认。
 6. 确认后进入“待交付”，店主完成 Token 充值或填写账号资料，买家在订单链接中查看结果。
 
-个人收款码不提供本系统可用的到账回调。系统轮询的是店主更新的订单状态；不会根据买家点击按钮自动认定到账，也不会自动执行 Muse 充值或发邮件。
+个人收款码不提供本系统可用的到账回调。系统轮询的是店主更新的订单状态；不会根据买家点击按钮自动认定到账，也不会自动执行 Muse 充值。配置邮件服务后，新订单及买家付款反馈会通过邮件通知店主；配置方法见 [Gmail 邮件提醒说明](docs/email-gmail-setup.md)。
 
 ## 校验
 

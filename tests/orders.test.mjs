@@ -66,6 +66,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
     const audit = await db.prepare("SELECT * FROM audit WHERE orderId=?").bind(order.id).all(); assert.equal(audit.results.length, 2);
     const account = (await call("/api/orders", { product: "muse", email: "buyer@example.com", method: "alipay", acceptedTerms: true, requestId: randomUUID() })).data;
     assert.equal(account.amountCents, 1500);
+    assert.equal(account.title, "Muse AI · 成品账号 + 10亿 Token");
     await call("/api/admin/update", { id: account.id, action: "confirm", checked: true, reference: "TEST-ALIPAY-002" }, session);
     assert.equal((await call("/api/admin/update", { id: account.id, action: "complete", checked: true }, session)).status, 400);
     const delivery = { email: "delivered@example.com", password: "test-only", codeUrl: "https://example.com/code" };
