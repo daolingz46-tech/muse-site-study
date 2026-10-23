@@ -7,7 +7,7 @@ import { ArrowRight, ArrowUpRight, Check, ChevronDown, Mail, MessageCircle, Shop
 import { OrderPayment, PurchaseNotice, RecentOrders, orderLink, type StoreOrder } from "./OrderFlow";
 import { accountPriceCents, formatMoney, storeName, supportQQ, tokenPlans, tokenTerms } from "./catalog";
 import { createStoreOrder, lookupStoreOrder, findStoreOrder, storeApiUrl, type OrderSummary } from "./store-api";
-import { readSavedOrders, saveOrder, type SavedOrder } from "./saved-orders";
+import { importSavedOrders, readSavedOrders, saveOrder, type SavedOrder } from "./saved-orders";
 import "./muse.css";
 
 type Product = "muse" | "muse-token";
@@ -21,6 +21,7 @@ const terms = [
   { title: "登录后立即更换邮箱", body: "首次登录成功后，请立即在 Muse 内更换为自己的邮箱，并删除旧邮箱。" },
 ];
 const assetBase = process.env.NEXT_PUBLIC_BASE_PATH || "";
+const canonicalStore = "https://musetoken.store/";
 
 export function MuseStorefront() {
   const [product, setProduct] = useState<Product>("muse");
@@ -58,12 +59,34 @@ export function MuseStorefront() {
   }, []);
 
   useEffect(() => {
+    if (window.location.origin !== new URL(canonicalStore).origin) {
+      const params = new URLSearchParams(window.location.hash.slice(1));
+      const saved = readSavedOrders();
+      if (saved.length) params.set("receipts", JSON.stringify(saved));
+      window.location.replace(canonicalStore + window.location.search + (params.size ? `#${params}` : ""));
+      return;
+    }
+    const params = new URLSearchParams(window.location.hash.slice(1));
+    const receipts = params.get("receipts");
+    if (receipts) {
+      try { importSavedOrders(JSON.parse(receipts)); } catch { /* Ignore invalid transfer data. */ }
+      params.delete("receipts");
+      window.history.replaceState(null, "", window.location.pathname + window.location.search + (params.size ? `#${params}` : ""));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (window.location.origin !== new URL(canonicalStore).origin) return;
     const storageKey = "muse-visit-session";
     let id = sessionStorage.getItem(storageKey);
     if (!id) { id = crypto.randomUUID(); sessionStorage.setItem(storageKey, id); }
     const referrer = document.referrer.toLowerCase();
-    const source = !referrer ? "direct" : /baidu|bing|google|sogou|so\.com/.test(referrer) ? "search" : /weixin|wechat|douyin|xiaohongshu|weibo|zhihu/.test(referrer) ? "social" : "external";
     const ua = navigator.userAgent.toLowerCase();
+    const campaign = new URLSearchParams(window.location.search).get("utm_source")?.toLowerCase() || "";
+    const source = /micromessenger/.test(ua) || /weixin|wechat/.test(referrer) || /weixin|wechat/.test(campaign) ? "wechat"
+      : /baidu|bing|google|sogou|so\.com/.test(referrer) ? "search"
+      : /douyin|xiaohongshu|weibo|zhihu/.test(referrer) ? "social"
+      : referrer && !/musetoken\.store|github\.io/.test(referrer) ? "external" : "direct";
     const device = /ipad|tablet/.test(ua) ? "tablet" : /mobile|android|iphone/.test(ua) ? "mobile" : "desktop";
     void fetch(storeApiUrl("/api/visit"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, page: "/", source, device }), keepalive: true }).catch(() => {});
   }, []);

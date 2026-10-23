@@ -224,7 +224,7 @@ const worker = {
         await limit(env, request, "visit", 60, 60);
         const input = await body(request);
         const id = str(input.id, 64), page = input.page === "/" ? "/" : "";
-        const source = ["direct", "search", "social", "external"].includes(String(input.source)) ? String(input.source) : "external";
+        const source = ["direct", "wechat", "search", "social", "external"].includes(String(input.source)) ? String(input.source) : "external";
         const device = ["mobile", "tablet", "desktop"].includes(String(input.device)) ? String(input.device) : "desktop";
         if (!/^[a-f0-9-]{36}$/i.test(id) || !page) throw new HttpError(400, "访问记录无效");
         await env.DB.prepare("INSERT OR IGNORE INTO visits(id,page,source,device,createdAt) VALUES(?,?,?,?,?)").bind(id, page, source, device, Date.now()).run();

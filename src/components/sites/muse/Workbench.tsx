@@ -17,7 +17,7 @@ type Result = { orders: AdminOrder[]; count: { total: number }; page: number;
 type Visit = { id: string; page: string; source: string; device: string; createdAt: number };
 type VisitResult = { summary: { total: number; today: number; last7Days: number }; recent: Visit[] };
 const labels: Record<string, string> = { pending: "待付款", reported: "待核实到账", processing: "待交付", complete: "已完成", expired: "已超时" };
-const visitSourceLabels: Record<string, string> = { direct: "直接访问", search: "搜索引擎", social: "社交平台", external: "其他网站" };
+const visitSourceLabels: Record<string, string> = { direct: "直接访问", wechat: "微信", search: "搜索引擎", social: "社交平台", external: "其他网站" };
 const visitDeviceLabels: Record<string, string> = { mobile: "手机", tablet: "平板", desktop: "电脑" };
 function date(value: number | null) { return value ? new Intl.DateTimeFormat("zh-CN", { dateStyle: "short", timeStyle: "short", timeZone: "Asia/Shanghai" }).format(value) : "—"; }
 class ApiError extends Error { constructor(public status: number, message: string) { super(message); } }
