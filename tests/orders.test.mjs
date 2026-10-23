@@ -49,14 +49,16 @@ test("订单、收款核实和交付的数据库流程", async t => {
     const list = await call("/api/admin/orders", undefined, session); assert.equal(list.data.summary.awaiting, 1); assert.equal(list.data.summary.revenueCents, 0);
     assert.equal("tokenHash" in list.data.orders[0], false);
   });
-  await t.test("核实收款需要交易号和确认，重复交易不能用于不同订单", async () => {
+  await t.test("核实收款的交易号选填，填写后不能重复使用", async () => {
     assert.equal((await call("/api/admin/update", { id: order.id, action: "complete", checked: true }, session)).status, 409);
-    assert.equal((await call("/api/admin/update", { id: order.id, action: "confirm" }, session)).status, 400);
-    const payload = { id: order.id, action: "confirm", checked: true, reference: "TEST-TRANSACTION-001" };
-    assert.equal((await call("/api/admin/update", payload, session)).status, 200);
-    assert.equal((await call("/api/admin/update", { ...payload, id: other.id }, session)).status, 409);
+    assert.equal((await call("/api/admin/update", { id: order.id, action: "confirm" }, session)).status, 200);
     const list = await call("/api/admin/orders?q=" + order.code, undefined, session);
     assert.equal(list.data.count.total, 1); assert.equal(list.data.summary.revenueCents, 2900); assert.equal(list.data.orders[0].status, "processing");
+    const first = (await call("/api/orders", { product: "muse", email: "first@example.com", method: "alipay", acceptedTerms: true, requestId: randomUUID() })).data;
+    const second = (await call("/api/orders", { product: "muse", email: "second@example.com", method: "alipay", acceptedTerms: true, requestId: randomUUID() })).data;
+    const reference = "TEST-TRANSACTION-001";
+    assert.equal((await call("/api/admin/update", { id: first.id, action: "confirm", checked: true, reference }, session)).status, 200);
+    assert.equal((await call("/api/admin/update", { id: second.id, action: "confirm", checked: true, reference }, session)).status, 409);
   });
   await t.test("完成充值、审计记录、账号资料交付", async () => {
     assert.equal((await call("/api/admin/update", { id: order.id, action: "complete", checked: true }, session)).status, 200);
