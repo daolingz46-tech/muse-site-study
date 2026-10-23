@@ -10,7 +10,7 @@ function doPost(e) {
     const expected = PropertiesService.getScriptProperties().getProperty("BRIDGE_TOKEN") || "";
     const supplied = String(input.token || "");
     if (!expected || !constantTimeEqual_(expected, supplied)) return json_({ ok: false, message: "unauthorized" });
-    if (input.purpose === "capability_probe") return json_({ ok: true, buyerDelivery: true });
+    if (input.purpose === "capability_probe") return json_({ ok: true, buyerDelivery: true, attachments: true });
     if (!/^[A-Za-z0-9:_-]{12,120}$/.test(String(input.id || ""))) return json_({ ok: false, message: "invalid_id" });
     const to = String(input.to || "").trim();
     const purpose = String(input.purpose || "owner_notice");
@@ -26,12 +26,28 @@ function doPost(e) {
     const text = String(input.text || "").slice(0, 12000);
     const html = String(input.html || "").slice(0, 20000);
     if (!subject || (!text && !html)) return json_({ ok: false, message: "empty_message" });
+    const files = Array.isArray(input.attachments) ? input.attachments : [];
+    if (files.length > 4 || (purpose !== "buyer_delivery" && files.length)) return json_({ ok: false, message: "invalid_attachments" });
+    const attachments = [];
+    let totalBytes = 0;
+    for (const file of files) {
+      const url = String(file.url || "");
+      const name = String(file.name || "").replace(/[\\/\x00-\x1f]/g, "_").slice(0, 120);
+      if (!name || !/^https:\/\/musetoken\.store\/api\/delivery-files\/[a-f0-9-]{36}\?signature=[a-f0-9]{64}$/.test(url)) return json_({ ok: false, message: "invalid_attachment_url" });
+      const response = UrlFetchApp.fetch(url, { followRedirects: false, muteHttpExceptions: true });
+      if (response.getResponseCode() !== 200) return json_({ ok: false, message: "attachment_download_failed" });
+      const blob = response.getBlob().setName(name);
+      totalBytes += blob.getBytes().length;
+      if (totalBytes > 20000000) return json_({ ok: false, message: "attachments_too_large" });
+      attachments.push(blob);
+    }
     MailApp.sendEmail({
       to: to,
       subject: subject,
       body: text || "请使用支持 HTML 邮件的邮箱查看此通知。",
       htmlBody: html || undefined,
       name: "Muse 商店",
+      attachments: attachments,
     });
     cache.put(cacheKey, "1", 21600);
     return json_({ ok: true });

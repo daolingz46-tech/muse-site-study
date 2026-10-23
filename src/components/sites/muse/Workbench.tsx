@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { ArrowUpRight, Download, LockKeyhole, LogOut, RefreshCw, Search, X, Bell, Volume2, Mail, ImagePlus, Trash2, ArrowUp, ArrowDown } from "lucide-react";
+import { ArrowUpRight, Download, LockKeyhole, LogOut, RefreshCw, Search, X, Bell, Volume2, Mail, ImagePlus, Trash2, ArrowUp, ArrowDown, Plus, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import Image from "next/image";
 import { formatMoney, storeName } from "./catalog";
@@ -19,6 +19,7 @@ type Visit = { id: string; page: string; source: string; device: string; created
 type VisitResult = { summary: { total: number; today: number; last7Days: number }; recent: Visit[] };
 type TutorialBlock = { type: "text"; content: string } | { type: "image"; url: string; caption: string };
 type Tutorial = { title: string; blocks: TutorialBlock[]; updatedAt: number | null };
+type DeliveryFile = { id: string; name: string; mime: string; size: number; uploadedBytes: number };
 const labels: Record<string, string> = { pending: "待付款", reported: "待核实到账", processing: "待交付", complete: "已完成", expired: "已超时" };
 const visitSourceLabels: Record<string, string> = { direct: "直接访问", wechat: "微信", search: "搜索引擎", social: "社交平台", external: "其他网站" };
 const visitDeviceLabels: Record<string, string> = { mobile: "手机", tablet: "平板", desktop: "电脑" };
@@ -29,7 +30,7 @@ function pushKeyBytes(key: string) {
 }
 class ApiError extends Error { constructor(public status: number, message: string) { super(message); } }
 async function api(path: string, input?: unknown) {
-  const response = await fetch(storeApiUrl(`/api/admin/${path}`), { method: input === undefined ? "GET" : "POST", headers: input === undefined ? {} : { "Content-Type": "application/json" }, body: input === undefined ? undefined : JSON.stringify(input), credentials: "include", cache: "no-store", signal: AbortSignal.timeout(15000) });
+  const response = await fetch(storeApiUrl(`/api/admin/${path}`), { method: input === undefined ? "GET" : "POST", headers: input === undefined ? {} : { "Content-Type": "application/json" }, body: input === undefined ? undefined : JSON.stringify(input), credentials: "include", cache: "no-store", signal: AbortSignal.timeout(path === "send-delivery" ? 90000 : 15000) });
   const data = await response.json().catch(() => null);
   if (!response.ok) throw new ApiError(response.status, data?.message || "工作台连接失败，请稍后重试");
   return data;
@@ -44,10 +45,12 @@ export function Workbench() {
   const [visits, setVisits] = useState<VisitResult | null>(null);
   const [emailConfigured, setEmailConfigured] = useState<boolean | null>(null);
   const [buyerDeliveryReady, setBuyerDeliveryReady] = useState(false);
+  const [attachmentReady, setAttachmentReady] = useState(false);
   const [emailTestBusy, setEmailTestBusy] = useState(false);
   const [tutorial, setTutorial] = useState<Tutorial | null>(null);
-  const [mailOrder, setMailOrder] = useState<AdminOrder | null>(null), [card, setCard] = useState(""), [mailChecked, setMailChecked] = useState(false);
-  const [mailBusy, setMailBusy] = useState(false), [mailError, setMailError] = useState("");
+  const [mailOrder, setMailOrder] = useState<AdminOrder | null>(null), [card, setCard] = useState(""), [includeTutorial, setIncludeTutorial] = useState(true);
+  const [mailFiles, setMailFiles] = useState<DeliveryFile[]>([]), [selectedFileIds, setSelectedFileIds] = useState<string[]>([]);
+  const [mailBusy, setMailBusy] = useState(false), [uploadingFile, setUploadingFile] = useState(false), [mailError, setMailError] = useState("");
   const [pushEndpoint, setPushEndpoint] = useState("");
   const [pushBusy, setPushBusy] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null), mailDialog = useRef<HTMLDialogElement>(null), sequence = useRef(0);
@@ -131,7 +134,7 @@ export function Workbench() {
   useEffect(() => {
     if (auth !== "ready") return;
     let active = true;
-    void api("email-status").then((data: { configured: boolean; buyerDelivery?: boolean }) => { if (active) { setEmailConfigured(data.configured); setBuyerDeliveryReady(data.buyerDelivery === true); } }).catch(() => {});
+    void api("email-status").then((data: { configured: boolean; buyerDelivery?: boolean; attachments?: boolean }) => { if (active) { setEmailConfigured(data.configured); setBuyerDeliveryReady(data.buyerDelivery === true); setAttachmentReady(data.attachments === true); } }).catch(() => {});
     return () => { active = false; };
   }, [auth]);
   useEffect(() => {
@@ -214,14 +217,44 @@ export function Workbench() {
     finally { setEmailTestBusy(false); }
   }
   function open(order: AdminOrder) { setSelected(order); setChecked(false); setReference(""); setDelivery({ email: "", password: "", codeUrl: "" }); setActionError(""); }
-  function openMail(order: AdminOrder) { setMailOrder(order); setCard(""); setMailChecked(false); setMailError(""); }
+  function openMail(order: AdminOrder) {
+    setMailOrder(order); setCard(""); setIncludeTutorial(true); setMailError(""); setMailFiles([]); setSelectedFileIds([]);
+    void api(`delivery-files?orderId=${encodeURIComponent(order.id)}`).then((data: { files: DeliveryFile[] }) => {
+      setMailFiles(data.files); setSelectedFileIds(data.files.map(file => file.id));
+    }).catch(cause => setMailError(cause instanceof Error ? cause.message : "附件列表加载失败"));
+  }
+  async function addMailFiles(fileList: FileList | null) {
+    if (!mailOrder || !fileList?.length || uploadingFile) return;
+    setUploadingFile(true); setMailError("");
+    try {
+      for (const file of Array.from(fileList)) {
+        if (file.size > 15_000_000) throw new Error(`${file.name} 超过 15 MB`);
+        if (!/^(image\/(png|jpeg|webp|gif)|video\/(mp4|quicktime|webm))$/.test(file.type)) throw new Error(`${file.name} 格式不支持`);
+        const started = await api("delivery-file/start", { orderId: mailOrder.id, name: file.name, mime: file.type, size: file.size }) as { id: string; chunkBytes: number };
+        try {
+          for (let part = 0; part * started.chunkBytes < file.size; part++) {
+            const chunk = file.slice(part * started.chunkBytes, Math.min(file.size, (part + 1) * started.chunkBytes));
+            const response = await fetch(storeApiUrl(`/api/admin/delivery-file/${started.id}/${part}`), { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: chunk, credentials: "include", cache: "no-store", signal: AbortSignal.timeout(60000) });
+            if (!response.ok) { const data = await response.json().catch(() => null); throw new Error(data?.message || "附件上传失败"); }
+          }
+        } catch (cause) { await api("delivery-file/remove", { id: started.id }).catch(() => {}); throw cause; }
+        const uploaded = { id: started.id, name: file.name, mime: file.type, size: file.size, uploadedBytes: file.size };
+        setMailFiles(current => [...current, uploaded]); setSelectedFileIds(current => [...current, uploaded.id]);
+      }
+    } catch (cause) { setMailError(cause instanceof Error ? cause.message : "附件上传失败"); }
+    finally { setUploadingFile(false); }
+  }
+  async function removeMailFile(id: string) {
+    try { await api("delivery-file/remove", { id }); setMailFiles(current => current.filter(file => file.id !== id)); setSelectedFileIds(current => current.filter(fileId => fileId !== id)); }
+    catch (cause) { setMailError(cause instanceof Error ? cause.message : "删除附件失败"); }
+  }
   async function sendDelivery(event: FormEvent) {
-    event.preventDefault(); if (!mailOrder || mailBusy || !mailChecked) return;
+    event.preventDefault(); if (!mailOrder || mailBusy || uploadingFile) return;
     setMailBusy(true); setMailError("");
     try {
-      const response = await api("send-delivery", { id: mailOrder.id, card });
+      const response = await api("send-delivery", { id: mailOrder.id, card, includeTutorial, fileIds: selectedFileIds });
       if (!response?.ok) throw new Error("邮件发送失败");
-      setAlert(`订单 ${mailOrder.code} 的卡密已发送到 ${mailOrder.target}，订单已完成`);
+      setAlert(`订单 ${mailOrder.code} 的邮件已发送到 ${mailOrder.target}${mailOrder.status === "complete" ? "，可继续售后" : "，订单已交付"}`);
       setCard(""); setMailOrder(null); mailDialog.current?.close(); await load();
     } catch (cause) { setMailError(cause instanceof Error ? cause.message : "邮件发送失败，请稍后重试"); }
     finally { setMailBusy(false); }
@@ -265,23 +298,26 @@ export function Workbench() {
       <div className="wb-table-scroll"><table><thead><tr><th>订单 / 商品</th><th>买家信息</th><th>金额 / 方式</th><th>状态</th><th>下单时间</th><th>操作</th></tr></thead><tbody>{result?.orders.map(order => <tr key={order.id}>
         <td><strong className="wb-code">{order.code}</strong><span>{order.title}</span><small title={order.id}>{order.id}</small></td><td><small>{order.product === "muse-token" ? "账号邀请码" : "收件邮箱"}</small><span className="wb-target">{order.target}</span></td>
         <td><strong>¥{formatMoney(order.amountCents)}</strong><span>{order.method === "wechat" ? "微信" : "支付宝"}</span></td><td><span className={`wb-status is-${order.status}`}>{labels[order.status]}</span>{order.reference && <small title={order.reference}>交易号：{order.reference}</small>}</td><td><span>{date(order.createdAt)}</span></td>
-        <td><div className="wb-order-actions">{order.status === "complete" ? <span className="wb-done">已交付</span> : <>{order.status !== "processing" && <button className="wb-action" onClick={() => open(order)}>核实收款</button>}{order.product === "muse" ? <button className="wb-action" disabled={order.status !== "processing" || !buyerDeliveryReady} title={order.status !== "processing" ? "请先核实收款" : !buyerDeliveryReady ? "请先更新 Google 邮件脚本" : "发送卡密与教程到买家邮箱"} onClick={() => openMail(order)}><Mail size={13}/>发送邮件</button> : order.status === "processing" && <button className="wb-action" onClick={() => open(order)}>完成充值</button>}</>}</div></td>
+        <td><div className="wb-order-actions">{order.status === "complete" && <span className="wb-done">已交付 · 可售后</span>}{!["processing", "complete"].includes(order.status) && <button className="wb-action wb-verify" onClick={() => open(order)}><ShieldCheck size={14}/>核实收款</button>}{order.product === "muse" && ["processing", "complete"].includes(order.status) ? <button className={`wb-action ${order.status === "complete" ? "wb-resend" : "wb-send"}`} disabled={!buyerDeliveryReady} title={!buyerDeliveryReady ? "请先更新 Google 邮件脚本" : "向买家邮箱发送卡密"} onClick={() => openMail(order)}><Mail size={14}/>{order.status === "complete" ? "再次发送" : "发送邮件"}</button> : order.product === "muse-token" && order.status === "processing" && <button className="wb-action wb-send" onClick={() => open(order)}>完成充值</button>}</div></td>
       </tr>)}</tbody></table></div>
       {!result?.orders.length && <div className="wb-empty"><ShoppingBagIcon/><h3>暂无匹配订单</h3><p>客户下单后，订单会自动出现在这里。</p></div>}
       <footer className="wb-pagination"><span>共 {result?.count.total || 0} 笔 · 每页 50 笔</span><div><button disabled={page === 0} onClick={() => setPage(page - 1)}>上一页</button><span>{page + 1}</span><button disabled={(page + 1) * 50 >= (result?.count.total || 0)} onClick={() => setPage(page + 1)}>下一页</button></div></footer>
     </section>
-    {selected && <dialog ref={dialog} className="wb-dialog" onCancel={e => { if (busy) e.preventDefault(); else setSelected(null); }} aria-labelledby="wb-action-title"><button className="wb-close" aria-label="关闭" disabled={busy} onClick={() => setSelected(null)}><X size={18}/></button>
+    {selected && <dialog ref={dialog} className={`wb-dialog ${selected.status === "processing" ? "wb-complete-dialog" : "wb-verify-dialog"}`} onCancel={e => { if (busy) e.preventDefault(); else setSelected(null); }} aria-labelledby="wb-action-title"><button className="wb-close" aria-label="关闭" disabled={busy} onClick={() => setSelected(null)}><X size={18}/></button>
       <form onSubmit={save}><p className="wb-eyebrow">订单码 {selected.code}</p><h2 id="wb-action-title">{selected.status === "processing" ? "完成交付" : "核实收款"}</h2><p>{selected.title} · ¥{formatMoney(selected.amountCents)} · {selected.method === "wechat" ? "微信" : "支付宝"}</p><p className="wb-target">{selected.product === "muse-token" ? "账号邀请码" : "收件邮箱"}：{selected.target}</p>
         {selected.status === "processing" ? <>{selected.product === "muse" && <><label>交付账号<input required value={delivery.email} maxLength={254} onChange={e => setDelivery({ ...delivery, email: e.target.value })}/></label><label>账号密码<input required value={delivery.password} maxLength={256} onChange={e => setDelivery({ ...delivery, password: e.target.value })}/></label><label>接码链接<input required type="url" pattern="https://.*" value={delivery.codeUrl} maxLength={1000} placeholder="https://…" onChange={e => setDelivery({ ...delivery, codeUrl: e.target.value })}/></label></>}<label className="wb-check"><input type="checkbox" required checked={checked} onChange={e => setChecked(e.target.checked)}/>{selected.product === "muse-token" ? "我已为此邀请码完成充值" : "我已核对账号资料，确认交付给买家"}</label></> : <><div className="wb-notice">请确认已收到 ¥{formatMoney(selected.amountCents)}，付款备注包含订单码 <b>{selected.code}</b>。</div><label>支付交易单号（选填）<input minLength={6} maxLength={100} value={reference} onChange={e => setReference(e.target.value)} placeholder="可选：从收款账单中复制交易单号"/></label></>}
         {actionError && <p className="wb-error" role="alert">{actionError}</p>}<button className="wb-primary" disabled={selected.status === "processing" && !checked || busy}>{busy ? "保存中…" : selected.status === "processing" ? "确认已完成交付" : "确定"}</button>
       </form>
     </dialog>}
     {mailOrder && <dialog ref={mailDialog} className="wb-dialog wb-mail-dialog" onCancel={e => { if (mailBusy) e.preventDefault(); else setMailOrder(null); }} aria-labelledby="wb-mail-title"><button className="wb-close" aria-label="关闭" disabled={mailBusy} onClick={() => setMailOrder(null)}><X size={18}/></button>
-      <form onSubmit={sendDelivery}><p className="wb-eyebrow">订单码 {mailOrder.code}</p><h2 id="wb-mail-title">发送成品账号卡密</h2><p>收件人：<strong className="wb-target">{mailOrder.target}</strong></p><p>此邮箱来自买家订单，发送后订单自动标记为已完成。</p>
+      <form onSubmit={sendDelivery}><p className="wb-mail-stage">邮件交付 · 订单码 {mailOrder.code}</p><h2 id="wb-mail-title">{mailOrder.status === "complete" ? "再次发送邮件" : "发送成品账号卡密"}</h2><p>收件人：<strong className="wb-target">{mailOrder.target}</strong></p><p>{mailOrder.status === "complete" ? "这笔订单保持已交付状态，可再次发送卡密、教程或附件。" : "发送成功后订单标记为已交付，之后仍可再次发送。"}</p>
         <label>卡密内容（必填）<textarea required value={card} maxLength={4000} rows={6} placeholder="从 1688 邮件中复制卡密，粘贴到这里" onChange={e => setCard(e.target.value)}/></label>
-        <div className="wb-mail-tutorial"><strong>{tutorial?.title || "使用教程"}</strong><span>{tutorial?.blocks.length ? `已保存 ${tutorial.blocks.length} 段图文，会随卡密发送` : "尚未添加教程，本次只发送卡密"}</span></div>
-        <label className="wb-check"><input type="checkbox" checked={mailChecked} onChange={e => setMailChecked(e.target.checked)}/>我已核实收款，并确认卡密和收件邮箱无误</label>
-        {mailError && <p className="wb-error" role="alert">{mailError}</p>}<button className="wb-primary" disabled={!card.trim() || !mailChecked || mailBusy}>{mailBusy ? "发送中…" : "确认发送邮件并完成订单"}</button>
+        <label className="wb-mail-tutorial wb-check"><input type="checkbox" checked={includeTutorial} onChange={e => setIncludeTutorial(e.target.checked)}/><span><strong>附带默认教程</strong><small>{tutorial?.blocks.length ? `${tutorial.title} · ${tutorial.blocks.length} 段图文` : "教程尚未设置，勾选也不会附带内容"}</small></span></label>
+        <div className="wb-file-heading"><strong>订单专属附件</strong><span>可选图片或短视频，最多 4 个，合计 20 MB</span></div>
+        {mailFiles.map(file => <div className="wb-file-row" key={file.id}><label className="wb-check"><input type="checkbox" checked={selectedFileIds.includes(file.id)} onChange={event => setSelectedFileIds(current => event.target.checked ? [...current, file.id] : current.filter(id => id !== file.id))}/><span>{file.name} · {(file.size / 1_000_000).toFixed(1)} MB</span></label><button type="button" aria-label={`删除附件 ${file.name}`} onClick={() => void removeMailFile(file.id)}><Trash2 size={15}/></button></div>)}
+        <label className="wb-add-file"><Plus size={17}/>{uploadingFile ? "正在上传附件…" : "添加附件"}<input type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/quicktime,video/webm" disabled={uploadingFile || mailBusy || !attachmentReady} onChange={event => { void addMailFiles(event.target.files); event.target.value = ""; }}/></label>
+        {!attachmentReady && <p className="wb-file-help">附件发信需要先更新 Google 邮件脚本；卡密与默认教程仍可正常发送。</p>}
+        {mailError && <p className="wb-error" role="alert">{mailError}</p>}<button className="wb-primary wb-mail-submit" disabled={!card.trim() || mailBusy || uploadingFile || (selectedFileIds.length > 0 && !attachmentReady)}>{mailBusy ? "发送中…" : mailOrder.status === "complete" ? "再次发送到买家邮箱" : "发送邮件并标记已交付"}</button>
       </form>
     </dialog>}
   </main>;

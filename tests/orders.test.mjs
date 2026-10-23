@@ -14,7 +14,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
   const mf = new Miniflare(convertV4MiniflareOptions({ workers: [{ name: "test-store", modules: true, scriptPath: "temp/worker/index.js", compatibilityDate: "2026-10-01", d1Databases: { DB: "test-orders" }, bindings: { ADMIN_PASSWORD_HASH: createHash("sha256").update(password).digest("hex"), GMAIL_SCRIPT_URL: "https://mail.test/exec", GMAIL_SCRIPT_TOKEN: "test-token" }, outboundService: async request => {
     assert.equal(new URL(request.url).hostname, "mail.test");
     const input = await request.json();
-    if (input.purpose === "capability_probe") return Response.json({ ok: true, buyerDelivery: true });
+    if (input.purpose === "capability_probe") return Response.json({ ok: true, buyerDelivery: true, attachments: true });
     sentMessages.push(input);
     return Response.json({ ok: true });
   } }] }));
@@ -130,11 +130,21 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal(tutorial.data.blocks.length, 2);
     assert.equal((await call("/api/admin/update", { id: account.id, action: "confirm" }, adminCookie)).status, 200);
     assert.equal((await call("/api/admin/email-status", undefined, adminCookie)).data.buyerDelivery, true);
-    assert.equal((await call("/api/admin/send-delivery", { id: account.id, card: "CARD-TEST" }, adminCookie)).status, 200);
-    assert.equal((await call("/api/admin/send-delivery", { id: account.id, card: "CARD-TEST" }, adminCookie)).status, 409);
+    const started = await call("/api/admin/delivery-file/start", { orderId: account.id, name: "步骤.png", mime: "image/png", size: png.length }, adminCookie);
+    assert.equal(started.status, 201);
+    const chunk = await mf.dispatchFetch(`https://shop.example/api/admin/delivery-file/${started.data.id}/0`, { method: "POST", headers: { Origin: "https://shop.example", Cookie: adminCookie, "Content-Type": "application/octet-stream" }, body: png });
+    assert.equal(chunk.status, 200);
+    assert.equal((await mf.dispatchFetch(`https://shop.example/api/delivery-files/${started.data.id}`)).status, 403);
+    assert.equal((await call("/api/admin/send-delivery", { id: account.id, card: "CARD-TEST", includeTutorial: false, fileIds: [started.data.id] }, adminCookie)).status, 200);
+    const firstMail = sentMessages.find(message => message.to === "tutorial-buyer@example.com");
+    assert.equal(firstMail.html.includes(url), false);
+    assert.equal(firstMail.attachments.length, 1);
+    assert.equal((await mf.dispatchFetch(firstMail.attachments[0].url)).status, 200);
+    assert.equal((await call("/api/admin/send-delivery", { id: account.id, card: "CARD-TEST-AGAIN", includeTutorial: true, fileIds: [] }, adminCookie)).status, 200);
+    assert.equal((await db.prepare("SELECT sendCount FROM delivery_emails WHERE orderId=?").bind(account.id).first()).sendCount, 2);
     const delivered = (await call("/api/orders/lookup", account)).data;
     assert.equal(delivered.status, "complete"); assert.equal(delivered.delivery.method, "email");
-    assert.ok(sentMessages.some(message => message.to === "tutorial-buyer@example.com" && message.html.includes("CARD-TEST") && message.html.includes(url)));
+    assert.ok(sentMessages.some(message => message.to === "tutorial-buyer@example.com" && message.html.includes("CARD-TEST-AGAIN") && message.html.includes(url)));
     const stored = await db.prepare("SELECT delivery FROM orders WHERE id=?").bind(account.id).first();
     assert.equal(stored.delivery.includes("CARD-TEST"), false);
   });

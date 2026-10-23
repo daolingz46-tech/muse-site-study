@@ -18,6 +18,9 @@ const json = (data: unknown, status = 200, headers: Record<string, string> = {})
 const hash = async (value: string) => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value))), b => b.toString(16).padStart(2, "0")).join("");
 function str(value: unknown, max = 128) { return typeof value === "string" && value.trim().length <= max ? value.trim() : ""; }
 type TutorialBlock = { type: "text"; content: string } | { type: "image"; url: string; caption: string };
+type DeliveryFile = { id: string; orderId: string; name: string; mime: string; size: number; uploadedBytes: number };
+const maxFileBytes = 15_000_000, maxMailBytes = 20_000_000, chunkBytes = 500_000;
+const fileTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif", "video/mp4", "video/quicktime", "video/webm"]);
 const tutorialImagePattern = /^https:\/\/musetoken\.store\/api\/tutorial-images\/[a-f0-9-]{36}$/;
 const escapeHtml = (value: string) => value.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
 function validateTutorial(value: unknown): TutorialBlock[] {
@@ -38,6 +41,24 @@ async function readImage(request: Request): Promise<Uint8Array> {
   const bytes = new Uint8Array(size); let offset = 0; for (const part of parts) { bytes.set(part, offset); offset += part.length; }
   return bytes;
 }
+async function readFileChunk(request: Request): Promise<Uint8Array> {
+  if (Number(request.headers.get("Content-Length")) > chunkBytes) throw new HttpError(413, "附件分片过大");
+  const reader = request.body?.getReader(); if (!reader) throw new HttpError(400, "请选择附件");
+  const parts: Uint8Array[] = []; let size = 0;
+  while (true) { const { done, value } = await reader.read(); if (done) break; size += value.length; if (size > chunkBytes) { await reader.cancel(); throw new HttpError(413, "附件分片过大"); } parts.push(value); }
+  if (!size) throw new HttpError(400, "附件为空");
+  const bytes = new Uint8Array(size); let offset = 0; for (const part of parts) { bytes.set(part, offset); offset += part.length; }
+  return bytes;
+}
+function base64(bytes: Uint8Array) { let binary = ""; for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192)); return btoa(binary); }
+async function fileBytes(env: Env, id: string, size: number): Promise<Uint8Array> {
+  const chunks = await env.DB.prepare("SELECT data FROM delivery_file_chunks WHERE fileId=? ORDER BY part").bind(id).all<{ data: string }>();
+  const output = new Uint8Array(size); let offset = 0;
+  for (const chunk of chunks.results) { const data = atob(chunk.data); for (let i = 0; i < data.length; i++) output[offset++] = data.charCodeAt(i); }
+  if (offset !== size) throw new Error("delivery_file_incomplete");
+  return output;
+}
+async function fileSignature(env: Env, id: string) { return hash(`delivery-file:${id}:${env.GMAIL_SCRIPT_TOKEN || env.ADMIN_PASSWORD_HASH}`); }
 function same(a: string, b: string) { let diff = a.length ^ b.length; for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ (b.charCodeAt(i) || 0); return diff === 0; }
 async function body(request: Request): Promise<Record<string, unknown>> {
   if (!request.headers.get("Content-Type")?.startsWith("application/json")) throw new HttpError(415, "请求格式错误");
@@ -77,15 +98,26 @@ async function hasBuyerDelivery(env: Env) {
     return response.ok && result?.buyerDelivery === true;
   } catch { return false; }
 }
-async function sendEmail(env: Env, id: string, subject: string, html: string, text: string, to = "daolingz46@gmail.com") {
+async function hasAttachmentDelivery(env: Env) {
+  if (env.RESEND_API_KEY && !env.GMAIL_SCRIPT_URL) return true;
+  if (!env.GMAIL_SCRIPT_URL || !env.GMAIL_SCRIPT_TOKEN) return false;
+  try {
+    const response = await fetch(env.GMAIL_SCRIPT_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: env.GMAIL_SCRIPT_TOKEN, purpose: "capability_probe" }), redirect: "follow", signal: AbortSignal.timeout(8000) });
+    const result = await response.json().catch(() => null) as { attachments?: boolean } | null;
+    return response.ok && result?.attachments === true;
+  } catch { return false; }
+}
+async function sendEmail(env: Env, id: string, subject: string, html: string, text: string, to = "daolingz46@gmail.com", files: DeliveryFile[] = []) {
   if (env.GMAIL_SCRIPT_URL && env.GMAIL_SCRIPT_TOKEN) {
-    const response = await fetch(env.GMAIL_SCRIPT_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, token: env.GMAIL_SCRIPT_TOKEN, to, purpose: to === "daolingz46@gmail.com" ? "owner_notice" : "buyer_delivery", subject, html, text }), redirect: "follow" });
+    const attachments = await Promise.all(files.map(async file => ({ name: file.name, url: `https://musetoken.store/api/delivery-files/${file.id}?signature=${await fileSignature(env, file.id)}` })));
+    const response = await fetch(env.GMAIL_SCRIPT_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, token: env.GMAIL_SCRIPT_TOKEN, to, purpose: to === "daolingz46@gmail.com" ? "owner_notice" : "buyer_delivery", subject, html, text, attachments }), redirect: "follow" });
     const result = await response.json().catch(() => null) as { ok?: boolean; message?: string } | null;
     if (!response.ok || !result?.ok) throw new Error(`gmail_script_${response.status}_${result?.message || "failed"}`);
     return;
   }
   if (!env.RESEND_API_KEY) throw new Error("email_not_configured");
-  const response = await fetch("https://api.resend.com/emails", { method: "POST", headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json", "Idempotency-Key": id }, body: JSON.stringify({ from: "Muse 商店 <onboarding@resend.dev>", to: [to], subject, html, text }) });
+  const attachments = await Promise.all(files.map(async file => ({ filename: file.name, content: base64(await fileBytes(env, file.id, file.size)) })));
+  const response = await fetch("https://api.resend.com/emails", { method: "POST", headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json", "Idempotency-Key": id }, body: JSON.stringify({ from: "Muse 商店 <onboarding@resend.dev>", to: [to], subject, html, text, attachments }) });
   if (!response.ok) throw new Error(`resend_${response.status}`);
 }
 async function sendOrderEmails(env: Env) {
@@ -227,7 +259,7 @@ async function admin(env: Env, request: Request, path: string) {
     return json({ ok: true }, 200, { "Set-Cookie": cookieHeader(request, session, 28800) });
   }
   await requireAdmin(env, request);
-  if (path === "/api/admin/email-status" && request.method === "GET") return json({ configured: hasEmailConfig(env), buyerDelivery: await hasBuyerDelivery(env), provider: env.GMAIL_SCRIPT_URL && env.GMAIL_SCRIPT_TOKEN ? "gmail" : env.RESEND_API_KEY ? "resend" : "none" });
+  if (path === "/api/admin/email-status" && request.method === "GET") return json({ configured: hasEmailConfig(env), buyerDelivery: await hasBuyerDelivery(env), attachments: await hasAttachmentDelivery(env), provider: env.GMAIL_SCRIPT_URL && env.GMAIL_SCRIPT_TOKEN ? "gmail" : env.RESEND_API_KEY ? "resend" : "none" });
   if (path === "/api/admin/email-test" && request.method === "POST") {
     if (!hasEmailConfig(env)) throw new HttpError(503, "邮件服务尚未配置");
     try { await sendEmail(env, `muse-email-test-${crypto.randomUUID()}`, "Muse 商店邮件提醒测试", "<p>邮件提醒已成功连接。新订单和买家付款反馈将自动发送到此邮箱。</p>", "邮件提醒已成功连接。新订单和买家付款反馈将自动发送到此邮箱。"); }
@@ -306,14 +338,64 @@ async function admin(env: Env, request: Request, path: string) {
     await env.DB.prepare("INSERT INTO tutorial_images(id,mime,data,createdAt) VALUES(?,?,?,?)").bind(id, mime, btoa(binary), Date.now()).run();
     return json({ url: `https://musetoken.store/api/tutorial-images/${id}` }, 201);
   }
+  if (path === "/api/admin/delivery-files" && request.method === "GET") {
+    const orderId = str(new URL(request.url).searchParams.get("orderId"), 64);
+    const order = await env.DB.prepare("SELECT id,product FROM orders WHERE id=?").bind(orderId).first<{ id: string; product: string }>();
+    if (!order || order.product !== "muse") throw new HttpError(404, "订单不存在");
+    const rows = await env.DB.prepare("SELECT id,name,mime,size,uploadedBytes FROM delivery_files WHERE orderId=? AND uploadedBytes=size ORDER BY createdAt").bind(orderId).all();
+    return json({ files: rows.results });
+  }
+  if (path === "/api/admin/delivery-file/start" && request.method === "POST") {
+    const input = await body(request), orderId = str(input.orderId, 64), name = str(input.name, 120).replace(/[\\/\x00-\x1f]/g, "_");
+    const mime = str(input.mime, 50), size = Number(input.size);
+    if (!name || !fileTypes.has(mime) || !Number.isInteger(size) || size < 1 || size > maxFileBytes) throw new HttpError(400, "请选择 15 MB 以内的图片或视频");
+    const order = await env.DB.prepare("SELECT product,status FROM orders WHERE id=?").bind(orderId).first<{ product: string; status: string }>();
+    if (!order || order.product !== "muse" || !["processing", "complete"].includes(order.status)) throw new HttpError(409, "请先核实收款");
+    const quota = await env.DB.prepare("SELECT COUNT(*) AS count,COALESCE(SUM(size),0) AS bytes FROM delivery_files WHERE orderId=?").bind(orderId).first<{ count: number; bytes: number }>();
+    if ((quota?.count || 0) >= 4 || (quota?.bytes || 0) + size > maxMailBytes) throw new HttpError(413, "这笔订单的附件储存已满，请删除不用的附件");
+    const id = crypto.randomUUID();
+    await env.DB.prepare("INSERT INTO delivery_files(id,orderId,name,mime,size,createdAt) VALUES(?,?,?,?,?,?)").bind(id, orderId, name, mime, size, Date.now()).run();
+    return json({ id, chunkBytes }, 201);
+  }
+  const chunkMatch = path.match(/^\/api\/admin\/delivery-file\/([a-f0-9-]{36})\/(\d+)$/);
+  if (chunkMatch && request.method === "POST") {
+    const id = chunkMatch[1], part = Number(chunkMatch[2]);
+    const file = await env.DB.prepare("SELECT * FROM delivery_files WHERE id=?").bind(id).first<DeliveryFile>();
+    if (!file || !Number.isInteger(part) || part !== Math.floor(file.uploadedBytes / chunkBytes) || file.uploadedBytes >= file.size) throw new HttpError(409, "附件上传顺序错误，请重新选择文件");
+    const bytes = await readFileChunk(request);
+    if (bytes.length !== Math.min(chunkBytes, file.size - file.uploadedBytes)) throw new HttpError(400, "附件分片长度错误");
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO delivery_file_chunks(fileId,part,data) VALUES(?,?,?)").bind(id, part, base64(bytes)),
+      env.DB.prepare("UPDATE delivery_files SET uploadedBytes=uploadedBytes+? WHERE id=? AND uploadedBytes=?").bind(bytes.length, id, file.uploadedBytes),
+    ]);
+    return json({ ok: true, uploadedBytes: file.uploadedBytes + bytes.length });
+  }
+  if (path === "/api/admin/delivery-file/remove" && request.method === "POST") {
+    const id = str((await body(request)).id, 64);
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM delivery_file_chunks WHERE fileId=?").bind(id),
+      env.DB.prepare("DELETE FROM delivery_files WHERE id=?").bind(id),
+    ]);
+    return json({ ok: true });
+  }
   if (path === "/api/admin/send-delivery" && request.method === "POST") {
     const input = await body(request), id = str(input.id, 64), card = str(input.card, 4000);
     if (!card) throw new HttpError(400, "请粘贴卡密内容");
     const order = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).first<Row>();
     if (!order || order.product !== "muse") throw new HttpError(404, "未找到成品账号订单");
-    if (order.status !== "processing") throw new HttpError(409, "请先核实收款；已交付订单不能重复发送");
+    if (!["processing", "complete"].includes(order.status)) throw new HttpError(409, "请先核实收款");
     if (!hasEmailConfig(env)) throw new HttpError(503, "邮件服务尚未配置");
-    const tutorial = await env.DB.prepare("SELECT title,blocks FROM tutorials WHERE id='muse-account'").first<{ title: string; blocks: string }>();
+    const ids = input.fileIds ?? [];
+    if (!Array.isArray(ids) || ids.length > 4 || ids.some(value => typeof value !== "string" || !/^[a-f0-9-]{36}$/.test(value)) || new Set(ids).size !== ids.length) throw new HttpError(400, "附件选择无效");
+    const files: DeliveryFile[] = [];
+    for (const fileId of ids) {
+      const file = await env.DB.prepare("SELECT * FROM delivery_files WHERE id=? AND orderId=?").bind(fileId, order.id).first<DeliveryFile>();
+      if (!file || file.uploadedBytes !== file.size) throw new HttpError(400, "附件尚未上传完成");
+      files.push(file);
+    }
+    if (files.reduce((sum, file) => sum + file.size, 0) > maxMailBytes) throw new HttpError(413, "单封邮件附件合计不能超过 20 MB");
+    if (files.length && !await hasAttachmentDelivery(env)) throw new HttpError(503, "请先更新 Google 邮件脚本，才能发送附件");
+    const tutorial = input.includeTutorial === false ? null : await env.DB.prepare("SELECT title,blocks FROM tutorials WHERE id='muse-account'").first<{ title: string; blocks: string }>();
     const blocks = tutorial ? validateTutorial(JSON.parse(tutorial.blocks)) : [];
     const tutorialHtml = blocks.map(block => block.type === "text"
       ? `<p style="white-space:pre-wrap">${escapeHtml(block.content)}</p>`
@@ -321,20 +403,24 @@ async function admin(env: Env, request: Request, path: string) {
     const tutorialText = blocks.map(block => block.type === "text" ? block.content : `${block.caption || "教程图片"}：${block.url}`).join("\n\n");
     const html = `<div style="font-family:Arial,sans-serif;line-height:1.75;color:#222631;max-width:640px"><h2>Muse 成品账号交付</h2><p>订单码：${escapeHtml(order.code)}</p><p>以下是你的卡密，请妥善保管：</p><pre style="white-space:pre-wrap;overflow-wrap:anywhere;padding:16px;background:#f3f6fb;border-radius:8px">${escapeHtml(card)}</pre>${tutorial && blocks.length ? `<h3>${escapeHtml(tutorial.title)}</h3>${tutorialHtml}` : ""}<p>如有问题，请联系 QQ：3557785836。</p></div>`;
     const text = `Muse 成品账号交付\n订单码：${order.code}\n\n卡密：\n${card}\n\n${tutorial && blocks.length ? `${tutorial.title}\n${tutorialText}\n\n` : ""}如有问题，请联系 QQ：3557785836。`;
-    const claimed = await env.DB.prepare("INSERT OR IGNORE INTO delivery_emails(orderId,status,createdAt) VALUES(?,'sending',?)").bind(order.id, Date.now()).run();
-    if (!claimed.meta.changes) throw new HttpError(409, "这笔订单的邮件正在发送或已经发送，请勿重复操作");
-    try { await sendEmail(env, `delivery:${order.id}`, `Muse 成品账号卡密 · 订单 ${order.code}`, html, text, order.target); }
+    const previous = await env.DB.prepare("SELECT status FROM delivery_emails WHERE orderId=?").bind(order.id).first<{ status: string }>();
+    const claimed = previous
+      ? await env.DB.prepare("UPDATE delivery_emails SET status='sending' WHERE orderId=? AND status='sent'").bind(order.id).run()
+      : await env.DB.prepare("INSERT OR IGNORE INTO delivery_emails(orderId,status,createdAt) VALUES(?,'sending',?)").bind(order.id, Date.now()).run();
+    if (!claimed.meta.changes) throw new HttpError(409, "这笔订单的邮件正在发送，请稍后重试");
+    try { await sendEmail(env, `delivery:${order.id}:${crypto.randomUUID()}`, `Muse 成品账号卡密 · 订单 ${order.code}`, html, text, order.target, files); }
     catch {
-      await env.DB.prepare("DELETE FROM delivery_emails WHERE orderId=? AND status='sending'").bind(order.id).run();
-      throw new HttpError(502, "发信失败，订单未完成。请检查邮件服务，重试前先查看发件箱");
+      if (previous) await env.DB.prepare("UPDATE delivery_emails SET status='sent' WHERE orderId=? AND status='sending'").bind(order.id).run();
+      else await env.DB.prepare("DELETE FROM delivery_emails WHERE orderId=? AND status='sending'").bind(order.id).run();
+      throw new HttpError(502, "发信失败，请检查发件箱；确认未送达后再试");
     }
     const now = Date.now();
     await env.DB.batch([
-      env.DB.prepare("UPDATE delivery_emails SET status='sent',sentAt=? WHERE orderId=? AND status='sending'").bind(now, order.id),
-      env.DB.prepare("UPDATE orders SET status='complete',completedAt=?,delivery=?,updatedAt=? WHERE id=? AND status='processing'").bind(now, JSON.stringify({ method: "email", sentAt: now }), now, order.id),
-      env.DB.prepare("INSERT INTO audit(orderId,action,createdAt) VALUES(?,?,?)").bind(order.id, "email_delivery", now),
+      env.DB.prepare("UPDATE delivery_emails SET status='sent',sentAt=?,sendCount=sendCount+1 WHERE orderId=? AND status='sending'").bind(now, order.id),
+      env.DB.prepare("UPDATE orders SET status='complete',completedAt=COALESCE(completedAt,?),delivery=?,updatedAt=? WHERE id=? AND status IN ('processing','complete')").bind(now, JSON.stringify({ method: "email", sentAt: now }), now, order.id),
+      env.DB.prepare("INSERT INTO audit(orderId,action,createdAt) VALUES(?,?,?)").bind(order.id, previous ? "email_redelivery" : "email_delivery", now),
     ]);
-    return json({ ok: true, sentAt: now, to: order.target });
+    return json({ ok: true, sentAt: now, to: order.target, resent: Boolean(previous) });
   }
   if (path === "/api/admin/update" && request.method === "POST") {
     const input = await body(request); const row = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(str(input.id, 64)).first<Row>();
@@ -403,6 +489,15 @@ const worker = {
         if (!image) throw new HttpError(404, "图片不存在");
         const binary = atob(image.data), bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
         return withCors(new Response(bytes.buffer as ArrayBuffer, { headers: { "Content-Type": image.mime, "Cache-Control": "public,max-age=31536000,immutable", "X-Content-Type-Options": "nosniff" } }));
+      }
+      if (/^\/api\/delivery-files\/[a-f0-9-]{36}$/.test(path) && request.method === "GET") {
+        const id = path.split("/").pop()!;
+        const signature = url.searchParams.get("signature") || "";
+        if (!/^[a-f0-9]{64}$/.test(signature) || !same(signature, await fileSignature(env, id))) throw new HttpError(403, "附件链接无效");
+        const file = await env.DB.prepare("SELECT * FROM delivery_files WHERE id=?").bind(id).first<DeliveryFile>();
+        if (!file || file.uploadedBytes !== file.size) throw new HttpError(404, "附件不存在");
+        const bytes = await fileBytes(env, id, file.size);
+        return withCors(new Response(bytes.buffer as ArrayBuffer, { headers: { "Content-Type": file.mime, "Content-Length": String(file.size), "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`, "Cache-Control": "private,no-store", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer" } }));
       }
       if (/^\/api\/payment-qr\/(wechat|alipay)$/.test(path) && request.method === "GET") {
         const imageUrl = new URL(`/sites/muse/${path.split("/").pop()}-collection.png`, url);
