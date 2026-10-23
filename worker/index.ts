@@ -71,8 +71,8 @@ async function sendOrderEmails(env: Env) {
       const esc = (value: string) => value.replace(/[&<>\"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[char]!);
       const eventText = item.eventType === "reported" ? "买家已提交付款，请核实到账" : "有新订单，请留意后续付款";
       const subject = item.eventType === "reported" ? `待核实付款：订单 ${order.code}` : `新订单：${order.title} · ${order.code}`;
-      const html = `<div style="font-family:Arial,sans-serif;line-height:1.8;color:#202634"><h2>${esc(eventText)}</h2><p>订单码：<strong>${esc(order.code)}</strong></p><p>订单编号：${esc(order.id)}</p><p>商品：${esc(order.title)}</p><p>金额：¥${(order.amountCents / 100).toFixed(2)}</p><p>付款方式：${order.method === "wechat" ? "微信" : "支付宝"}</p><p>状态：${item.eventType === "reported" ? "等待店主核实" : "等待买家付款"}</p><p><a href="https://daolingz46-tech.github.io/muse-site-study/admin/">打开店主工作台</a></p></div>`;
-      const text = `${eventText}\n订单码：${order.code}\n订单编号：${order.id}\n商品：${order.title}\n金额：¥${(order.amountCents / 100).toFixed(2)}\n付款方式：${order.method === "wechat" ? "微信" : "支付宝"}\n状态：${item.eventType === "reported" ? "等待店主核实" : "等待买家付款"}\n店主工作台：https://daolingz46-tech.github.io/muse-site-study/admin/`;
+      const html = `<div style="font-family:Arial,sans-serif;line-height:1.8;color:#202634"><h2>${esc(eventText)}</h2><p>订单码：<strong>${esc(order.code)}</strong></p><p>订单编号：${esc(order.id)}</p><p>商品：${esc(order.title)}</p><p>金额：¥${(order.amountCents / 100).toFixed(2)}</p><p>付款方式：${order.method === "wechat" ? "微信" : "支付宝"}</p><p>状态：${item.eventType === "reported" ? "等待店主核实" : "等待买家付款"}</p><p><a href="https://musetoken.store/admin/">打开店主工作台</a></p></div>`;
+      const text = `${eventText}\n订单码：${order.code}\n订单编号：${order.id}\n商品：${order.title}\n金额：¥${(order.amountCents / 100).toFixed(2)}\n付款方式：${order.method === "wechat" ? "微信" : "支付宝"}\n状态：${item.eventType === "reported" ? "等待店主核实" : "等待买家付款"}\n店主工作台：https://musetoken.store/admin/`;
       await sendEmail(env, item.id, subject, html, text);
       await env.DB.prepare("UPDATE email_outbox SET sentAt=?,lastError=NULL WHERE id=?").bind(Date.now(), item.id).run();
     } catch (error) {
