@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { ArrowUpRight, Download, LockKeyhole, LogOut, RefreshCw, Search, X, Bell } from "lucide-react";
+import { ArrowUpRight, Download, LockKeyhole, LogOut, RefreshCw, Search, X, Bell, Volume2 } from "lucide-react";
 import Link from "next/link";
 import { formatMoney, storeName } from "./catalog";
 import { storeApiUrl } from "./store-api";
@@ -20,6 +20,10 @@ const labels: Record<string, string> = { pending: "待付款", reported: "待核
 const visitSourceLabels: Record<string, string> = { direct: "直接访问", wechat: "微信", search: "搜索引擎", social: "社交平台", external: "其他网站" };
 const visitDeviceLabels: Record<string, string> = { mobile: "手机", tablet: "平板", desktop: "电脑" };
 function date(value: number | null) { return value ? new Intl.DateTimeFormat("zh-CN", { dateStyle: "short", timeStyle: "short", timeZone: "Asia/Shanghai" }).format(value) : "—"; }
+function pushKeyBytes(key: string) {
+  const decoded = atob(key.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - key.length % 4) % 4));
+  return Uint8Array.from(decoded, char => char.charCodeAt(0));
+}
 class ApiError extends Error { constructor(public status: number, message: string) { super(message); } }
 async function api(path: string, input?: unknown) {
   const response = await fetch(storeApiUrl(`/api/admin/${path}`), { method: input === undefined ? "GET" : "POST", headers: input === undefined ? {} : { "Content-Type": "application/json" }, body: input === undefined ? undefined : JSON.stringify(input), credentials: "include", cache: "no-store", signal: AbortSignal.timeout(15000) });
@@ -33,17 +37,36 @@ export function Workbench() {
   const [result, setResult] = useState<Result | null>(null), [query, setQuery] = useState(""), [search, setSearch] = useState(""), [status, setStatus] = useState(""), [page, setPage] = useState(0);
   const [selected, setSelected] = useState<AdminOrder | null>(null), [checked, setChecked] = useState(false), [reference, setReference] = useState("");
   const [delivery, setDelivery] = useState({ email: "", password: "", codeUrl: "" }), [actionError, setActionError] = useState("");
-  const [alert, setAlert] = useState(""), [desktopAlerts, setDesktopAlerts] = useState(false);
+  const [alert, setAlert] = useState(""), [desktopAlerts, setDesktopAlerts] = useState(false), [soundEnabled, setSoundEnabled] = useState(false);
   const [visits, setVisits] = useState<VisitResult | null>(null);
   const [emailConfigured, setEmailConfigured] = useState<boolean | null>(null);
   const [emailTestBusy, setEmailTestBusy] = useState(false);
+  const [pushEndpoint, setPushEndpoint] = useState("");
+  const [pushBusy, setPushBusy] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null), sequence = useRef(0);
-  const knownReported = useRef<Set<string> | null>(null);
+  const knownOrders = useRef<Map<string, string> | null>(null);
+  const audioContext = useRef<AudioContext | null>(null);
+  const playDing = useCallback(() => {
+    const context = audioContext.current;
+    if (!context || context.state !== "running") return;
+    const start = context.currentTime;
+    const oscillator = context.createOscillator(), gain = context.createGain();
+    oscillator.type = "sine";
+    oscillator.frequency.setValueAtTime(880, start);
+    oscillator.frequency.exponentialRampToValueAtTime(1175, start + 0.12);
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(0.18, start + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.36);
+    oscillator.connect(gain).connect(context.destination);
+    oscillator.start(start);
+    oscillator.stop(start + 0.37);
+  }, []);
   const load = useCallback(async () => {
     const current = ++sequence.current;
     try {
       const data: Result = await api(`orders?q=${encodeURIComponent(search)}&status=${encodeURIComponent(status)}&page=${page}`);
       if (current !== sequence.current) return;
+      if (!search && !status && page === 0 && knownOrders.current === null) knownOrders.current = new Map(data.orders.map(order => [order.id, order.status]));
       setResult(data); setAuth("ready"); setError("");
     } catch (e) {
       if (current !== sequence.current) return;
@@ -61,28 +84,35 @@ export function Workbench() {
   useEffect(() => {
     if (auth !== "ready") return;
     let active = true;
-    const checkReported = async () => {
+    const checkOrders = async () => {
       try {
-        const data: Result = await api("orders?status=reported&page=0");
+        const data: Result = await api("orders?page=0");
         if (!active) return;
-        const current = new Set(data.orders.map(order => order.id));
-        if (knownReported.current === null) { knownReported.current = current; return; }
-        const fresh = data.orders.filter(order => !knownReported.current?.has(order.id));
-        knownReported.current = current;
-        if (fresh.length) {
-          const message = fresh.length === 1 ? `新订单 ${fresh[0].code} 已提交付款，请核实` : `有 ${fresh.length} 笔新订单已提交付款，请核实`;
+        const current = new Map(data.orders.map(order => [order.id, order.status]));
+        if (knownOrders.current === null) { knownOrders.current = current; return; }
+        const fresh = data.orders.filter(order => !knownOrders.current?.has(order.id));
+        const newlyReported = data.orders.filter(order => order.status === "reported" && knownOrders.current?.has(order.id) && knownOrders.current.get(order.id) !== "reported");
+        knownOrders.current = current;
+        if (fresh.length || newlyReported.length) {
+          const message = fresh.length === 1 ? `新订单 ${fresh[0].code}${fresh[0].status === "reported" ? " 已反馈付款，请核实" : "，请留意付款"}`
+            : fresh.length > 1 ? `收到 ${fresh.length} 笔新订单，请查看工作台`
+            : newlyReported.length === 1 ? `订单 ${newlyReported[0].code} 已反馈付款，请核实`
+            : `有 ${newlyReported.length} 笔订单已反馈付款，请核实`;
           setAlert(message);
-          if (typeof Notification !== "undefined" && Notification.permission === "granted") new Notification("收到新的付款核实申请", { body: message, tag: fresh[0].id });
+          playDing();
+          if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+            try { new Notification("Muse 商店订单提醒", { body: message, tag: (fresh[0] || newlyReported[0]).id }); } catch { /* iPhone uses service worker push notifications. */ }
+          }
           void load();
         }
       } catch { /* 主订单列表会显示连接错误；下一轮继续检查。 */ }
     };
-    void checkReported();
-    const timer = window.setInterval(() => { if (!document.hidden) void checkReported(); }, 5000);
-    const visible = () => { if (!document.hidden) void checkReported(); };
+    void checkOrders();
+    const timer = window.setInterval(() => { if (!document.hidden) void checkOrders(); }, 5000);
+    const visible = () => { if (!document.hidden) void checkOrders(); };
     document.addEventListener("visibilitychange", visible);
     return () => { active = false; window.clearInterval(timer); document.removeEventListener("visibilitychange", visible); };
-  }, [auth, load]);
+  }, [auth, load, playDing]);
   useEffect(() => {
     if (auth !== "ready") return;
     let active = true;
@@ -95,6 +125,16 @@ export function Workbench() {
     if (auth !== "ready") return;
     let active = true;
     void api("email-status").then((data: { configured: boolean }) => { if (active) setEmailConfigured(data.configured); }).catch(() => {});
+    return () => { active = false; };
+  }, [auth]);
+  useEffect(() => {
+    if (auth !== "ready" || window.location.origin !== "https://musetoken.store" || !("serviceWorker" in navigator)) return;
+    let active = true;
+    void navigator.serviceWorker.getRegistration("/admin/").then(registration => registration?.pushManager.getSubscription()).then(subscription => {
+      if (!active || !subscription) return;
+      setPushEndpoint(subscription.endpoint);
+      void api("push-subscribe", { subscription: subscription.toJSON() }).catch(() => {});
+    }).catch(() => {});
     return () => { active = false; };
   }, [auth]);
   useEffect(() => { if (selected) dialog.current?.showModal(); }, [selected]);
@@ -113,6 +153,44 @@ export function Workbench() {
     const permission = await Notification.requestPermission();
     setDesktopAlerts(permission === "granted");
     setAlert(permission === "granted" ? "桌面提醒已开启；新付款核实申请会弹出通知" : "浏览器未允许通知；页面内仍会显示新订单提醒");
+  }
+  async function enableSound() {
+    if (typeof AudioContext === "undefined") { setAlert("当前浏览器不支持工作台提示音"); return; }
+    try {
+      audioContext.current ||= new AudioContext();
+      await audioContext.current.resume();
+      if (audioContext.current.state !== "running") throw new Error("audio_suspended");
+      setSoundEnabled(true);
+      playDing();
+      setAlert("订单叮声已开启；工作台保持打开时，新订单和付款反馈会响铃");
+    } catch { setSoundEnabled(false); setAlert("声音未开启，请检查手机静音设置并再次轻点按钮"); }
+  }
+  async function enablePhonePush() {
+    if (pushBusy) return;
+    if (pushEndpoint) {
+      setPushBusy(true);
+      try { await api("push-test", { endpoint: pushEndpoint }); setAlert("测试推送已发送，请查看手机通知"); }
+      catch (cause) { setAlert(cause instanceof Error ? cause.message : "测试推送失败"); }
+      finally { setPushBusy(false); }
+      return;
+    }
+    if (window.location.origin !== "https://musetoken.store" || !("serviceWorker" in navigator) || !("PushManager" in window) || typeof Notification === "undefined") {
+      setAlert("iPhone 请用 Safari 打开 musetoken.store/admin/，分享并添加到主屏幕，再从桌面图标开启推送");
+      return;
+    }
+    setPushBusy(true);
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== "granted") { setAlert("请在 iPhone 设置中允许 Muse 工作台发送通知"); return; }
+      const { publicKey } = await api("push-key") as { publicKey: string };
+      await navigator.serviceWorker.register("/admin/sw.js", { scope: "/admin/" });
+      const registration = await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.getSubscription() || await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: pushKeyBytes(publicKey) });
+      await api("push-subscribe", { subscription: subscription.toJSON() });
+      setPushEndpoint(subscription.endpoint);
+      setAlert("手机推送已开启。锁屏或关闭工作台后，新订单也会发送系统通知；点此按钮可测试。");
+    } catch (cause) { setAlert(cause instanceof Error ? cause.message : "手机推送开启失败，请在 Safari 添加到主屏幕后重试"); }
+    finally { setPushBusy(false); }
   }
   async function sendTestEmail() {
     if (emailTestBusy) return;
@@ -140,8 +218,8 @@ export function Workbench() {
     {error && <p role="alert" className="wb-error">{error}</p>}<Link href="/">返回商店 <ArrowUpRight size={14}/></Link>
   </form></main>;
   return <main className="workbench">
-    <header className="wb-header"><div><p className="wb-eyebrow">{storeName} / 管理中心</p><h1>订单工作台</h1></div><nav><button onClick={() => void enableDesktopAlerts()}><Bell size={15}/>{desktopAlerts ? "桌面提醒已开" : "开启桌面提醒"}</button><a href={`${process.env.NEXT_PUBLIC_BASE_PATH || ""}/`} target="_blank" rel="noreferrer">打开商店 <ArrowUpRight size={15}/></a><button onClick={() => void logout()}><LogOut size={15}/>退出</button></nav></header>
-    <p className="wb-description">以微信、支付宝收款记录核实到账，再处理充值或账号交付。</p>
+    <header className="wb-header"><div><p className="wb-eyebrow">{storeName} / 管理中心</p><h1>订单工作台</h1></div><nav><button onClick={() => void enableSound()}><Volume2 size={15}/>{soundEnabled ? "叮声已开启 · 试听" : "开启订单叮声"}</button><button onClick={() => void enablePhonePush()} disabled={pushBusy}><Bell size={15}/>{pushBusy ? "连接中…" : pushEndpoint ? "测试手机推送" : "开启手机推送"}</button><button onClick={() => void enableDesktopAlerts()}><Bell size={15}/>{desktopAlerts ? "桌面提醒已开" : "开启桌面提醒"}</button><a href={`${process.env.NEXT_PUBLIC_BASE_PATH || ""}/`} target="_blank" rel="noreferrer">打开商店 <ArrowUpRight size={15}/></a><button onClick={() => void logout()}><LogOut size={15}/>退出</button></nav></header>
+    <p className="wb-description">以微信、支付宝收款记录核实到账，再处理充值或账号交付。iPhone 请用 Safari 打开此页，分享 → 添加到主屏幕，从桌面图标进入后点“开启手机推送”。工作台打开时可另点“开启订单叮声”。</p>
     {emailConfigured === false && <div className="wb-email-setup" role="status"><strong>订单邮件提醒还未启用</strong><span>邮件服务尚未配置。可用个人 Gmail 的 Apps Script 免域名发信，或配置 Resend API Key；新订单和买家付款反馈会发到 daolingz46@gmail.com。</span></div>}
     {emailConfigured === true && <div className="wb-email-ready"><span>邮件提醒已连接 · 新订单和付款反馈将发送到 daolingz46@gmail.com</span><button onClick={() => void sendTestEmail()} disabled={emailTestBusy}>{emailTestBusy ? "发送中…" : "发送测试邮件"}</button></div>}
     {alert && <div className="wb-alert" role="status"><span>{alert}</span><button aria-label="关闭提醒" onClick={() => setAlert("")}>×</button></div>}

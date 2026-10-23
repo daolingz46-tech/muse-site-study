@@ -52,6 +52,7 @@ temp/
 .dev.vars.*
 admin-access.local.txt
 gmail-bridge-token.local.txt
+push-vapid.local.json
 wrangler.production.json
 orders-backup*.sql
 

@@ -93,4 +93,16 @@ test("订单、收款核实和交付的数据库流程", async t => {
     await call("/api/admin/logout", {}, session);
     assert.equal((await call("/api/admin/orders", undefined, session)).status, 401);
   });
+  await t.test("新订单和首次付款反馈各生成一次手机推送任务", async () => {
+    const endpoint = "https://web.push.apple.com/test-subscription";
+    await db.prepare("INSERT INTO push_subscriptions(endpoint,subscription,createdAt) VALUES(?,?,?)")
+      .bind(endpoint, JSON.stringify({ endpoint, expirationTime: null, keys: { auth: "a".repeat(22), p256dh: "b".repeat(87) } }), Date.now()).run();
+    const request = { product: "muse-token", planId: "100", inviteCode: "PUSH-TEST", method: "wechat", acceptedTerms: true, requestId: randomUUID() };
+    const created = (await call("/api/orders", request)).data;
+    await call("/api/orders", request);
+    await call("/api/orders/report", { ...created, remarkConfirmed: true });
+    await call("/api/orders/report", { ...created, remarkConfirmed: true });
+    const queued = await db.prepare("SELECT eventType FROM push_outbox WHERE orderId=? ORDER BY eventType").bind(created.id).all();
+    assert.deepEqual(queued.results.map(row => row.eventType), ["created", "reported"]);
+  });
 });

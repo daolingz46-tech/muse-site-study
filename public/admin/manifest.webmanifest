@@ -1,0 +1,14 @@
+{
+  "id": "https://musetoken.store/admin/",
+  "name": "Muse 店主工作台",
+  "short_name": "Muse 工作台",
+  "description": "查看新订单、核实收款和完成交付",
+  "start_url": "https://musetoken.store/admin/",
+  "scope": "https://musetoken.store/admin/",
+  "display": "standalone",
+  "background_color": "#f5f6fa",
+  "theme_color": "#293e70",
+  "icons": [
+    { "src": "https://musetoken.store/sites/muse/store-logo.png", "sizes": "153x153", "type": "image/png", "purpose": "any" }
+  ]
+}

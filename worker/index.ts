@@ -1,7 +1,8 @@
 import type { D1Database } from "@cloudflare/workers-types";
+import { buildPushPayload, type PushSubscription } from "@block65/webcrypto-web-push";
 import { tokenPlans, accountPriceCents, accountTitle } from "../src/lib/products";
 
-type Env = { DB: D1Database; ASSETS: { fetch(request: Request): Promise<Response> }; ADMIN_PASSWORD_HASH: string; RESEND_API_KEY?: string; GMAIL_SCRIPT_URL?: string; GMAIL_SCRIPT_TOKEN?: string };
+type Env = { DB: D1Database; ASSETS: { fetch(request: Request): Promise<Response> }; ADMIN_PASSWORD_HASH: string; RESEND_API_KEY?: string; GMAIL_SCRIPT_URL?: string; GMAIL_SCRIPT_TOKEN?: string; PUSH_PUBLIC_KEY?: string; PUSH_PRIVATE_KEY?: string };
 type ExecutionContextLike = { waitUntil(promise: Promise<unknown>): void };
 type Row = {
   id: string; requestHash: string; inputHash: string; tokenHash: string; code: string;
@@ -81,6 +82,56 @@ async function sendOrderEmails(env: Env) {
     }
   }
 }
+function pushSubscription(value: unknown): PushSubscription | null {
+  if (!value || typeof value !== "object") return null;
+  const item = value as Partial<PushSubscription>;
+  if (typeof item.endpoint !== "string" || item.endpoint.length > 2048 || !item.keys || typeof item.keys.auth !== "string" || typeof item.keys.p256dh !== "string") return null;
+  try {
+    const endpoint = new URL(item.endpoint);
+    const host = endpoint.hostname.toLowerCase();
+    if (endpoint.protocol !== "https:" || endpoint.port || !(host.endsWith(".push.apple.com") || host === "fcm.googleapis.com" || host === "updates.push.services.mozilla.com")) return null;
+  } catch { return null; }
+  if (!/^[\w-]{10,100}$/.test(item.keys.auth) || !/^[\w-]{60,150}$/.test(item.keys.p256dh)) return null;
+  return { endpoint: item.endpoint, expirationTime: typeof item.expirationTime === "number" ? item.expirationTime : null, keys: { auth: item.keys.auth, p256dh: item.keys.p256dh } };
+}
+async function deliverPush(env: Env, subscription: PushSubscription, title: string, bodyText: string, tag: string) {
+  if (!env.PUSH_PUBLIC_KEY || !env.PUSH_PRIVATE_KEY) throw new Error("push_not_configured");
+  const payload = await buildPushPayload({ data: JSON.stringify({ title, body: bodyText, tag }), options: { ttl: 3600, urgency: "high" } }, subscription, {
+    subject: "mailto:daolingz46@gmail.com", publicKey: env.PUSH_PUBLIC_KEY, privateKey: env.PUSH_PRIVATE_KEY,
+  });
+  return fetch(subscription.endpoint, { ...payload, redirect: "error" });
+}
+async function queueOrderPush(env: Env, order: Row, eventType: "created" | "reported", ctx: ExecutionContextLike) {
+  const now = Date.now();
+  await env.DB.prepare("INSERT OR IGNORE INTO push_outbox(orderId,eventType,endpoint,nextAttemptAt,createdAt) SELECT ?,?,endpoint,?,? FROM push_subscriptions")
+    .bind(order.id, eventType, now, now).run();
+  if (env.PUSH_PUBLIC_KEY && env.PUSH_PRIVATE_KEY) ctx.waitUntil(sendOrderPushes(env));
+}
+async function sendOrderPushes(env: Env) {
+  if (!env.PUSH_PUBLIC_KEY || !env.PUSH_PRIVATE_KEY) return;
+  const now = Date.now();
+  const pending = await env.DB.prepare("SELECT p.orderId,p.eventType,p.endpoint,p.attempts,s.subscription,o.code,o.title FROM push_outbox p JOIN push_subscriptions s ON s.endpoint=p.endpoint JOIN orders o ON o.id=p.orderId WHERE p.sentAt IS NULL AND p.nextAttemptAt<=? ORDER BY p.createdAt LIMIT 10")
+    .bind(now).all<{ orderId: string; eventType: string; endpoint: string; attempts: number; subscription: string; code: string; title: string }>();
+  for (const item of pending.results) {
+    const claimed = await env.DB.prepare("UPDATE push_outbox SET attempts=attempts+1,nextAttemptAt=? WHERE orderId=? AND eventType=? AND endpoint=? AND sentAt IS NULL AND nextAttemptAt<=?")
+      .bind(now + 60000, item.orderId, item.eventType, item.endpoint, now).run();
+    if (!claimed.meta.changes) continue;
+    try {
+      const subscription = pushSubscription(JSON.parse(item.subscription));
+      if (!subscription) throw new Error("invalid_subscription");
+      const reported = item.eventType === "reported";
+      const response = await deliverPush(env, subscription, reported ? "买家已反馈付款" : "Muse 商店新订单", reported ? `订单码 ${item.code}，请核实到账。` : `${item.title} · 订单码 ${item.code}`, `${item.orderId}:${item.eventType}`);
+      if (response.status === 404 || response.status === 410) {
+        await env.DB.batch([env.DB.prepare("DELETE FROM push_subscriptions WHERE endpoint=?").bind(item.endpoint), env.DB.prepare("DELETE FROM push_outbox WHERE endpoint=?").bind(item.endpoint)]);
+      } else if (response.ok) {
+        await env.DB.prepare("UPDATE push_outbox SET sentAt=? WHERE orderId=? AND eventType=? AND endpoint=?").bind(Date.now(), item.orderId, item.eventType, item.endpoint).run();
+      } else throw new Error(`push_${response.status}`);
+    } catch {
+      const retryAt = Date.now() + Math.min(3600000, 15000 * 2 ** Math.min(item.attempts, 8));
+      await env.DB.prepare("UPDATE push_outbox SET nextAttemptAt=? WHERE orderId=? AND eventType=? AND endpoint=? AND sentAt IS NULL").bind(retryAt, item.orderId, item.eventType, item.endpoint).run();
+    }
+  }
+}
 function publicOrder(row: Row, token: string) {
   const status = row.status === "pending" && row.expiresAt <= Date.now() ? "expired" : row.status;
   return { id: row.id, token, code: row.code, product: row.product, title: row.title,
@@ -125,7 +176,7 @@ async function createOrder(env: Env, request: Request, input: Record<string, unk
     const result = await env.DB.prepare("INSERT OR IGNORE INTO orders(id,requestHash,inputHash,tokenHash,code,product,title,amountCents,target,method,createdAt,expiresAt,updatedAt) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)")
       .bind(id, requestHash, inputHash, await hash(token), code, input.product, title, amount, target, input.method, now, now + 15 * 60000, now).run();
     const row = await env.DB.prepare("SELECT * FROM orders WHERE requestHash=?").bind(requestHash).first<Row>();
-    if (row) { if (!matchesInput(row)) throw new HttpError(409, "订单内容已改变，请重新下单"); await queueOrderEmail(env, row, "created", ctx); return json(publicOrder(row, token), result.meta.changes ? 201 : 200); }
+    if (row) { if (!matchesInput(row)) throw new HttpError(409, "订单内容已改变，请重新下单"); await queueOrderEmail(env, row, "created", ctx); if (result.meta.changes) await queueOrderPush(env, row, "created", ctx); return json(publicOrder(row, token), result.meta.changes ? 201 : 200); }
   }
   throw new HttpError(503, "当前订单较多，请稍后再试或联系支持");
 }
@@ -152,6 +203,34 @@ async function admin(env: Env, request: Request, path: string) {
     try { await sendEmail(env, `muse-email-test-${crypto.randomUUID()}`, "Muse 商店邮件提醒测试", "<p>邮件提醒已成功连接。新订单和买家付款反馈将自动发送到此邮箱。</p>", "邮件提醒已成功连接。新订单和买家付款反馈将自动发送到此邮箱。"); }
     catch { throw new HttpError(502, "邮件测试失败，请检查 Gmail 脚本部署地址和令牌，或 Resend API Key"); }
     return json({ ok: true });
+  }
+  if (path === "/api/admin/push-key" && request.method === "GET") {
+    if (!env.PUSH_PUBLIC_KEY || !env.PUSH_PRIVATE_KEY) throw new HttpError(503, "手机推送尚未配置");
+    return json({ publicKey: env.PUSH_PUBLIC_KEY });
+  }
+  if (path === "/api/admin/push-subscribe" && request.method === "POST") {
+    if (!env.PUSH_PUBLIC_KEY || !env.PUSH_PRIVATE_KEY) throw new HttpError(503, "手机推送尚未配置");
+    const subscription = pushSubscription((await body(request)).subscription);
+    if (!subscription) throw new HttpError(400, "手机推送订阅无效");
+    const existing = await env.DB.prepare("SELECT endpoint FROM push_subscriptions WHERE endpoint=?").bind(subscription.endpoint).first();
+    const count = await env.DB.prepare("SELECT COUNT(*) AS total FROM push_subscriptions").first<{ total: number }>();
+    if (!existing && (count?.total || 0) >= 5) throw new HttpError(409, "已连接 5 台设备，请联系支持清理旧设备");
+    await env.DB.prepare("INSERT INTO push_subscriptions(endpoint,subscription,createdAt) VALUES(?,?,?) ON CONFLICT(endpoint) DO UPDATE SET subscription=excluded.subscription")
+      .bind(subscription.endpoint, JSON.stringify(subscription), Date.now()).run();
+    return json({ ok: true });
+  }
+  if (path === "/api/admin/push-test" && request.method === "POST") {
+    await limit(env, request, "push-test", 10, 3600);
+    const endpoint = str((await body(request)).endpoint, 2048);
+    const row = await env.DB.prepare("SELECT subscription FROM push_subscriptions WHERE endpoint=?").bind(endpoint).first<{ subscription: string }>();
+    if (!row) throw new HttpError(404, "这台手机尚未开启推送");
+    try {
+      const subscription = pushSubscription(JSON.parse(row.subscription));
+      if (!subscription) throw new Error("invalid_subscription");
+      const response = await deliverPush(env, subscription, "Muse 工作台测试提醒", "手机推送已连接，新订单会自动提醒。", `test:${Date.now()}`);
+      if (!response.ok) throw new Error(`push_${response.status}`);
+      return json({ ok: true });
+    } catch { throw new HttpError(502, "测试推送未送达，请检查 iPhone 通知权限后重试"); }
   }
   if (path === "/api/admin/logout" && request.method === "POST") { await env.DB.prepare("DELETE FROM sessions WHERE hash=?").bind(await hash(cookie(request))).run(); return json({ ok: true }, 200, { "Set-Cookie": cookieHeader(request, "", 0) }); }
   if (path === "/api/admin/orders" && request.method === "GET") {
@@ -258,7 +337,8 @@ const worker = {
           if (input.remarkConfirmed !== true) throw new HttpError(400, "请确认付款备注已填写订单码");
           if (row.status === "pending" || row.status === "expired") {
             const now = Date.now();
-            await env.DB.prepare("UPDATE orders SET status='reported',reportedAt=?,updatedAt=? WHERE id=? AND status IN ('pending','expired')").bind(now, now, row.id).run();
+            const changed = await env.DB.prepare("UPDATE orders SET status='reported',reportedAt=?,updatedAt=? WHERE id=? AND status IN ('pending','expired')").bind(now, now, row.id).run();
+            if (changed.meta.changes) await queueOrderPush(env, row, "reported", ctx);
           }
           const updated = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(row.id).first<Row>();
           await queueOrderEmail(env, updated!, "reported", ctx);
@@ -273,6 +353,6 @@ const worker = {
       return withCors(json({ message: "订单服务暂时不可用，请稍后重试" }, 500));
     }
   },
-  async scheduled(_event: unknown, env: Env) { await expire(env); await sendOrderEmails(env); },
+  async scheduled(_event: unknown, env: Env) { await expire(env); await sendOrderEmails(env); await sendOrderPushes(env); },
 };
 export default worker;
