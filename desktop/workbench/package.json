@@ -1,0 +1,39 @@
+{
+  "name": "muse-workbench-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Muse 店主工作台 Windows 桌面版",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "build:win": "node scripts/build-win.cjs"
+  },
+  "devDependencies": {
+    "electron": "45.0.0",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "com.muse.store.workbench",
+    "productName": "Muse 店主工作台",
+    "asar": true,
+    "files": [
+      "main.cjs",
+      "offline.html",
+      "build/muse.ico",
+      "package.json"
+    ],
+    "directories": {
+      "output": "../../dist/workbench"
+    },
+    "win": {
+      "icon": "build/muse.ico",
+      "target": [
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "artifactName": "Muse-店主工作台-${version}-${arch}.${ext}"
+    }
+  }
+}

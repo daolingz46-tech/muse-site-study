@@ -26,7 +26,7 @@ jobs:
         env:
           STATIC_EXPORT: "true"
           NEXT_PUBLIC_BASE_PATH: /muse-site-study
-          NEXT_PUBLIC_STORE_API_BASE_URL: https://muse-store.muse-site-study.workers.dev
+          NEXT_PUBLIC_STORE_API_BASE_URL: https://api.musetoken.store
         run: npm run build:store
       - run: touch out/.nojekyll
       - uses: actions/upload-pages-artifact@v4
