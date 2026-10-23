@@ -44,8 +44,7 @@ export function Workbench() {
   const [alert, setAlert] = useState(""), [desktopAlerts, setDesktopAlerts] = useState(false), [soundEnabled, setSoundEnabled] = useState(false);
   const [visits, setVisits] = useState<VisitResult | null>(null);
   const [emailConfigured, setEmailConfigured] = useState<boolean | null>(null);
-  const [buyerDeliveryReady, setBuyerDeliveryReady] = useState(false);
-  const [attachmentReady, setAttachmentReady] = useState(false);
+  const [attachmentReady, setAttachmentReady] = useState<boolean | null>(null);
   const [emailTestBusy, setEmailTestBusy] = useState(false);
   const [tutorial, setTutorial] = useState<Tutorial | null>(null);
   const [mailOrder, setMailOrder] = useState<AdminOrder | null>(null), [card, setCard] = useState(""), [includeTutorial, setIncludeTutorial] = useState(true);
@@ -135,7 +134,7 @@ export function Workbench() {
   useEffect(() => {
     if (auth !== "ready") return;
     let active = true;
-    void api("email-status").then((data: { configured: boolean; buyerDelivery?: boolean; attachments?: boolean }) => { if (active) { setEmailConfigured(data.configured); setBuyerDeliveryReady(data.buyerDelivery === true); setAttachmentReady(data.attachments === true); } }).catch(() => {});
+    void api("email-status").then((data: { configured: boolean; attachments?: boolean }) => { if (active) { setEmailConfigured(data.configured); setAttachmentReady(data.attachments === true); } }).catch(() => {});
     return () => { active = false; };
   }, [auth]);
   useEffect(() => {
@@ -283,7 +282,6 @@ export function Workbench() {
     <p className="wb-description">以微信、支付宝收款记录核实到账，再处理充值或账号交付。iPhone 请用 Safari 打开此页，分享 → 添加到主屏幕，从桌面图标进入后点“开启手机推送”。工作台打开时可另点“开启订单叮声”。</p>
     {emailConfigured === false && <div className="wb-email-setup" role="status"><strong>订单邮件提醒还未启用</strong><span>邮件服务尚未配置。可用个人 Gmail 的 Apps Script 免域名发信，或配置 Resend API Key；新订单和买家付款反馈会发到 daolingz46@gmail.com。</span></div>}
     {emailConfigured === true && <div className="wb-email-ready"><span>邮件提醒已连接 · 新订单和付款反馈将发送到 daolingz46@gmail.com</span><button onClick={() => void sendTestEmail()} disabled={emailTestBusy}>{emailTestBusy ? "发送中…" : "发送测试邮件"}</button></div>}
-    {emailConfigured === true && !buyerDeliveryReady && <div className="wb-email-setup" role="status"><strong>买家卡密邮件还需更新 Google 脚本</strong><span>店主订单提醒正常；请把新版 Code.gs 发布到原来的网页应用后刷新工作台，即可向买家发卡密。</span></div>}
     {alert && <div className="wb-alert" role="status"><span>{alert}</span><button aria-label="关闭提醒" onClick={() => setAlert("")}>×</button></div>}
     {!!result?.summary.awaiting && <button className="wb-awaiting" onClick={() => { setStatus("reported"); setSearch(""); setQuery(""); setPage(0); }}><strong>待核实到账：{result.summary.awaiting} 笔</strong><span>买家已提交付款反馈，点击查看并核对收款记录 →</span></button>}
     <section className="wb-metrics" aria-label="经营数据">{[
@@ -300,7 +298,7 @@ export function Workbench() {
       <div className="wb-table-scroll"><table><thead><tr><th>订单 / 商品</th><th>买家信息</th><th>金额 / 方式</th><th>状态</th><th>下单时间</th><th>操作</th></tr></thead><tbody>{result?.orders.map(order => <tr key={order.id}>
         <td><strong className="wb-code">{order.code}</strong><span>{order.title}</span><small title={order.id}>{order.id}</small></td><td><small>{order.product === "muse-token" ? "账号邀请码" : "收件邮箱"}</small><span className="wb-target">{order.target}</span></td>
         <td><strong>¥{formatMoney(order.amountCents)}</strong><span>{order.method === "wechat" ? "微信" : "支付宝"}</span></td><td><span className={`wb-status is-${order.status}`}>{labels[order.status]}</span>{order.reference && <small title={order.reference}>交易号：{order.reference}</small>}</td><td><span>{date(order.createdAt)}</span></td>
-        <td><div className="wb-order-actions">{order.status === "complete" && <span className="wb-done">已交付 · 可售后</span>}{!["processing", "complete"].includes(order.status) && <button className="wb-action wb-verify" onClick={() => open(order)}><ShieldCheck size={14}/>核实收款</button>}{order.product === "muse" && ["processing", "complete"].includes(order.status) ? <button className={`wb-action ${order.status === "complete" ? "wb-resend" : "wb-send"}`} disabled={!buyerDeliveryReady} title={!buyerDeliveryReady ? "请先更新 Google 邮件脚本" : "向买家邮箱发送卡密"} onClick={() => openMail(order)}><Mail size={14}/>{order.status === "complete" ? "再次发送" : "发送邮件"}</button> : order.product === "muse-token" && order.status === "processing" && <button className="wb-action wb-send" onClick={() => open(order)}>完成充值</button>}</div></td>
+        <td><div className="wb-order-actions">{order.status === "complete" && <span className="wb-done">已交付 · 可售后</span>}{!["processing", "complete"].includes(order.status) && <button className="wb-action wb-verify" onClick={() => open(order)}><ShieldCheck size={14}/>核实收款</button>}{order.product === "muse" && ["processing", "complete"].includes(order.status) ? <button className={`wb-action ${order.status === "complete" ? "wb-resend" : "wb-send"}`} title="向买家邮箱发送卡密" onClick={() => openMail(order)}><Mail size={14}/>{order.status === "complete" ? "再次发送" : "发送邮件"}</button> : order.product === "muse-token" && order.status === "processing" && <button className="wb-action wb-send" onClick={() => open(order)}>完成充值</button>}</div></td>
       </tr>)}</tbody></table></div>
       {!result?.orders.length && <div className="wb-empty"><ShoppingBagIcon/><h3>暂无匹配订单</h3><p>客户下单后，订单会自动出现在这里。</p></div>}
       <footer className="wb-pagination"><span>共 {result?.count.total || 0} 笔 · 每页 50 笔</span><div><button disabled={page === 0} onClick={() => setPage(page - 1)}>上一页</button><span>{page + 1}</span><button disabled={(page + 1) * 50 >= (result?.count.total || 0)} onClick={() => setPage(page + 1)}>下一页</button></div></footer>
@@ -317,9 +315,9 @@ export function Workbench() {
         <label className="wb-mail-tutorial wb-check"><input type="checkbox" checked={includeTutorial} onChange={e => setIncludeTutorial(e.target.checked)}/><span><strong>附带默认教程</strong><small>{tutorial?.blocks.length ? `${tutorial.title} · ${tutorial.blocks.length} 段图文` : "教程尚未设置，勾选也不会附带内容"}</small></span></label>
         <div className="wb-file-heading"><strong>订单专属附件</strong><span>可选图片或短视频，最多 4 个，合计 20 MB</span></div>
         {mailFiles.map(file => <div className="wb-file-row" key={file.id}><label className="wb-check"><input type="checkbox" checked={selectedFileIds.includes(file.id)} onChange={event => setSelectedFileIds(current => event.target.checked ? [...current, file.id] : current.filter(id => id !== file.id))}/><span>{file.name} · {(file.size / 1_000_000).toFixed(1)} MB</span></label><button type="button" aria-label={`删除附件 ${file.name}`} onClick={() => void removeMailFile(file.id)}><Trash2 size={15}/></button></div>)}
-        <label className="wb-add-file"><Plus size={17}/>{uploadingFile ? `正在上传 ${uploadProgress}%` : "添加附件"}<input type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/quicktime,video/webm" disabled={uploadingFile || mailBusy || !attachmentReady} onChange={event => { void addMailFiles(event.target.files); event.target.value = ""; }}/></label>
-        {!attachmentReady && <p className="wb-file-help">附件发信需要先更新 Google 邮件脚本；卡密与默认教程仍可正常发送。</p>}
-        {mailError && <p className="wb-error" role="alert">{mailError}</p>}<button className="wb-primary wb-mail-submit" disabled={!card.trim() || mailBusy || uploadingFile || (selectedFileIds.length > 0 && !attachmentReady)}>{mailBusy ? "发送中…" : mailOrder.status === "complete" ? "再次发送到买家邮箱" : "发送邮件并标记已交付"}</button>
+        <label className="wb-add-file"><Plus size={17}/>{uploadingFile ? `正在上传 ${uploadProgress}%` : "添加附件"}<input type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/quicktime,video/webm" disabled={uploadingFile || mailBusy} onChange={event => { void addMailFiles(event.target.files); event.target.value = ""; }}/></label>
+        {attachmentReady === false && <p className="wb-file-help">暂未确认附件发信状态；可尝试发送，若失败会显示具体原因。</p>}
+        {mailError && <p className="wb-error" role="alert">{mailError}</p>}{!card.trim() && <p className="wb-file-help">填写卡密后即可发送。</p>}<button className="wb-primary wb-mail-submit" disabled={!card.trim() || mailBusy || uploadingFile}>{mailBusy ? "发送中…" : mailOrder.status === "complete" ? "再次发送到买家邮箱" : "发送邮件并标记已交付"}</button>
       </form>
     </dialog>}
   </main>;
