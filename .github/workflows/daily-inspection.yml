@@ -33,4 +33,6 @@ jobs:
       - name: Check dependency vulnerabilities
         run: npm audit --audit-level=high
       - run: npm run check
+        env:
+          STATIC_EXPORT: 'true'
       - run: npm run test:orders
