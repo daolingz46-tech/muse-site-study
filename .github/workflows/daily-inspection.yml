@@ -1,0 +1,36 @@
+name: Daily Muse inspection
+on:
+  schedule:
+    # 北京时间每天 09:17；GitHub 排队可能延后。
+    - cron: '17 1 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: daily-muse-inspection
+  cancel-in-progress: false
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Check production without creating orders or sending email
+        run: node scripts/inspect-live.mjs
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Check dependency vulnerabilities
+        run: npm audit --audit-level=high
+      - run: npm run check
+      - run: npm run test:orders

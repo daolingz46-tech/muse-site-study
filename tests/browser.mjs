@@ -2,6 +2,7 @@ import { chromium, expect } from "@playwright/test";
 import { readFileSync, mkdirSync } from "node:fs";
 const base = process.env.TEST_BASE_URL || "http://127.0.0.1:8787";
 if (!/^http:\/\/(localhost|127\.0\.0\.1):/.test(base)) throw new Error("浏览器测试只允许本地服务，避免生成线上测试订单");
+function assertLocal(url) { if (new URL(url).origin !== base) throw new Error("测试意外跳转到了外部网站，已停止"); }
 const password = readFileSync("admin-access.local.txt", "utf8").match(/管理密码：(.+)/)[1].trim();
 const browser = await chromium.launch({ channel: "chrome", headless: true });
 const errors = [];
@@ -9,7 +10,8 @@ try {
   mkdirSync("temp/evidence", { recursive: true });
   const customer = await browser.newContext({ viewport: { width: 390, height: 844 }, permissions: ["clipboard-read", "clipboard-write"] });
   const page = await customer.newPage(); page.on("pageerror", e => errors.push(e.message));
-  await page.goto(base); await expect(page.getByText(/仅供学习|教学演示|非官方/)).toHaveCount(0);
+  await page.goto(base); await page.waitForLoadState("networkidle");
+  assertLocal(page.url()); await expect(page.getByText(/仅供学习|教学演示|非官方/)).toHaveCount(0);
   await page.getByRole("tab", { name: "Muse Token" }).click();
   await page.locator('input[name="token-plan"][value="100"]').check();
   await page.getByLabel("账号邀请码").fill("BROWSER-CHECK-INVITE");
@@ -43,11 +45,11 @@ try {
   const row = admin.locator("tbody tr").filter({ hasText: codeText }); await expect(row).toHaveCount(1);
   await row.getByRole("button", { name: "核实收款" }).click();
   await admin.getByLabel("支付交易单号").fill(`BROWSER-WECHAT-${Date.now()}`);
-  await admin.getByRole("checkbox", { name: /我已核对实际到账/ }).check(); await admin.getByRole("button", { name: "确认到账，进入待交付" }).click();
-  await expect(row.getByRole("button", { name: "完成交付" })).toBeVisible();
+  await admin.getByRole("button", { name: "确定", exact: true }).click();
+  await expect(row.getByRole("button", { name: "完成充值" })).toBeVisible();
   await lookup.getByRole("button", { name: "刷新订单状态" }).click(); await expect(lookup.getByRole("heading", { name: "已收款，处理中" })).toBeVisible();
   await admin.screenshot({ path: "temp/evidence/workbench-desktop.png", fullPage: true });
-  await row.getByRole("button", { name: "完成交付" }).click(); await admin.getByRole("checkbox", { name: "我已为此邀请码完成充值" }).check();
+  await row.getByRole("button", { name: "完成充值" }).click(); await admin.getByRole("checkbox", { name: "我已为此邀请码完成充值" }).check();
   await admin.getByRole("button", { name: "确认已完成交付" }).click();
   await lookup.getByRole("button", { name: "刷新订单状态" }).click(); await expect(lookup.getByRole("heading", { name: "订单已完成" })).toBeVisible();
   await admin.setViewportSize({ width: 390, height: 844 }); await admin.screenshot({ path: "temp/evidence/workbench-mobile.png", fullPage: true });

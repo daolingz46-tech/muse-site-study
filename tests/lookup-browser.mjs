@@ -1,10 +1,12 @@
 import { chromium, expect } from "@playwright/test";
-const base = "http://127.0.0.1:8787";
+const base = process.env.TEST_BASE_URL || "http://127.0.0.1:8787";
+if (!/^http:\/\/(localhost|127\.0\.0\.1):/.test(base)) throw new Error("查询测试仅允许本地服务");
 const browser = await chromium.launch({ channel: "chrome", headless: true });
 try {
   const owner = await browser.newContext({ viewport: { width: 390, height: 844 } });
   const page = await owner.newPage();
-  await page.goto(base);
+  await page.goto(base); await page.waitForLoadState("networkidle");
+  if (new URL(page.url()).origin !== base) throw new Error("测试跳转到外部网站，已停止");
   const order = await page.evaluate(async () => {
     const r = await fetch("/api/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ product: "muse-token", planId: "100", inviteCode: "LOOKUP-CHECK-INVITE", method: "wechat", acceptedTerms: true, requestId: crypto.randomUUID() }) });
     if (!r.ok) throw Error("Create failed"); return r.json();

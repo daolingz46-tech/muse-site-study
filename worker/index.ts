@@ -107,10 +107,10 @@ async function hasAttachmentDelivery(env: Env) {
     return response.ok && result?.attachments === true;
   } catch { return false; }
 }
-async function sendEmail(env: Env, id: string, subject: string, html: string, text: string, to = "daolingz46@gmail.com", files: DeliveryFile[] = []) {
+async function sendEmail(env: Env, id: string, subject: string, html: string, text: string, to = "daolingz46@gmail.com", files: DeliveryFile[] = [], purpose: "owner_notice" | "buyer_delivery" = "owner_notice") {
   if (env.GMAIL_SCRIPT_URL && env.GMAIL_SCRIPT_TOKEN) {
     const attachments = await Promise.all(files.map(async file => ({ name: file.name, url: `https://musetoken.store/api/delivery-files/${file.id}?signature=${await fileSignature(env, file.id)}` })));
-    const response = await fetch(env.GMAIL_SCRIPT_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, token: env.GMAIL_SCRIPT_TOKEN, to, purpose: to === "daolingz46@gmail.com" ? "owner_notice" : "buyer_delivery", subject, html, text, attachments }), redirect: "follow" });
+    const response = await fetch(env.GMAIL_SCRIPT_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, token: env.GMAIL_SCRIPT_TOKEN, to, purpose, subject, html, text, attachments }), redirect: "follow" });
     const result = await response.json().catch(() => null) as { ok?: boolean; message?: string } | null;
     if (!response.ok || !result?.ok) throw new Error(`gmail_script_${response.status}_${result?.message || "failed"}`);
     return;
@@ -259,7 +259,10 @@ async function admin(env: Env, request: Request, path: string) {
     return json({ ok: true }, 200, { "Set-Cookie": cookieHeader(request, session, 28800) });
   }
   await requireAdmin(env, request);
-  if (path === "/api/admin/email-status" && request.method === "GET") return json({ configured: hasEmailConfig(env), buyerDelivery: await hasBuyerDelivery(env), attachments: await hasAttachmentDelivery(env), provider: env.GMAIL_SCRIPT_URL && env.GMAIL_SCRIPT_TOKEN ? "gmail" : env.RESEND_API_KEY ? "resend" : "none" });
+  if (path === "/api/admin/email-status" && request.method === "GET") {
+    const [buyerDelivery, attachments] = await Promise.all([hasBuyerDelivery(env), hasAttachmentDelivery(env)]);
+    return json({ configured: hasEmailConfig(env), buyerDelivery, attachments, provider: env.GMAIL_SCRIPT_URL && env.GMAIL_SCRIPT_TOKEN ? "gmail" : env.RESEND_API_KEY ? "resend" : "none" });
+  }
   if (path === "/api/admin/email-test" && request.method === "POST") {
     if (!hasEmailConfig(env)) throw new HttpError(503, "邮件服务尚未配置");
     try { await sendEmail(env, `muse-email-test-${crypto.randomUUID()}`, "Muse 商店邮件提醒测试", "<p>邮件提醒已成功连接。新订单和买家付款反馈将自动发送到此邮箱。</p>", "邮件提醒已成功连接。新订单和买家付款反馈将自动发送到此邮箱。"); }
@@ -408,7 +411,7 @@ async function admin(env: Env, request: Request, path: string) {
       ? await env.DB.prepare("UPDATE delivery_emails SET status='sending' WHERE orderId=? AND status='sent'").bind(order.id).run()
       : await env.DB.prepare("INSERT OR IGNORE INTO delivery_emails(orderId,status,createdAt) VALUES(?,'sending',?)").bind(order.id, Date.now()).run();
     if (!claimed.meta.changes) throw new HttpError(409, "这笔订单的邮件正在发送，请稍后重试");
-    try { await sendEmail(env, `delivery:${order.id}:${crypto.randomUUID()}`, `Muse 成品账号卡密 · 订单 ${order.code}`, html, text, order.target, files); }
+    try { await sendEmail(env, `delivery:${order.id}:${crypto.randomUUID()}`, `Muse 成品账号卡密 · 订单 ${order.code}`, html, text, order.target, files, "buyer_delivery"); }
     catch {
       if (previous) await env.DB.prepare("UPDATE delivery_emails SET status='sent' WHERE orderId=? AND status='sending'").bind(order.id).run();
       else await env.DB.prepare("DELETE FROM delivery_emails WHERE orderId=? AND status='sending'").bind(order.id).run();
@@ -473,6 +476,10 @@ const worker = {
       }
       if (request.method !== "GET" && !corsOrigin) throw new HttpError(403, "请求来源无效，请刷新页面");
       if (request.method === "GET" && origin && !corsOrigin) throw new HttpError(403, "请求来源无效，请刷新页面");
+      if (path === "/api/health" && request.method === "GET") {
+        await env.DB.prepare("SELECT id FROM orders LIMIT 1").all();
+        return withCors(json({ ok: true, service: "muse-store", checkedAt: Date.now() }));
+      }
       if (path.startsWith("/api/admin/")) return withCors(await admin(env, request, path));
       if (path === "/api/visit" && request.method === "POST") {
         await limit(env, request, "visit", 60, 60);

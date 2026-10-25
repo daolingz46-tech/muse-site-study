@@ -60,7 +60,7 @@ export function MuseStorefront() {
   }, []);
 
   useEffect(() => {
-    if (window.location.origin !== new URL(canonicalStore).origin) {
+    if (!["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname) && window.location.origin !== new URL(canonicalStore).origin) {
       const params = new URLSearchParams(window.location.hash.slice(1));
       const saved = readSavedOrders();
       if (saved.length) params.set("receipts", JSON.stringify(saved));

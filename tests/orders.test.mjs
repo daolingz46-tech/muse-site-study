@@ -112,6 +112,17 @@ test("订单、收款核实和交付的数据库流程", async t => {
     const queued = await db.prepare("SELECT eventType FROM push_outbox WHERE orderId=? ORDER BY eventType").bind(created.id).all();
     assert.deepEqual(queued.results.map(row => row.eventType), ["created", "reported"]);
   });
+  await t.test("公开健康检查不暴露订单；店主邮箱作为买家邮箱时仍按交付邮件处理", async () => {
+    const health = await call("/api/health"); assert.equal(health.status, 200); assert.equal(health.data.ok, true);
+    assert.deepEqual(Object.keys(health.data).sort(), ["checkedAt", "ok", "service"]);
+    const login = await call("/api/admin/login", { password });
+    const account = (await call("/api/orders", { product: "muse", email: "daolingz46@gmail.com", method: "wechat", acceptedTerms: true, requestId: randomUUID() })).data;
+    await call("/api/admin/update", { id: account.id, action: "confirm" }, login.cookie);
+    assert.equal((await call("/api/admin/send-delivery", { id: account.id, card: "OWNER-TEST" }, login.cookie)).status, 200);
+    assert.equal(sentMessages.find(m => m.text?.includes("OWNER-TEST")).purpose, "buyer_delivery");
+    const list = await call("/api/admin/orders?q=" + account.code, undefined, login.cookie);
+    assert.equal(list.data.orders[0].emailSendCount, 1); assert.ok(list.data.orders[0].emailSentAt);
+  });
   await t.test("图文教程保存、图片读取和成品账号邮件交付权限", async () => {
     const login = await call("/api/admin/login", { password });
     const adminCookie = login.cookie;
@@ -140,8 +151,19 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal(firstMail.html.includes(url), false);
     assert.equal(firstMail.attachments.length, 1);
     assert.equal((await mf.dispatchFetch(firstMail.attachments[0].url)).status, 200);
+    const video = Uint8Array.from({ length: 1_800_123 }, (_, i) => i % 251);
+    const videoStart = await call("/api/admin/delivery-file/start", { orderId: account.id, name: "video.mp4", mime: "video/mp4", size: video.length }, adminCookie);
+    const uploadPart = part => mf.dispatchFetch(`https://shop.example/api/admin/delivery-file/${videoStart.data.id}/${part}`, { method: "POST", headers: { Origin: "https://shop.example", Cookie: adminCookie, "Content-Type": "application/octet-stream" }, body: video.slice(part * videoStart.data.chunkBytes, (part + 1) * videoStart.data.chunkBytes) });
+    assert.equal((await uploadPart(0)).status, 200);
+    assert.equal((await call("/api/admin/send-delivery", { id: account.id, card: "VIDEO", fileIds: [videoStart.data.id] }, adminCookie)).status, 400);
+    assert.equal((await uploadPart(1)).status, 200);
+    assert.equal((await call("/api/admin/send-delivery", { id: account.id, card: "VIDEO", fileIds: [videoStart.data.id] }, adminCookie)).status, 200);
+    const videoMail = sentMessages.find(m => m.attachments?.some(file => file.name === "video.mp4"));
+    const downloaded = await mf.dispatchFetch(videoMail.attachments[0].url);
+    assert.equal(downloaded.status, 200);
+    assert.deepEqual(new Uint8Array(await downloaded.arrayBuffer()), video);
     assert.equal((await call("/api/admin/send-delivery", { id: account.id, card: "CARD-TEST-AGAIN", includeTutorial: true, fileIds: [] }, adminCookie)).status, 200);
-    assert.equal((await db.prepare("SELECT sendCount FROM delivery_emails WHERE orderId=?").bind(account.id).first()).sendCount, 2);
+    assert.equal((await db.prepare("SELECT sendCount FROM delivery_emails WHERE orderId=?").bind(account.id).first()).sendCount, 3);
     const delivered = (await call("/api/orders/lookup", account)).data;
     assert.equal(delivered.status, "complete"); assert.equal(delivered.delivery.method, "email");
     assert.ok(sentMessages.some(message => message.to === "tutorial-buyer@example.com" && message.html.includes("CARD-TEST-AGAIN") && message.html.includes(url)));
