@@ -55,7 +55,7 @@
   transition: transform .48s cubic-bezier(.22,1,.36,1);
 }
 .muse-switch-indicator.is-token { transform: translateX(100%); }
-.muse-switch button {
+.muse-switch [role=tab] {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -69,7 +69,7 @@
   font-size: 12px;
   font-weight: 550;
 }
-.muse-switch button[aria-selected=true] { color: #24262b; }
+.muse-switch [role=tab][aria-selected=true] { color: #24262b; }
 .muse-orders-link { display: flex; align-items: center; gap: 8px; padding: 12px 0 12px 12px; border: 0; background: transparent; color: #656971; font-size: 12px; }
 .muse-orders-link:hover { color: #1d1d1f; }
 .muse-product-layout {
@@ -359,7 +359,7 @@
   .muse-orders-link { padding: 6px 0 8px 10px; }
   .muse-orders-link span { display: block; font-size: 11px; }
   .muse-switch { top: 73px; width: 242px; padding: 4px; }
-  .muse-switch button { height: 34px; }
+  .muse-switch [role=tab] { height: 34px; }
   .muse-switch-indicator { top: 4px; bottom: 4px; left: 4px; width: calc(50% - 4px); }
   .muse-product-layout { display: flex; flex-direction: column; flex: 1; gap: 7px; width: calc(100% - 36px); margin: 0 auto; padding: 6px 0 28px; }
   .muse-product-stage { flex-shrink: 0; width: 100%; height: 239px; min-height: 0; padding: 0; }

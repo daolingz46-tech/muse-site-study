@@ -3,6 +3,7 @@ import { appendFileSync } from "node:fs";
 
 const checks = [
   ["商店首页", "https://musetoken.store/", 200, "text/html"],
+  ["Token 充值入口", "https://musetoken.store/token/", 200, "text/html"],
   ["工作台页面", "https://musetoken.store/admin/", 200, "text/html"],
   ["订单数据库连接", "https://musetoken.store/api/health", 200, "application/json"],
   ["API 域名", "https://api.musetoken.store/api/health", 200, "application/json"],

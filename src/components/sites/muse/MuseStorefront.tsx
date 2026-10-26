@@ -24,8 +24,8 @@ const terms = [
 const assetBase = process.env.NEXT_PUBLIC_BASE_PATH || "";
 const canonicalStore = "https://musetoken.store/";
 
-export function MuseStorefront() {
-  const [product, setProduct] = useState<Product>("muse");
+export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: Product }) {
+  const [product, setProduct] = useState<Product>(initialProduct);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [step, setStep] = useState<Step>("details");
   const [email, setEmail] = useState("");
@@ -64,7 +64,7 @@ export function MuseStorefront() {
       const params = new URLSearchParams(window.location.hash.slice(1));
       const saved = readSavedOrders();
       if (saved.length) params.set("receipts", JSON.stringify(saved));
-      window.location.replace(canonicalStore + window.location.search + (params.size ? `#${params}` : ""));
+      window.location.replace(canonicalStore + (initialProduct === "muse-token" ? "token/" : "") + window.location.search + (params.size ? `#${params}` : ""));
       return;
     }
     const params = new URLSearchParams(window.location.hash.slice(1));
@@ -74,7 +74,7 @@ export function MuseStorefront() {
       params.delete("receipts");
       window.history.replaceState(null, "", window.location.pathname + window.location.search + (params.size ? `#${params}` : ""));
     }
-  }, []);
+  }, [initialProduct]);
 
   useEffect(() => {
     if (window.location.origin !== new URL(canonicalStore).origin) return;
@@ -116,7 +116,7 @@ export function MuseStorefront() {
   function selectProduct(next: Product) {
     setProduct(next);
     setStep("details");
-    window.history.replaceState(null, "", window.location.pathname);
+    window.history.replaceState(null, "", `${assetBase}/${next === "muse-token" ? "token/" : ""}`);
     setAccepted(false);
     setError("");
   }
@@ -228,7 +228,7 @@ export function MuseStorefront() {
         <div className="muse-switch" role="tablist" aria-label="商品">
           <span className={`muse-switch-indicator ${product === "muse-token" ? "is-token" : ""}`} />
           {([["muse", "Muse AI"], ["muse-token", "Muse Token"]] as const).map(([id, label]) => (
-            <button key={id} id={`tab-${id}`} type="button" role="tab"
+            <a key={id} id={`tab-${id}`} href={`${assetBase}/${id === "muse-token" ? "token/" : ""}`} role="tab"
               aria-selected={product === id} aria-controls="muse-product-panel"
               tabIndex={product === id ? 0 : -1}
               onKeyDown={event => {
@@ -239,10 +239,14 @@ export function MuseStorefront() {
                   document.getElementById(`tab-${next}`)?.focus();
                 }
               }}
-              onClick={() => selectProduct(id)}>
+              onClick={event => {
+                if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                event.preventDefault();
+                selectProduct(id);
+              }}>
               <Image src={assetBase + "/sites/muse/store-logo.png"} width={20} height={20} alt="" draggable={false} />
               {label}
-            </button>
+            </a>
           ))}
         </div>
         <button className="muse-orders-link" type="button" onClick={() => { setOrderError(""); setDialog("orders"); }}>

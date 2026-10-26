@@ -36,3 +36,6 @@ jobs:
         env:
           STATIC_EXPORT: 'true'
       - run: npm run test:orders
+      - run: npx playwright install --with-deps chromium
+      - name: Check live Token navigation on mobile and desktop
+        run: node tests/store-navigation.mjs
