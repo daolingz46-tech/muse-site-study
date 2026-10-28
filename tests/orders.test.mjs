@@ -14,10 +14,11 @@ test("订单、收款核实和交付的数据库流程", async t => {
   let supplierPurchases = 0;
   let supplierTimeout = false;
   let supplierBalanceEnough = true;
+  let supplierStock = null;
   const mf = new Miniflare(convertV4MiniflareOptions({ workers: [{ name: "test-store", modules: true, scriptPath: "temp/worker/index.js", compatibilityDate: "2026-10-01", d1Databases: { DB: "test-orders" }, bindings: { ADMIN_PASSWORD_HASH: createHash("sha256").update(password).digest("hex"), GMAIL_SCRIPT_URL: "https://mail.test/exec", GMAIL_SCRIPT_TOKEN: "test-token", SUPPLIER_APP_ID: "test-app", SUPPLIER_SECRET: "test-secret" }, outboundService: async request => {
     if (new URL(request.url).hostname === "www.16688.com.cn") {
       const path = new URL(request.url).pathname;
-      if (path.endsWith("/quotePrice")) return Response.json({ code: 1, data: { balance_enough: supplierBalanceEnough, total_amount: 110 } });
+      if (path.endsWith("/quotePrice")) return Response.json({ code: 1, data: { balance_enough: supplierBalanceEnough, available_quantity: supplierStock, total_amount: 110 } });
       if (path.endsWith("/create")) { supplierPurchases++; if (supplierTimeout) throw new Error("simulated network failure"); return Response.json({ code: 1, data: { trade_no: "TEST-16688" } }); }
       if (path.endsWith("/query")) return Response.json({ code: 1, data: { status: 4, cards: [{ code: "TEST-CARD" }], instruction: "test instructions" } });
       throw new Error("unexpected supplier request");
@@ -194,7 +195,24 @@ test("订单、收款核实和交付的数据库流程", async t => {
     const gpt = created.data;
     assert.equal((await call("/api/admin/supplier-deliver", { id: gpt.id }, session)).status, 409);
     assert.equal(supplierPurchases, 0);
+    const tokenWithEmail = await call("/api/orders", { product: "muse-token", planId: "100", inviteCode: "INVITE", email: "token@example.com", method: "alipay", acceptedTerms: true, requestId: randomUUID() });
+    assert.equal(tokenWithEmail.status, 201);
+    assert.equal((await call("/api/admin/contact-buyer", { id: tokenWithEmail.data.id, message: "充值进度" }, session)).status, 200);
+    assert.ok(sentMessages.some(item => item.to === "token@example.com" && item.text.includes("充值进度")));
+    assert.equal((await call("/api/admin/contact-buyer", { id: gpt.id, message: "请联系店主 QQ 123" })).status, 401);
+    assert.equal((await call("/api/admin/contact-buyer", { id: gpt.id, message: "请联系店主 QQ 123" }, session)).status, 200);
+    assert.ok(sentMessages.some(item => item.to === "gpt@example.com" && item.text.includes("QQ 123")));
+    const suggestion = await call("/api/product-request", { id: randomUUID(), message: "希望上架 Grok" });
+    assert.equal(suggestion.status, 200);
+    assert.ok(sentMessages.some(item => item.purpose === "owner_notice" && item.text.includes("Grok")));
+    const availability = await call("/api/availability");
+    assert.equal(availability.data.stock.philippinesTopup, null);
     assert.equal((await call("/api/admin/update", { id: gpt.id, action: "confirm" }, session)).status, 200);
+    supplierStock = 0;
+    assert.equal((await call("/api/admin/supplier-deliver", { id: gpt.id }, session)).status, 409);
+    assert.equal((await call("/api/orders/lookup", gpt)).data.stockIssue, true);
+    assert.equal(supplierPurchases, 0);
+    supplierStock = 1;
     supplierBalanceEnough = false;
     const insufficient = await call("/api/admin/supplier-deliver", { id: gpt.id }, session);
     assert.equal(insufficient.status, 409); assert.match(insufficient.data.message, /运营钱包余额不足/); assert.equal(supplierPurchases, 0);
@@ -204,6 +222,9 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal((await call("/api/admin/supplier-deliver", { id: gpt.id }, session)).status, 409);
     assert.equal(supplierPurchases, 1);
     assert.equal((await call("/api/orders/lookup", gpt)).data.status, "complete");
+    const catalog = await call("/api/admin/catalog", undefined, session);
+    assert.equal(catalog.data.products.find(item => item.supplier === "G19335525").sales, 1);
+    assert.equal(catalog.data.products.find(item => item.supplier === "G75777360").sales, 0);
     assert.ok(sentMessages.some(item => item.to === "gpt@example.com" && item.text.includes("TEST-CARD")));
     assert.equal((await call("/api/orders", { ...payload, planId: "halfPriceTopup", requestId: randomUUID() })).status, 400);
     const another = (await call("/api/orders", { ...payload, requestId: randomUUID() })).data;
