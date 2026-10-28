@@ -19,3 +19,11 @@ test("keeps unrecognized delivery text intact and decodes instructions", () => {
   assert.ok(result.text.includes(card)); assert.ok(result.text.includes("步骤一\n步骤二 & 注意事项"));
   assert.equal(cleanInstructions("普通说明"), "普通说明");
 });
+
+test("formats Muse account and verification link without adding a password", () => {
+  const result = deliveryEmail({ title: "Muse", code: "1111", card: "buyer@example.com|https://example.com/code?token=abc" });
+  assert.match(result.text, /Muse 登录账号：buyer@example.com/);
+  assert.match(result.text, /邮箱验证码获取地址：https:\/\/example.com\/code\?token=abc/);
+  assert.match(result.html, /href="https:\/\/example.com\/code\?token=abc"/);
+  assert.doesNotMatch(result.text, /密码/);
+});

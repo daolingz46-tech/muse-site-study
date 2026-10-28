@@ -68,7 +68,7 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
   const orderRequestRef = useRef("");
   const notify = useCallback((message: string) => setNotification(message), []);
   useEffect(() => {
-    if (product !== "gpt") return;
+    if (product === "muse-token") return;
     let active = true;
     const refresh = () => void fetch(storeApiUrl("/api/availability"), { cache: "no-store" }).then(r => r.ok ? r.json() : Promise.reject()).then(data => { if (active) setStock(data.stock || {}); }).catch(() => { if (active) setStock({}); });
     refresh(); const timer = window.setInterval(refresh, 60000);
@@ -143,7 +143,7 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
 
   function submitDetails(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (product === "gpt" && stock[gptPlanId] === false) { setError("该商品暂时缺货，请选择其他商品"); return; }
+    if ((product === "gpt" && stock[gptPlanId] === false) || (product === "muse" && stock.museAccount === false)) { setError("该商品暂时缺货，请选择其他商品"); return; }
     if (product === "gpt" && gptPlanId === "halfPriceTopup" && !eligibleConfirmed) { setError("请确认账号具有半价资格"); return; }
     if (isToken && !inviteCode.trim()) {
       setError("请填写需要充值的账号邀请码");
@@ -326,6 +326,7 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
                 </div>
                 <div className="muse-plan-price"><span>¥</span>{formatMoney(accountPriceCents)}<small>一次购买</small></div>
               </div>
+              {stock.museAccount === false && <div className="muse-token-notice" role="status">此商品暂时缺货，请稍后再来或联系店主。</div>}
               <div className="muse-email-field">
                 <label htmlFor="muse-email">收件邮箱</label>
                 <div className={`muse-input-wrap ${error.includes("邮箱") ? "has-error" : ""}`}>
