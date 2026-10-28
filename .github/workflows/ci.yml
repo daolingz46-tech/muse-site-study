@@ -37,3 +37,6 @@ jobs:
 
       - name: Order database tests
         run: npm run test:orders
+
+      - name: Delivery email tests
+        run: npm run test:delivery

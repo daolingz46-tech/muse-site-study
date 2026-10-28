@@ -20,7 +20,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
       const path = new URL(request.url).pathname;
       if (path.endsWith("/quotePrice")) return Response.json({ code: 1, data: { balance_enough: supplierBalanceEnough, available_quantity: supplierStock, total_amount: 110 } });
       if (path.endsWith("/create")) { supplierPurchases++; if (supplierTimeout) throw new Error("simulated network failure"); return Response.json({ code: 1, data: { trade_no: "TEST-16688" } }); }
-      if (path.endsWith("/query")) return Response.json({ code: 1, data: { status: 4, cards: [{ code: "TEST-CARD" }], instruction: "test instructions" } });
+      if (path.endsWith("/query")) return Response.json({ code: 1, data: { status: 4, cards: [{ code: "TEST-CARD" }], instruction: "<h3>使用说明</h3><p>打开 <a href=\"https://example.com/redeem\">兑换地址</a></p>" } });
       throw new Error("unexpected supplier request");
     }
     assert.equal(new URL(request.url).hostname, "mail.test");
@@ -226,6 +226,8 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal(catalog.data.products.find(item => item.supplier === "G19335525").sales, 1);
     assert.equal(catalog.data.products.find(item => item.supplier === "G75777360").sales, 0);
     assert.ok(sentMessages.some(item => item.to === "gpt@example.com" && item.text.includes("TEST-CARD")));
+    const gptMail = sentMessages.find(item => item.to === "gpt@example.com" && item.text.includes("TEST-CARD"));
+    assert.doesNotMatch(gptMail.text, /<h3|<a /); assert.match(gptMail.text, /https:\/\/example.com\/redeem/);
     assert.equal((await call("/api/orders", { ...payload, planId: "halfPriceTopup", requestId: randomUUID() })).status, 400);
     const another = (await call("/api/orders", { ...payload, requestId: randomUUID() })).data;
     await call("/api/admin/update", { id: another.id, action: "confirm" }, session);
