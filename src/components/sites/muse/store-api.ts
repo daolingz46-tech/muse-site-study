@@ -6,12 +6,13 @@ export function storeApiUrl(path: string) {
 }
 
 export type CreateStoreOrder = {
-  product: "muse" | "muse-token";
+  product: "muse" | "muse-token" | "gpt";
   planId?: string;
   email?: string;
   inviteCode?: string;
   method: "alipay" | "wechat";
   acceptedTerms: true;
+  eligibleConfirmed?: boolean;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -26,8 +27,8 @@ function readOrder(value: unknown): StoreOrder {
     || typeof value.expiresAt !== "number" || !Number.isFinite(value.expiresAt)
     || !["pending", "reported", "processing", "complete", "expired"].includes(String(value.status))
     || !["alipay", "wechat"].includes(String(value.method))
-    || (value.product !== "muse" && value.product !== "muse-token")
-    || (value.product === "muse" && typeof value.email !== "string")
+    || (value.product !== "muse" && value.product !== "muse-token" && value.product !== "gpt")
+    || (value.product !== "muse-token" && typeof value.email !== "string")
     || (value.product === "muse-token" && typeof value.inviteCode !== "string")) {
     throw new Error("订单服务返回异常，请联系支持查询，勿重复付款。");
   }

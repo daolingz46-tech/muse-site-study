@@ -1,6 +1,6 @@
 {
   "name": "muse-workbench-desktop",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Muse 店主工作台 Windows 桌面版",
   "main": "main.cjs",

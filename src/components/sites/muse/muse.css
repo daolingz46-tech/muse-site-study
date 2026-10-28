@@ -36,8 +36,8 @@
   left: 50%;
   isolation: isolate;
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  width: 274px;
+  grid-template-columns: repeat(3, 1fr);
+  width: 330px;
   padding: 5px;
   transform: translateX(-50%);
   border: 1px solid #e4e6ea75;
@@ -48,13 +48,14 @@
   position: absolute;
   z-index: -1;
   top: 5px; bottom: 5px; left: 5px;
-  width: calc(50% - 5px);
+  width: calc((100% - 10px) / 3);
   border-radius: 100px;
   background: #fff;
   box-shadow: 0 2px 8px #27364c0a, 0 1px 2px #00000006;
   transition: transform .48s cubic-bezier(.22,1,.36,1);
 }
 .muse-switch-indicator.is-token { transform: translateX(100%); }
+.muse-switch-indicator.is-gpt { transform: translateX(200%); }
 .muse-switch [role=tab] {
   display: flex;
   align-items: center;
@@ -344,7 +345,7 @@
 @media (max-width: 800px) {
   .muse-header, .muse-footer { width: calc(100% - 48px); }
   .muse-header { height: 88px; }
-  .muse-switch { width: 246px; }
+  .muse-switch { width: 300px; }
   .muse-product-layout { grid-template-columns: minmax(0, 1fr) 360px; gap: 20px; width: calc(100% - 48px); padding-top: 12px; }
   .muse-checkout-card { padding: 24px; border-radius: 23px; }
   .muse-logo-composition { width: 230px; height: 230px; }
@@ -358,9 +359,9 @@
   .muse-wordmark > img { width: 27px; height: 27px; }
   .muse-orders-link { padding: 6px 0 8px 10px; }
   .muse-orders-link span { display: block; font-size: 11px; }
-  .muse-switch { top: 73px; width: 242px; padding: 4px; }
+  .muse-switch { top: 73px; width: min(300px, calc(100vw - 32px)); padding: 4px; }
   .muse-switch [role=tab] { height: 34px; }
-  .muse-switch-indicator { top: 4px; bottom: 4px; left: 4px; width: calc(50% - 4px); }
+  .muse-switch-indicator { top: 4px; bottom: 4px; left: 4px; width: calc((100% - 8px) / 3); }
   .muse-product-layout { display: flex; flex-direction: column; flex: 1; gap: 7px; width: calc(100% - 36px); margin: 0 auto; padding: 6px 0 28px; }
   .muse-product-stage { flex-shrink: 0; width: 100%; height: 239px; min-height: 0; padding: 0; }
   .muse-logo-composition { width: 174px; height: 174px; margin: 0 0 5px; }
