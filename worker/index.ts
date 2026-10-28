@@ -2,6 +2,7 @@ import type { D1Database } from "@cloudflare/workers-types";
 import { buildPushPayload, type PushSubscription } from "@block65/webcrypto-web-push";
 import { tokenPlans, accountPriceCents, accountTitle } from "../src/lib/products";
 import { GPT_SUPPLIER_PRODUCTS, supplierRequest } from "./supplier16688";
+import { deliveryEmail } from "./delivery-email";
 
 type Env = { DB: D1Database; ASSETS: { fetch(request: Request): Promise<Response> }; ADMIN_PASSWORD_HASH: string; RESEND_API_KEY?: string; GMAIL_SCRIPT_URL?: string; GMAIL_SCRIPT_TOKEN?: string; PUSH_PUBLIC_KEY?: string; PUSH_PRIVATE_KEY?: string; SUPPLIER_APP_ID?: string; SUPPLIER_SECRET?: string };
 type ExecutionContextLike = { waitUntil(promise: Promise<unknown>): void };
@@ -470,8 +471,7 @@ async function admin(env: Env, request: Request, path: string) {
     if (task.state !== "ready" || !task.card) throw new HttpError(409, "该订单正在处理或结果待核查，请查看货源及邮件记录，勿重复采购");
     const claim = await env.DB.prepare("UPDATE supplier_fulfillment SET state='sending',updatedAt=? WHERE orderId=? AND state='ready'").bind(Date.now(), id).run();
     if (!claim.meta.changes) throw new HttpError(409, "邮件正在发送，请刷新订单");
-    const text = `${order.title}\n订单码：${order.code}\n\n${task.card}\n\n${task.instruction || ""}\n\n如有问题，请联系 QQ：3557785836。`;
-    const html = `<div style="font-family:Arial;line-height:1.8"><h2>${escapeHtml(order.title)}</h2><p>订单码：${escapeHtml(order.code)}</p><pre style="white-space:pre-wrap">${escapeHtml(task.card)}</pre><p style="white-space:pre-wrap">${escapeHtml(task.instruction || "")}</p><p>如有问题，请联系 QQ：3557785836。</p></div>`;
+    const { html, text } = deliveryEmail({ title: order.title, code: order.code, card: task.card, instructions: task.instruction || "" });
     try { await sendEmail(env, `supplier-delivery:${id}`, `${order.title} · 订单 ${order.code}`, html, text, order.target, [], "buyer_delivery"); }
     catch { await env.DB.prepare("UPDATE supplier_fulfillment SET state='mail_unknown',updatedAt=? WHERE orderId=?").bind(Date.now(), id).run(); throw new HttpError(502, "邮件发送结果不明，请先核查发件箱和客户邮箱；卡密已采购，请勿重复采购"); }
     const now = Date.now();
@@ -505,8 +505,7 @@ async function admin(env: Env, request: Request, path: string) {
       ? `<p style="white-space:pre-wrap">${escapeHtml(block.content)}</p>`
       : `<figure style="margin:18px 0"><img src="${block.url}" alt="${escapeHtml(block.caption || "教程图片")}" style="max-width:100%;height:auto;border-radius:8px"><figcaption>${escapeHtml(block.caption)}</figcaption></figure>`).join("");
     const tutorialText = blocks.map(block => block.type === "text" ? block.content : `${block.caption || "教程图片"}：${block.url}`).join("\n\n");
-    const html = `<div style="font-family:Arial,sans-serif;line-height:1.75;color:#222631;max-width:640px"><h2>Muse 成品账号交付</h2><p>订单码：${escapeHtml(order.code)}</p><p>以下是你的卡密，请妥善保管：</p><pre style="white-space:pre-wrap;overflow-wrap:anywhere;padding:16px;background:#f3f6fb;border-radius:8px">${escapeHtml(card)}</pre>${tutorial && blocks.length ? `<h3>${escapeHtml(tutorial.title)}</h3>${tutorialHtml}` : ""}<p>如有问题，请联系 QQ：3557785836。</p></div>`;
-    const text = `Muse 成品账号交付\n订单码：${order.code}\n\n卡密：\n${card}\n\n${tutorial && blocks.length ? `${tutorial.title}\n${tutorialText}\n\n` : ""}如有问题，请联系 QQ：3557785836。`;
+    const { html, text } = deliveryEmail({ title: order.title, code: order.code, card, extraHtml: tutorial && blocks.length ? `<h3>${escapeHtml(tutorial.title)}</h3>${tutorialHtml}` : "", extraText: tutorial && blocks.length ? `${tutorial.title}\n${tutorialText}` : "" });
     const previous = await env.DB.prepare("SELECT status FROM delivery_emails WHERE orderId=?").bind(order.id).first<{ status: string }>();
     const claimed = previous
       ? await env.DB.prepare("UPDATE delivery_emails SET status='sending' WHERE orderId=? AND status='sent'").bind(order.id).run()
