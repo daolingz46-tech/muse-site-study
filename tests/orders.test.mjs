@@ -20,7 +20,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
     if (new URL(request.url).hostname === "www.16688.com.cn") {
       const path = new URL(request.url).pathname;
       const params = await request.json();
-      if (path.endsWith("/quotePrice")) return Response.json({ code: 1, data: { balance_enough: supplierBalanceEnough, available_quantity: supplierStock, total_amount: params.goods_no === "G72563978" ? 2.88 : 110 } });
+      if (path.endsWith("/quotePrice")) return Response.json({ code: 1, data: { balance_enough: supplierBalanceEnough, available_quantity: supplierStock, total_amount: params.goods_no === "G72563978" ? 2.88 : params.goods_no === "G39595340" ? 11.31 : 110 } });
       if (path.endsWith("/create")) { supplierGoods = params.goods_no; supplierPurchases++; if (supplierTimeout) throw new Error("simulated network failure"); return Response.json({ code: 1, data: { trade_no: "TEST-16688" } }); }
       if (path.endsWith("/query")) return Response.json({ code: 1, data: { status: 4, cards: [{ code: supplierGoods === "G72563978" ? "muse@example.com|https://example.com/code" : "TEST-CARD" }], instruction: "<h3>使用说明</h3><p>打开 <a href=\"https://example.com/redeem\">兑换地址</a></p>" } });
       throw new Error("unexpected supplier request");
@@ -279,6 +279,19 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal(supplierPurchases, before + 1);
     const catalog = await call("/api/admin/catalog", undefined, session);
     assert.ok(catalog.data.products.some(item => item.supplier === "G72563978"));
+  });
+
+  await t.test("20 元 Plus 成品账号使用指定货源及售后邮箱", async () => {
+    await db.prepare("DELETE FROM rate_limits").run();
+    const account = (await call("/api/orders", { product: "gpt", planId: "plusAccount", email: "plus@example.com", method: "alipay", acceptedTerms: true, requestId: randomUUID() })).data;
+    assert.equal(account.amountCents, 2000);
+    await call("/api/admin/update", { id: account.id, action: "confirm" }, session);
+    assert.equal((await call("/api/admin/supplier-deliver", { id: account.id }, session)).status, 200);
+    assert.equal(supplierGoods, "G39595340");
+    const mail = sentMessages.find(item => item.to === "plus@example.com" && item.text.includes("TEST-CARD"));
+    assert.ok(mail); assert.match(mail.text, /692972690@qq\.com/); assert.doesNotMatch(mail.text, /3557785836/);
+    const catalog = await call("/api/admin/catalog", undefined, session);
+    assert.ok(catalog.data.products.some(item => item.supplier === "G39595340" && item.sales === 1));
   });
 
 });
