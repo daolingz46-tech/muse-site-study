@@ -5,7 +5,7 @@ export const GPT_SUPPLIER_PRODUCTS = {
   halfPriceAccount: { goodsNo: "G26126458", priceCents: 1500, title: "GPT · 两个月半价资格账号" },
   halfPriceAccountOneMonth: { goodsNo: "G75777360", priceCents: 1500, title: "GPT · 一个月半价资格账号" },
   halfPriceTopup: { goodsNo: "G69571468", priceCents: 7500, title: "GPT · 一个月半价代充" },
-  philippinesTopup: { goodsNo: "G19335525", priceCents: 11900, title: "GPT · 菲律宾正价代充" },
+  philippinesTopup: { goodsNo: "G19335525", priceCents: 12800, title: "GPT · 菲律宾正价代充" },
 } as const;
 type Parameter = string | number | boolean | null | Parameter[] | { [key: string]: Parameter };
 
