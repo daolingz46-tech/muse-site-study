@@ -26,7 +26,7 @@ const canonicalStore = "https://musetoken.store/";
 const gptPlans = [
   { id: "halfPriceAccountOneMonth", label: "一个月半价资格账号", amountCents: 1500 },
   { id: "halfPriceTopup", label: "一个月半价代充", amountCents: 7500 },
-  { id: "philippinesTopup", label: "菲律宾正价代充", amountCents: 11900 },
+  { id: "philippinesTopup", label: "菲律宾正价代充", amountCents: 12800 },
 ] as const;
 
 export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: Product }) {

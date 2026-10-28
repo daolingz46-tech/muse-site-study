@@ -207,8 +207,14 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal((await db.prepare("SELECT supplierPlan FROM orders WHERE id=?").bind(oldAccount.data.id).first()).supplierPlan, "halfPriceAccount");
     assert.equal((await db.prepare("SELECT supplierPlan FROM orders WHERE id=?").bind(newAccount.data.id).first()).supplierPlan, "halfPriceAccountOneMonth");
     const payload = { product: "gpt", planId: "philippinesTopup", email: "gpt@example.com", method: "alipay", acceptedTerms: true, requestId: randomUUID() };
-    const created = await call("/api/orders", payload); assert.equal(created.status, 201); assert.equal(created.data.amountCents, 11900);
+    const created = await call("/api/orders", payload); assert.equal(created.status, 201); assert.equal(created.data.amountCents, 12800);
     const gpt = created.data;
+    const priorHash = createHash("sha256").update(JSON.stringify(["gpt", gpt.title, 11900, payload.email, payload.method])).digest("hex");
+    const currentHash = createHash("sha256").update(JSON.stringify(["gpt", gpt.title, 12800, payload.email, payload.method])).digest("hex");
+    await db.prepare("UPDATE orders SET amountCents=?,inputHash=? WHERE id=?").bind(11900, priorHash, gpt.id).run();
+    const priorRetry = await call("/api/orders", payload);
+    assert.equal(priorRetry.data.id, gpt.id); assert.equal(priorRetry.data.amountCents, 11900);
+    await db.prepare("UPDATE orders SET amountCents=?,inputHash=? WHERE id=?").bind(12800, currentHash, gpt.id).run();
     assert.equal((await call("/api/admin/supplier-deliver", { id: gpt.id }, session)).status, 409);
     assert.equal(supplierPurchases, 0);
     const tokenWithEmail = await call("/api/orders", { product: "muse-token", planId: "100", inviteCode: "INVITE", email: "token@example.com", method: "alipay", acceptedTerms: true, requestId: randomUUID() });
