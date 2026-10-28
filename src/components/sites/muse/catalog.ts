@@ -10,7 +10,7 @@ export type OrderDetails = {
   title: string;
   amountCents: number;
   feeCents: number;
-} & ({ product: "muse"; email: string } | { product: "muse-token"; inviteCode: string });
+} & ({ product: "muse" | "gpt"; email: string } | { product: "muse-token"; inviteCode: string });
 
 export function formatMoney(cents: number) {
   return (cents / 100).toFixed(2);

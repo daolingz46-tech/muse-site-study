@@ -11,7 +11,16 @@ test("订单、收款核实和交付的数据库流程", async t => {
   assert.equal(build.status, 0, build.stderr);
   const password = randomUUID() + randomUUID();
   const sentMessages = [];
-  const mf = new Miniflare(convertV4MiniflareOptions({ workers: [{ name: "test-store", modules: true, scriptPath: "temp/worker/index.js", compatibilityDate: "2026-10-01", d1Databases: { DB: "test-orders" }, bindings: { ADMIN_PASSWORD_HASH: createHash("sha256").update(password).digest("hex"), GMAIL_SCRIPT_URL: "https://mail.test/exec", GMAIL_SCRIPT_TOKEN: "test-token" }, outboundService: async request => {
+  let supplierPurchases = 0;
+  let supplierTimeout = false;
+  const mf = new Miniflare(convertV4MiniflareOptions({ workers: [{ name: "test-store", modules: true, scriptPath: "temp/worker/index.js", compatibilityDate: "2026-10-01", d1Databases: { DB: "test-orders" }, bindings: { ADMIN_PASSWORD_HASH: createHash("sha256").update(password).digest("hex"), GMAIL_SCRIPT_URL: "https://mail.test/exec", GMAIL_SCRIPT_TOKEN: "test-token", SUPPLIER_APP_ID: "test-app", SUPPLIER_SECRET: "test-secret" }, outboundService: async request => {
+    if (new URL(request.url).hostname === "www.16688.com.cn") {
+      const path = new URL(request.url).pathname;
+      if (path.endsWith("/quotePrice")) return Response.json({ code: 1, data: { balance_enough: true, total_amount: 110 } });
+      if (path.endsWith("/create")) { supplierPurchases++; if (supplierTimeout) throw new Error("simulated network failure"); return Response.json({ code: 1, data: { trade_no: "TEST-16688" } }); }
+      if (path.endsWith("/query")) return Response.json({ code: 1, data: { status: 4, cards: [{ code: "TEST-CARD" }], instruction: "test instructions" } });
+      throw new Error("unexpected supplier request");
+    }
     assert.equal(new URL(request.url).hostname, "mail.test");
     const input = await request.json();
     if (input.purpose === "capability_probe") return Response.json({ ok: true, buyerDelivery: true, attachments: true });
@@ -170,4 +179,29 @@ test("订单、收款核实和交付的数据库流程", async t => {
     const stored = await db.prepare("SELECT delivery FROM orders WHERE id=?").bind(account.id).first();
     assert.equal(stored.delivery.includes("CARD-TEST"), false);
   });
+  await t.test("GPT 核款后手动采购并发送，重复发货不重复采购", async () => {
+    session = (await call("/api/admin/login", { password })).cookie;
+    const payload = { product: "gpt", planId: "philippinesTopup", email: "gpt@example.com", method: "alipay", acceptedTerms: true, requestId: randomUUID() };
+    const created = await call("/api/orders", payload); assert.equal(created.status, 201); assert.equal(created.data.amountCents, 11900);
+    const gpt = created.data;
+    assert.equal((await call("/api/admin/supplier-deliver", { id: gpt.id }, session)).status, 409);
+    assert.equal(supplierPurchases, 0);
+    assert.equal((await call("/api/admin/update", { id: gpt.id, action: "confirm" }, session)).status, 200);
+    assert.equal((await call("/api/admin/supplier-deliver", { id: gpt.id }, session)).status, 200);
+    assert.equal(supplierPurchases, 1);
+    assert.equal((await call("/api/admin/supplier-deliver", { id: gpt.id }, session)).status, 409);
+    assert.equal(supplierPurchases, 1);
+    assert.equal((await call("/api/orders/lookup", gpt)).data.status, "complete");
+    assert.ok(sentMessages.some(item => item.to === "gpt@example.com" && item.text.includes("TEST-CARD")));
+    assert.equal((await call("/api/orders", { ...payload, planId: "halfPriceTopup", requestId: randomUUID() })).status, 400);
+    const another = (await call("/api/orders", { ...payload, requestId: randomUUID() })).data;
+    await call("/api/admin/update", { id: another.id, action: "confirm" }, session);
+    supplierTimeout = true;
+    assert.equal((await call("/api/admin/supplier-deliver", { id: another.id }, session)).status, 502);
+    supplierTimeout = false;
+    assert.equal((await call("/api/admin/supplier-deliver", { id: another.id }, session)).status, 409);
+    assert.equal(supplierPurchases, 2);
+
+  });
+
 });

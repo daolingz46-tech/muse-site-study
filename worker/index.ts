@@ -1,12 +1,13 @@
 import type { D1Database } from "@cloudflare/workers-types";
 import { buildPushPayload, type PushSubscription } from "@block65/webcrypto-web-push";
 import { tokenPlans, accountPriceCents, accountTitle } from "../src/lib/products";
+import { GPT_SUPPLIER_PRODUCTS, supplierRequest } from "./supplier16688";
 
-type Env = { DB: D1Database; ASSETS: { fetch(request: Request): Promise<Response> }; ADMIN_PASSWORD_HASH: string; RESEND_API_KEY?: string; GMAIL_SCRIPT_URL?: string; GMAIL_SCRIPT_TOKEN?: string; PUSH_PUBLIC_KEY?: string; PUSH_PRIVATE_KEY?: string };
+type Env = { DB: D1Database; ASSETS: { fetch(request: Request): Promise<Response> }; ADMIN_PASSWORD_HASH: string; RESEND_API_KEY?: string; GMAIL_SCRIPT_URL?: string; GMAIL_SCRIPT_TOKEN?: string; PUSH_PUBLIC_KEY?: string; PUSH_PRIVATE_KEY?: string; SUPPLIER_APP_ID?: string; SUPPLIER_SECRET?: string };
 type ExecutionContextLike = { waitUntil(promise: Promise<unknown>): void };
 type Row = {
   id: string; requestHash: string; inputHash: string; tokenHash: string; code: string;
-  product: "muse" | "muse-token"; title: string; amountCents: number; target: string;
+  product: "muse" | "muse-token" | "gpt"; supplierPlan: string | null; title: string; amountCents: number; target: string;
   method: "wechat" | "alipay"; status: string; createdAt: number; expiresAt: number;
   reportedAt: number | null; paidAt: number | null; completedAt: number | null;
   reference: string | null; delivery: string | null; updatedAt: number;
@@ -199,7 +200,7 @@ function publicOrder(row: Row, token: string) {
   return { id: row.id, token, code: row.code, product: row.product, title: row.title,
     amountCents: row.amountCents, feeCents: 0, method: row.method, status,
     createdAt: row.createdAt, expiresAt: row.expiresAt, reportedAt: row.reportedAt,
-    ...(row.product === "muse" ? { email: row.target } : { inviteCode: row.target }),
+    ...(row.product !== "muse-token" ? { email: row.target } : { inviteCode: row.target }),
     qrImageUrl: `/api/payment-qr/${row.method}`, delivery: row.delivery ? JSON.parse(row.delivery) : undefined };
 }
 async function getOrder(env: Env, input: Record<string, unknown>) {
@@ -217,6 +218,7 @@ async function createOrder(env: Env, request: Request, input: Record<string, unk
   if (input.method !== "wechat" && input.method !== "alipay") throw new HttpError(400, "请选择支付方式");
   let title: string, amount: number, target: string;
   if (input.product === "muse") { title = accountTitle; amount = accountPriceCents; target = str(input.email, 254); if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(target)) throw new HttpError(400, "请填写有效邮箱"); }
+  else if (input.product === "gpt") { if (typeof input.planId !== "string" || !Object.hasOwn(GPT_SUPPLIER_PRODUCTS, input.planId)) throw new HttpError(400, "商品不存在"); const plan = GPT_SUPPLIER_PRODUCTS[input.planId as keyof typeof GPT_SUPPLIER_PRODUCTS]; title = plan.title; amount = plan.priceCents; target = str(input.email, 254); if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(target)) throw new HttpError(400, "请填写有效邮箱"); if (input.planId === "halfPriceTopup" && input.eligibleConfirmed !== true) throw new HttpError(400, "请确认账号具有半价资格"); }
   else if (input.product === "muse-token") { const plan = tokenPlans.find(p => p.id === input.planId); if (!plan) throw new HttpError(400, "充值档次无效"); amount = plan.amountCents; title = `Muse Token · ${plan.label}`; target = str(input.inviteCode); if (!target) throw new HttpError(400, "账号邀请码为必填项"); }
   else throw new HttpError(400, "商品不存在");
   const requestHash = await hash(requestId), token = await hash(`order-lookup:${requestId}`);
@@ -235,8 +237,8 @@ async function createOrder(env: Env, request: Request, input: Record<string, unk
       if (!free) throw new HttpError(503, "四位订单码已用完，请联系店主升级订单编号规则");
       code = free.code;
     }
-    const result = await env.DB.prepare("INSERT OR IGNORE INTO orders(id,requestHash,inputHash,tokenHash,code,product,title,amountCents,target,method,createdAt,expiresAt,updatedAt) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)")
-      .bind(id, requestHash, inputHash, await hash(token), code, input.product, title, amount, target, input.method, now, now + 15 * 60000, now).run();
+    const result = await env.DB.prepare("INSERT OR IGNORE INTO orders(id,requestHash,inputHash,tokenHash,code,product,title,amountCents,target,method,createdAt,expiresAt,updatedAt,supplierPlan) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+      .bind(id, requestHash, inputHash, await hash(token), code, input.product, title, amount, target, input.method, now, now + 15 * 60000, now, input.product === "gpt" ? String(input.planId) : null).run();
     const row = await env.DB.prepare("SELECT * FROM orders WHERE requestHash=?").bind(requestHash).first<Row>();
     if (row) { if (!matchesInput(row)) throw new HttpError(409, "订单内容已改变，请重新下单"); await queueOrderEmail(env, row, "created", ctx); if (result.meta.changes) await queueOrderPush(env, row, "created", ctx); return json(publicOrder(row, token), result.meta.changes ? 201 : 200); }
   }
@@ -303,7 +305,7 @@ async function admin(env: Env, request: Request, path: string) {
     const url = new URL(request.url); const search = str(url.searchParams.get("q")); const status = str(url.searchParams.get("status"), 20); const page = Math.max(0, Math.min(100000, Number(url.searchParams.get("page")) || 0));
     const where = "WHERE (?='' OR code=? OR id=? OR target LIKE ? ESCAPE '\\') AND (?='' OR status=?)";
     const values = [search, search, search, `%${search.replace(/[\\%_]/g, "\\$&")}%`, status, status];
-    const rows = await env.DB.prepare(`SELECT id,code,product,title,amountCents,target,method,status,createdAt,expiresAt,reportedAt,paidAt,completedAt,reference,updatedAt,(SELECT sentAt FROM delivery_emails WHERE orderId=orders.id) AS emailSentAt,(SELECT sendCount FROM delivery_emails WHERE orderId=orders.id) AS emailSendCount FROM orders ${where} ORDER BY createdAt DESC LIMIT 50 OFFSET ?`).bind(...values, page * 50).all();
+    const rows = await env.DB.prepare(`SELECT id,code,product,title,amountCents,target,method,status,createdAt,expiresAt,reportedAt,paidAt,completedAt,reference,updatedAt,(SELECT sentAt FROM delivery_emails WHERE orderId=orders.id) AS emailSentAt,(SELECT sendCount FROM delivery_emails WHERE orderId=orders.id) AS emailSendCount,(SELECT state FROM supplier_fulfillment WHERE orderId=orders.id) AS supplierState,(SELECT tradeNo FROM supplier_fulfillment WHERE orderId=orders.id) AS supplierTradeNo FROM orders ${where} ORDER BY createdAt DESC LIMIT 50 OFFSET ?`).bind(...values, page * 50).all();
     const count = await env.DB.prepare(`SELECT COUNT(*) AS total FROM orders ${where}`).bind(...values).first();
     const summary = await env.DB.prepare("SELECT COUNT(*) AS total, COALESCE(SUM(status='reported'),0) AS awaiting, COALESCE(SUM(status='processing'),0) AS processing, COALESCE(SUM(status='complete'),0) AS completed, COALESCE(SUM(CASE WHEN paidAt IS NOT NULL THEN amountCents ELSE 0 END),0) AS revenueCents, COALESCE(SUM(CASE WHEN paidAt>=? THEN amountCents ELSE 0 END),0) AS todayCents FROM orders").bind(Math.floor((Date.now() + 8 * 3600000) / 86400000) * 86400000 - 8 * 3600000).first();
     return json({ orders: rows.results, count, summary, page });
@@ -381,6 +383,77 @@ async function admin(env: Env, request: Request, path: string) {
     ]);
     return json({ ok: true });
   }
+  if (path === "/api/admin/supplier-check" && request.method === "POST") {
+    const input = await body(request);
+    if (typeof input.planId !== "string" || !Object.hasOwn(GPT_SUPPLIER_PRODUCTS, input.planId)) throw new HttpError(400, "商品不存在");
+    if (!env.SUPPLIER_APP_ID || !env.SUPPLIER_SECRET) throw new HttpError(503, "16688 接口凭证尚未配置");
+    const plan = GPT_SUPPLIER_PRODUCTS[input.planId as keyof typeof GPT_SUPPLIER_PRODUCTS];
+    try {
+      const result = await supplierRequest({ appId: env.SUPPLIER_APP_ID, secret: env.SUPPLIER_SECRET }, "purchase", "quotePrice", { goods_no: plan.goodsNo, quantity: 1 }) as { code: number; data?: { total_amount?: number; balance_enough?: boolean; available_quantity?: number } };
+      if (result.code !== 1 || !result.data) throw new Error("supplier_quote_failed");
+      return json({ total: result.data.total_amount, balanceEnough: result.data.balance_enough, stock: result.data.available_quantity });
+    } catch { throw new HttpError(502, "货源询价失败，请检查接口配置"); }
+  }
+  if (path === "/api/admin/supplier-deliver" && request.method === "POST") {
+    const input = await body(request), id = str(input.id, 64);
+    const order = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).first<Row>();
+    if (!order || order.product !== "gpt") throw new HttpError(404, "未找到 GPT 订单");
+    if (order.status !== "processing") throw new HttpError(409, "请先核实收款，且订单须为待交付状态");
+    const plan = GPT_SUPPLIER_PRODUCTS[order.supplierPlan as keyof typeof GPT_SUPPLIER_PRODUCTS];
+    if (!plan) throw new HttpError(400, "商品货源尚未配置");
+    if (!env.SUPPLIER_APP_ID || !env.SUPPLIER_SECRET) throw new HttpError(503, "16688 接口凭证尚未配置");
+    if (!hasEmailConfig(env) || !await hasBuyerDelivery(env)) throw new HttpError(503, "买家邮件服务尚未启用");
+    const creds = { appId: env.SUPPLIER_APP_ID, secret: env.SUPPLIER_SECRET };
+    type SupplierResult = { code: number; msg?: string; data?: Record<string, unknown> };
+    let task = await env.DB.prepare("SELECT state,tradeNo,card,instruction FROM supplier_fulfillment WHERE orderId=?").bind(id).first<{ state: string; tradeNo: string | null; card: string | null; instruction: string | null }>();
+    if (!task) {
+      let quote: SupplierResult;
+      try { quote = await supplierRequest(creds, "purchase", "quotePrice", { goods_no: plan.goodsNo, quantity: 1 }) as SupplierResult; }
+      catch { throw new HttpError(502, "货源询价失败，未执行采购"); }
+      const total = Number(quote.data?.total_amount);
+      if (quote.code !== 1 || quote.data?.balance_enough !== true || !Number.isFinite(total) || total <= 0) throw new HttpError(409, "货源询价失败或运营钱包余额不足，未执行采购");
+      if (total * 100 > order.amountCents) throw new HttpError(409, "货源成本高于售价，未执行采购");
+      const claimed = await env.DB.prepare("INSERT OR IGNORE INTO supplier_fulfillment(orderId,state,updatedAt) VALUES(?,'purchasing',?)").bind(id, Date.now()).run();
+      if (!claimed.meta.changes) throw new HttpError(409, "采购正在处理，请刷新订单");
+      let purchase: SupplierResult;
+      try { purchase = await supplierRequest(creds, "purchase", "create", { goods_no: plan.goodsNo, quantity: 1, remark: `Muse订单:${order.id}` }) as SupplierResult; }
+      catch { await env.DB.prepare("UPDATE supplier_fulfillment SET state='purchase_unknown',updatedAt=? WHERE orderId=?").bind(Date.now(), id).run(); throw new HttpError(502, "采购结果不明，请先在 16688 核查采购记录，勿重复采购"); }
+      if (purchase.code !== 1 || !purchase.data || typeof purchase.data.trade_no !== "string") {
+        await env.DB.prepare("UPDATE supplier_fulfillment SET state='purchase_unknown',updatedAt=? WHERE orderId=?").bind(Date.now(), id).run();
+        throw new HttpError(502, "采购未确认，请先核查 16688 采购记录");
+      }
+      await env.DB.prepare("UPDATE supplier_fulfillment SET state='awaiting',tradeNo=?,updatedAt=? WHERE orderId=?").bind(purchase.data.trade_no, Date.now(), id).run();
+      task = { state: "awaiting", tradeNo: purchase.data.trade_no, card: null, instruction: null };
+    }
+    if (task.state === "awaiting" && task.tradeNo) {
+      let result: SupplierResult;
+      try { result = await supplierRequest(creds, "purchase", "query", { trade_no: task.tradeNo }) as SupplierResult; }
+      catch { throw new HttpError(502, "采购订单查询失败，请稍后重新点击发货，不会重复采购"); }
+      if (result.code !== 1 || !result.data || ![4, 5].includes(Number(result.data.status))) throw new HttpError(409, "货源尚未发货，请稍后重新点击发货");
+      const cards = Array.isArray(result.data.cards) ? result.data.cards : [];
+      const card = cards.map(value => typeof value === "object" && value !== null && "code" in value ? String(value.code) : "").filter(Boolean).join("\n");
+      if (!card) throw new HttpError(409, "货源未返回卡密，请核查采购订单");
+      const fallback = order.supplierPlan === "halfPriceAccount" ? "账号资料格式：账号、密码和 2FA。验证码获取地址：https://2fa.run/（备用：https://2fa.fun/）。该账号包含两个月半价资格，不包含 Plus 订阅。" : "请访问 https://shuwang.space/ ，使用收到的卡密按网站说明自行充值；发货并不代表充值已经完成。";
+      const instruction = typeof result.data.instruction === "string" && result.data.instruction.trim() ? result.data.instruction : fallback;
+      const saved = await env.DB.prepare("UPDATE supplier_fulfillment SET state='ready',card=?,instruction=?,updatedAt=? WHERE orderId=? AND state='awaiting'").bind(card, instruction, Date.now(), id).run();
+      if (!saved.meta.changes) throw new HttpError(409, "订单正在处理，请刷新");
+      task = { ...task, state: "ready", card, instruction };
+    }
+    if (task.state !== "ready" || !task.card) throw new HttpError(409, "该订单正在处理或结果待核查，请查看货源及邮件记录，勿重复采购");
+    const claim = await env.DB.prepare("UPDATE supplier_fulfillment SET state='sending',updatedAt=? WHERE orderId=? AND state='ready'").bind(Date.now(), id).run();
+    if (!claim.meta.changes) throw new HttpError(409, "邮件正在发送，请刷新订单");
+    const text = `${order.title}\n订单码：${order.code}\n\n${task.card}\n\n${task.instruction || ""}\n\n如有问题，请联系 QQ：3557785836。`;
+    const html = `<div style="font-family:Arial;line-height:1.8"><h2>${escapeHtml(order.title)}</h2><p>订单码：${escapeHtml(order.code)}</p><pre style="white-space:pre-wrap">${escapeHtml(task.card)}</pre><p style="white-space:pre-wrap">${escapeHtml(task.instruction || "")}</p><p>如有问题，请联系 QQ：3557785836。</p></div>`;
+    try { await sendEmail(env, `supplier-delivery:${id}`, `${order.title} · 订单 ${order.code}`, html, text, order.target, [], "buyer_delivery"); }
+    catch { await env.DB.prepare("UPDATE supplier_fulfillment SET state='mail_unknown',updatedAt=? WHERE orderId=?").bind(Date.now(), id).run(); throw new HttpError(502, "邮件发送结果不明，请先核查发件箱和客户邮箱；卡密已采购，请勿重复采购"); }
+    const now = Date.now();
+    await env.DB.batch([
+      env.DB.prepare("UPDATE supplier_fulfillment SET state='sent',updatedAt=? WHERE orderId=? AND state='sending'").bind(now, id),
+      env.DB.prepare("UPDATE orders SET status='complete',completedAt=?,delivery=?,updatedAt=? WHERE id=? AND status='processing'").bind(now, JSON.stringify({ method: "email", sentAt: now }), now, id),
+      env.DB.prepare("INSERT INTO audit(orderId,action,createdAt) VALUES(?,'supplier_delivery',?)").bind(id, now),
+    ]);
+    return json({ ok: true });
+  }
   if (path === "/api/admin/send-delivery" && request.method === "POST") {
     const input = await body(request), id = str(input.id, 64), card = str(input.card, 4000);
     if (!card) throw new HttpError(400, "请粘贴卡密内容");
@@ -435,6 +508,7 @@ async function admin(env: Env, request: Request, path: string) {
       sql = "UPDATE orders SET status='processing',paidAt=?,reference=?,updatedAt=? WHERE id=? AND status=?"; args = [now, reference, now, row.id, row.status];
     } else if (input.action === "complete") {
       if (row.status !== "processing") throw new HttpError(409, "请先核对并确认收款");
+      if (row.product === "gpt") throw new HttpError(409, "GPT 订单请使用采购并发邮件按钮");
       let delivery: string | null = null;
       if (row.product === "muse") { const d = input.delivery as Record<string, unknown> | undefined; const email = str(d?.email, 254), password = str(d?.password, 256), codeUrl = str(d?.codeUrl, 1000); if (!email || !password || !/^https:\/\//.test(codeUrl)) throw new HttpError(400, "请填写交付账号、密码和 HTTPS 接码链接"); delivery = JSON.stringify({ email, password, codeUrl }); }
       if (input.checked !== true) throw new HttpError(400, "请确认已经完成充值或交付");

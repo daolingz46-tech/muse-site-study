@@ -10,6 +10,10 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 # Website Reverse-Engineer Template
 
+## 发布与工作台
+- 商店及工作台迭代须提交项目 PR，并同步正式网站。桌面工作台必须指向正式工作台；当桌面程序本身变更时，重新构建并更新用户桌面快捷方式。
+- 发货和支付改动须验证核款、重复采购及失败处理；不通过真实客户订单或真实采购进行无授权测试。
+
 ## What This Is
 A reusable template for reverse-engineering any website into a clean, modern Next.js codebase using AI coding agents. The Next.js + shadcn/ui + Tailwind v4 base is pre-scaffolded — just run `/clone-website <url1> [<url2> ...]`.
 
