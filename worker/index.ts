@@ -227,9 +227,14 @@ async function createOrder(env: Env, request: Request, input: Record<string, unk
   const requestHash = await hash(requestId), token = await hash(`order-lookup:${requestId}`);
   const inputHash = await hash(JSON.stringify(contactEmail ? [input.product, title, amount, target, input.method, contactEmail] : [input.product, title, amount, target, input.method]));
   const legacyInputHash = input.product === "muse" ? await hash(JSON.stringify([input.product, "Muse AI · 成品账号", amount, target, input.method])) : "";
-  const matchesInput = (row: Row) => row.inputHash === inputHash || row.inputHash === legacyInputHash;
+  const matchesInput = async (row: Row) => {
+    if (row.inputHash === inputHash || row.inputHash === legacyInputHash) return true;
+    const original = await hash(JSON.stringify(contactEmail ? [input.product, title, row.amountCents, target, input.method, contactEmail] : [input.product, title, row.amountCents, target, input.method]));
+    const legacy = input.product === "muse" ? await hash(JSON.stringify([input.product, "Muse AI · 成品账号", row.amountCents, target, input.method])) : "";
+    return row.inputHash === original || row.inputHash === legacy;
+  };
   const existing = await env.DB.prepare("SELECT * FROM orders WHERE requestHash=?").bind(requestHash).first<Row>();
-  if (existing) { if (!matchesInput(existing)) throw new HttpError(409, "订单内容已改变，请重新下单"); await queueOrderEmail(env, existing, "created", ctx); return json(publicOrder(existing, token)); }
+  if (existing) { if (!await matchesInput(existing)) throw new HttpError(409, "订单内容已改变，请重新下单"); await queueOrderEmail(env, existing, "created", ctx); return json(publicOrder(existing, token)); }
   await limit(env, request, "create", 20, 3600);
   await expire(env);
   const now = Date.now(), id = `M${crypto.randomUUID().replaceAll("-", "")}`;
@@ -243,7 +248,7 @@ async function createOrder(env: Env, request: Request, input: Record<string, unk
     const result = await env.DB.prepare("INSERT OR IGNORE INTO orders(id,requestHash,inputHash,tokenHash,code,product,title,amountCents,target,method,createdAt,expiresAt,updatedAt,supplierPlan,contactEmail) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
       .bind(id, requestHash, inputHash, await hash(token), code, input.product, title, amount, target, input.method, now, now + 15 * 60000, now, input.product === "gpt" ? String(input.planId) : null, contactEmail || null).run();
     const row = await env.DB.prepare("SELECT * FROM orders WHERE requestHash=?").bind(requestHash).first<Row>();
-    if (row) { if (!matchesInput(row)) throw new HttpError(409, "订单内容已改变，请重新下单"); await queueOrderEmail(env, row, "created", ctx); if (result.meta.changes) await queueOrderPush(env, row, "created", ctx); return json(publicOrder(row, token), result.meta.changes ? 201 : 200); }
+    if (row) { if (!await matchesInput(row)) throw new HttpError(409, "订单内容已改变，请重新下单"); await queueOrderEmail(env, row, "created", ctx); if (result.meta.changes) await queueOrderPush(env, row, "created", ctx); return json(publicOrder(row, token), result.meta.changes ? 201 : 200); }
   }
   throw new HttpError(503, "当前订单较多，请稍后再试或联系支持");
 }
