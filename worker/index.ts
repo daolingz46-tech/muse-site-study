@@ -411,7 +411,9 @@ async function admin(env: Env, request: Request, path: string) {
       try { quote = await supplierRequest(creds, "purchase", "quotePrice", { goods_no: plan.goodsNo, quantity: 1 }) as SupplierResult; }
       catch { throw new HttpError(502, "货源询价失败，未执行采购"); }
       const total = Number(quote.data?.total_amount);
-      if (quote.code !== 1 || quote.data?.balance_enough !== true || !Number.isFinite(total) || total <= 0) throw new HttpError(409, "货源询价失败或运营钱包余额不足，未执行采购");
+      if (quote.code !== 1 || !Number.isFinite(total) || total <= 0) throw new HttpError(409, "货源询价失败，未执行采购，请检查货源接口");
+      if (quote.data?.balance_enough !== true) throw new HttpError(409, `16688 运营钱包余额不足，本次采购需 ¥${total.toFixed(2)}（含手续费），未执行采购。请充值后重试。`);
+      if (Number(quote.data?.available_quantity) === 0) throw new HttpError(409, "货源库存不足，未执行采购，请稍后重试");
       if (total * 100 > order.amountCents) throw new HttpError(409, "货源成本高于售价，未执行采购");
       const claimed = await env.DB.prepare("INSERT OR IGNORE INTO supplier_fulfillment(orderId,state,updatedAt) VALUES(?,'purchasing',?)").bind(id, Date.now()).run();
       if (!claimed.meta.changes) throw new HttpError(409, "采购正在处理，请刷新订单");
