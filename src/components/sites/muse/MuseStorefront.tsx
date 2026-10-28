@@ -267,7 +267,7 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
                 event.preventDefault();
                 selectProduct(id);
               }}>
-              <Image src={assetBase + (id === "gpt" ? "/sites/muse/openai-logo.png" : "/sites/muse/muse-logo.svg")} width={20} height={20} alt="" draggable={false} />
+              <Image src={assetBase + (id === "gpt" ? "/sites/muse/openai-mark.svg" : "/sites/muse/muse-logo.svg")} width={20} height={20} alt="" draggable={false} />
               {label}
             </a>
           ))}
@@ -281,7 +281,7 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
         <section className="muse-product-stage" aria-label={product === "gpt" ? "GPT" : product === "muse" ? "Muse AI" : "Muse Token"} onDragStart={event => event.preventDefault()} onMouseDown={event => event.preventDefault()}>
           <div className="muse-stage-halo" />
           <div className="muse-logo-composition">
-            <span className="muse-logo-inner"><Image src={assetBase + (product === "gpt" ? "/sites/muse/openai-logo.png" : "/sites/muse/muse-logo.svg")} fill sizes="(max-width: 650px) 158px, 354px" alt="" loading="eager" draggable={false} /></span>
+            <span className="muse-logo-inner"><Image src={assetBase + (product === "gpt" ? "/sites/muse/openai-mark.svg" : "/sites/muse/muse-logo.svg")} fill sizes="(max-width: 650px) 158px, 354px" alt="" loading="eager" draggable={false} /></span>
           </div>
           <div className="muse-stage-caption" key={product}>
             <strong>{product === "gpt" ? "GPT" : product === "muse" ? "Muse AI" : "Muse Token"}</strong>
