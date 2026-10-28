@@ -435,7 +435,7 @@ async function admin(env: Env, request: Request, path: string) {
       const cards = Array.isArray(result.data.cards) ? result.data.cards : [];
       const card = cards.map(value => typeof value === "object" && value !== null && "code" in value ? String(value.code) : "").filter(Boolean).join("\n");
       if (!card) throw new HttpError(409, "货源未返回卡密，请核查采购订单");
-      const fallback = order.supplierPlan === "halfPriceAccount" ? "账号资料格式：账号、密码和 2FA。验证码获取地址：https://2fa.run/（备用：https://2fa.fun/）。该账号包含两个月半价资格，不包含 Plus 订阅。" : "请访问 https://shuwang.space/ ，使用收到的卡密按网站说明自行充值；发货并不代表充值已经完成。";
+      const fallback = order.supplierPlan === "halfPriceAccount" || order.supplierPlan === "halfPriceAccountOneMonth" ? `账号资料格式：账号、密码和 2FA。验证码获取地址：https://2fa.run/（备用：https://2fa.fun/）。该账号包含${order.supplierPlan === "halfPriceAccount" ? "两个月" : "一个月"}半价资格，不包含 Plus 订阅。` : "请访问 https://shuwang.space/ ，使用收到的卡密按网站说明自行充值；发货并不代表充值已经完成。";
       const instruction = typeof result.data.instruction === "string" && result.data.instruction.trim() ? result.data.instruction : fallback;
       const saved = await env.DB.prepare("UPDATE supplier_fulfillment SET state='ready',card=?,instruction=?,updatedAt=? WHERE orderId=? AND state='awaiting'").bind(card, instruction, Date.now(), id).run();
       if (!saved.meta.changes) throw new HttpError(409, "订单正在处理，请刷新");
