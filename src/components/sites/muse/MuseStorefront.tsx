@@ -28,6 +28,7 @@ const gptPlans = [
   { id: "halfPriceTopup", label: "一个月半价代充", amountCents: 7500 },
   { id: "philippinesTopup", label: "菲律宾正价代充", amountCents: 12800 },
   { id: "plusAccount", label: "Plus 成品账号", amountCents: 2000 },
+  { id: "plus15Day", label: "Plus 老号 · 15 天质保", amountCents: 7200 },
 ] as const;
 
 export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: Product }) {
@@ -48,7 +49,7 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
   const selectedTokenPlan = tokenPlans.find(plan => plan.id === tokenPlanId) || tokenPlans[0];
   const isToken = product === "muse-token";
   const productTitle = product === "gpt" ? `GPT · ${gptPlan.label}` : isToken ? `Muse Token · ${selectedTokenPlan.label}` : accountTitle;
-  const purchaseTerms = product === "gpt" ? gptPlanId === "plusAccount" ? [{ title: "成品账号", body: "交付账号、密码和 2FA。订阅剩余时间以账号实际显示为准。" }, { title: "时效与售后", body: "请在购买后 20 分钟内完成兑换并检查首次登录；上游对首登售后时限有不同说明，请购买前向售后确认具体范围。" }, { title: "售后联系", body: "如有首次登录问题，请直接联系货源商邮箱 692972690@qq.com，保留北京时间和登录过程录屏。" }] : [{ title: "邮件交付", body: "店主核实收款后将卡密或账号资料发送至收件邮箱。" }, { title: "半价资格", body: "半价代充需要账号具有半价资格，请在付款前确认。资格账号本身不包含 Plus 订阅。" }, { title: "兑换", body: "代充卡密需按邮件中的说明自行兑换，发货不等于充值成功。" }] : isToken ? tokenTerms : terms;
+  const purchaseTerms = product === "gpt" ? gptPlanId === "plus15Day" ? [{ title: "账号有效期", body: "Plus 老号，供货商说明剩余有效期约 20–26 天，实际以账号显示为准；续费或重置次数不保证。" }, { title: "质保与操作限制", body: "供货商提供 15 天质保，质保期内账号失效按其规则处理；无库存可补时可能按剩余质保天数退款。请勿换绑、修改密码或 2FA，否则不再提供质保。" }, { title: "首次登录与使用", body: "供货商说明：发货后 1 小时内首次登录失效可免费更换；使用 1 天内出现降智可申请更换一次，更换后效果不保证。" }, { title: "售后联系", body: "供货商售后时间 11:00–23:00；请联系 692972690@qq.com 咨询处理。" }] : gptPlanId === "plusAccount" ? [{ title: "成品账号", body: "交付账号、密码和 2FA。订阅剩余时间以账号实际显示为准。" }, { title: "时效与售后", body: "请在购买后 20 分钟内完成兑换并检查首次登录；上游对首登售后时限有不同说明，请购买前向售后确认具体范围。" }, { title: "售后联系", body: "如有首次登录问题，请直接联系货源商邮箱 692972690@qq.com，保留北京时间和登录过程录屏。" }] : [{ title: "邮件交付", body: "店主核实收款后将卡密或账号资料发送至收件邮箱。" }, { title: "半价资格", body: "半价代充需要账号具有半价资格，请在付款前确认。资格账号本身不包含 Plus 订阅。" }, { title: "兑换", body: "代充卡密需按邮件中的说明自行兑换，发货不等于充值成功。" }] : isToken ? tokenTerms : terms;
   const amountCents = product === "gpt" ? gptPlan.amountCents : isToken ? selectedTokenPlan.amountCents : accountPriceCents;
   const feeCents = 0;
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("alipay");
@@ -303,6 +304,7 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
                 {gptPlanId === "halfPriceAccountOneMonth" && <div className="muse-token-notice">此商品为具有一个月半价资格的账号，不包含 Plus 订阅，可更换绑定邮箱。</div>}
                 {gptPlanId === "halfPriceTopup" && <div className="muse-token-notice"><label><input type="checkbox" checked={eligibleConfirmed} onChange={event => setEligibleConfirmed(event.target.checked)}/> 我确认账号已有半价资格</label><p>没有资格无法使用，请先购买资格账号并确认。</p></div>}
                 {gptPlanId === "plusAccount" && <div className="muse-token-notice"><strong>请购买后 20 分钟内兑换并检查首次登录</strong><p>订阅剩余时间以账号显示为准；售后直接联系 692972690@qq.com，具体范围请先查阅购买须知。</p></div>}
+                {gptPlanId === "plus15Day" && <div className="muse-token-notice"><strong>供货商提供 15 天质保，剩余有效期约 20–26 天</strong><p>请勿换绑、修改密码或 2FA，否则不再提供质保。详情见购买须知。</p></div>}
                 <div className="muse-email-field"><label htmlFor="muse-email">收件邮箱</label><div className="muse-input-wrap"><Mail size={17}/><input id="muse-email" type="email" placeholder="you@example.com" maxLength={254} value={email} onChange={event => setEmail(event.target.value)}/></div><p className="muse-field-hint">卡密和使用说明将发送到此邮箱</p></div>
               </> : isToken ? <>
                 <fieldset className="muse-token-plans">

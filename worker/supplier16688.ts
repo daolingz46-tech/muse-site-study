@@ -7,6 +7,7 @@ export const GPT_SUPPLIER_PRODUCTS = {
   halfPriceTopup: { goodsNo: "G69571468", priceCents: 7500, title: "GPT · 一个月半价代充" },
   philippinesTopup: { goodsNo: "G19335525", priceCents: 12800, title: "GPT · 菲律宾正价代充" },
   plusAccount: { goodsNo: "G39595340", priceCents: 2000, title: "GPT · Plus 成品账号" },
+  plus15Day: { goodsNo: "G97316889", priceCents: 7200, title: "GPT · Plus 老号（15 天质保）" },
 } as const;
 type Parameter = string | number | boolean | null | Parameter[] | { [key: string]: Parameter };
 
