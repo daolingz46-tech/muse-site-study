@@ -16,5 +16,5 @@ export function formatMoney(cents: number) {
   return (cents / 100).toFixed(2);
 }
 export const supportQQ = "3557785836";
-export const storeName = process.env.NEXT_PUBLIC_STORE_NAME || "Muse 商店";
+export const storeName = process.env.NEXT_PUBLIC_STORE_NAME || "卡密大王";
 

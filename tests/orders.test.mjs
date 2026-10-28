@@ -43,7 +43,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
   await t.test("服务器决定价格，4 位订单码包含前导零规则，邀请码必填", async () => {
     assert.equal((await call("/api/orders", { ...input, inviteCode: "" })).status, 400);
     const r = await call("/api/orders", input); assert.equal(r.status, 201); order = r.data;
-    assert.equal(order.amountCents, 2900); assert.match(order.code, /^\d{4}$/); assert.equal(order.status, "pending");
+    assert.equal(order.amountCents, 2030); assert.match(order.code, /^\d{4}$/); assert.equal(order.status, "pending");
     assert.equal(order.qrImageUrl, "/api/payment-qr/wechat");
     const rows = await db.prepare("SELECT * FROM orders").all(); assert.equal(rows.results.length, 1);
     assert.notEqual(rows.results[0].tokenHash, order.token);
@@ -54,6 +54,20 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal((await call("/api/orders", { ...input, planId: "300" })).status, 409);
     const created = await Promise.all(Array.from({ length: 6 }, () => call("/api/orders", { ...input, requestId: randomUUID() })));
     assert.equal(new Set([order.code, ...created.map(r => r.data.code)]).size, 7); other = created[0].data;
+  });
+  await t.test("改价后旧订单重试保留原金额，所有 Muse 档位按新价创建", async () => {
+    for (const [planId, amountCents] of [["300",5530],["200",3640],["150",3150],["100",2030]]) {
+      const r = await call("/api/orders", { ...input, planId, requestId: randomUUID() });
+      assert.equal(r.data.amountCents, amountCents);
+    }
+    const legacyInput = { ...input, requestId: randomUUID() };
+    const legacy = (await call("/api/orders", legacyInput)).data;
+    const oldHash = createHash("sha256").update(JSON.stringify(["muse-token", "Muse Token · 100亿 Token", 2900, legacyInput.inviteCode, legacyInput.method])).digest("hex");
+    await db.prepare("UPDATE orders SET amountCents=?,inputHash=? WHERE id=?").bind(2900, oldHash, legacy.id).run();
+    const retried = await call("/api/orders", legacyInput);
+    assert.equal(retried.data.id, legacy.id); assert.equal(retried.data.amountCents, 2900);
+    assert.equal((await call("/api/orders", { ...legacyInput, planId: "200" })).status, 409);
+    await db.prepare("DELETE FROM rate_limits").run();
   });
   await t.test("订单口令与管理权限隔离，拒绝跨站写入", async () => {
     assert.equal((await call("/api/orders/lookup", { id: order.id, token: order.code })).status, 404);
@@ -73,7 +87,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal((await call("/api/admin/update", { id: order.id, action: "complete", checked: true }, session)).status, 409);
     assert.equal((await call("/api/admin/update", { id: order.id, action: "confirm" }, session)).status, 200);
     const list = await call("/api/admin/orders?q=" + order.code, undefined, session);
-    assert.equal(list.data.count.total, 1); assert.equal(list.data.summary.revenueCents, 2900); assert.equal(list.data.orders[0].status, "processing");
+    assert.equal(list.data.count.total, 1); assert.equal(list.data.summary.revenueCents, 2030); assert.equal(list.data.orders[0].status, "processing");
     const first = (await call("/api/orders", { product: "muse", email: "first@example.com", method: "alipay", acceptedTerms: true, requestId: randomUUID() })).data;
     const second = (await call("/api/orders", { product: "muse", email: "second@example.com", method: "alipay", acceptedTerms: true, requestId: randomUUID() })).data;
     const reference = "TEST-TRANSACTION-001";
@@ -85,7 +99,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal((await call("/api/orders/lookup", order)).data.status, "complete");
     const audit = await db.prepare("SELECT * FROM audit WHERE orderId=?").bind(order.id).all(); assert.equal(audit.results.length, 2);
     const account = (await call("/api/orders", { product: "muse", email: "buyer@example.com", method: "alipay", acceptedTerms: true, requestId: randomUUID() })).data;
-    assert.equal(account.amountCents, 1500);
+    assert.equal(account.amountCents, 1050);
     assert.equal(account.title, "Muse AI · 成品账号 + 10亿 Token");
     await call("/api/admin/update", { id: account.id, action: "confirm", checked: true, reference: "TEST-ALIPAY-002" }, session);
     assert.equal((await call("/api/admin/update", { id: account.id, action: "complete", checked: true }, session)).status, 400);

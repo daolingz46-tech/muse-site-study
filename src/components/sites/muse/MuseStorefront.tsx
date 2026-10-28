@@ -17,7 +17,7 @@ type PaymentMethod = "alipay" | "wechat";
 
 const terms = [
   { title: "仅质保首次登录", body: "不提供后续使用质保。首次登录有问题，请保留订单号和截图联系支持。" },
-  { title: "商品内容", body: "15 元包含 1 个 Muse AI 成品账号及该账号的 10 亿 Token，无需另购此额度。" },
+  { title: "商品内容", body: `${formatMoney(accountPriceCents)} 元包含 1 个 Muse AI 成品账号及该账号的 10 亿 Token，无需另购此额度。` },
   { title: "邮箱交付", body: "店主确认收款后准备成品账号卡密，发送到你填写的邮箱，请核对邮箱地址。" },
   { title: "登录后立即更换邮箱", body: "首次登录成功后，请立即在 Muse 内更换为自己的邮箱，并删除旧邮箱。" },
 ];
@@ -308,7 +308,7 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
                   {tokenPlans.map(plan => <label key={plan.id} className={tokenPlanId === plan.id ? "is-selected" : ""}>
                     <input type="radio" name="token-plan" value={plan.id} checked={tokenPlanId === plan.id} onChange={() => { setTokenPlanId(plan.id); setError(""); }}/>
                     <span className="muse-token-plan-name">{plan.label}</span>
-                    <strong><span>¥</span>{plan.amountCents / 100}</strong>
+                    <strong><span>¥</span>{formatMoney(plan.amountCents)}</strong>
                     <span className="muse-token-plan-check" aria-hidden="true">{tokenPlanId === plan.id && <Check size={11}/>}</span>
                   </label>)}
                 </fieldset>
