@@ -11,3 +11,7 @@
 .wb-supplier-feedback { margin: 6px 0; padding: 10px; border: 1px solid #e5c37e; border-radius: 8px; background: #fff8e7; color: #704d0d; font-size: 13px; line-height: 1.5; }
 .wb-supplier-feedback.error { border-color: #e6abab; background: #fff0f0; color: #a12626; }
 .wb-supplier-feedback.success { border-color: #9cdbb5; background: #effaf3; color: #236644; }
+
+.wb-catalog { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px; margin-top:15px; }
+.wb-catalog div { border:1px solid #e5e9f0; border-radius:10px; padding:12px; display:flex; flex-direction:column; gap:6px; }
+.wb-catalog span { font-size:12px; color:#65748c; }

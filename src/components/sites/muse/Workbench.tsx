@@ -13,6 +13,7 @@ type AdminOrder = {
   status: string; createdAt: number; reportedAt: number | null;
   reference: string | null; emailSentAt?: number | null; emailSendCount?: number;
   supplierState?: string | null; supplierTradeNo?: string | null;
+  contactEmail?: string | null;
 };
 type Result = { orders: AdminOrder[]; count: { total: number }; page: number;
   summary: { total: number; awaiting: number; processing: number; completed: number; revenueCents: number; todayCents: number } };
@@ -21,6 +22,7 @@ type VisitResult = { summary: { total: number; today: number; last7Days: number 
 type TutorialBlock = { type: "text"; content: string } | { type: "image"; url: string; caption: string };
 type Tutorial = { title: string; blocks: TutorialBlock[]; updatedAt: number | null };
 type DeliveryFile = { id: string; name: string; mime: string; size: number; uploadedBytes: number };
+type CatalogProduct = { category: string; title: string; supplier: string | null; sales: number };
 const labels: Record<string, string> = { pending: "待付款", reported: "待核实到账", processing: "待交付", complete: "已完成", expired: "已超时" };
 const visitSourceLabels: Record<string, string> = { direct: "直接访问", wechat: "微信", search: "搜索引擎", social: "社交平台", external: "其他网站" };
 const visitDeviceLabels: Record<string, string> = { mobile: "手机", tablet: "平板", desktop: "电脑" };
@@ -53,6 +55,9 @@ export function Workbench() {
   const [mailBusy, setMailBusy] = useState(false), [uploadingFile, setUploadingFile] = useState(false), [mailError, setMailError] = useState("");
   const [supplierBusy, setSupplierBusy] = useState("");
   const [supplierFeedback, setSupplierFeedback] = useState<{ orderId: string; message: string; kind: "success" | "error" } | null>(null);
+  const [contactOrder, setContactOrder] = useState<AdminOrder | null>(null), [contactMessage, setContactMessage] = useState(""), [contactError, setContactError] = useState(""), [contactBusy, setContactBusy] = useState(false);
+  const [catalog, setCatalog] = useState<CatalogProduct[]>([]);
+  const contactDialog = useRef<HTMLDialogElement>(null);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [mailSuccess, setMailSuccess] = useState<{code: string; to: string} | null>(null);
   const [pushEndpoint, setPushEndpoint] = useState("");
@@ -159,6 +164,8 @@ export function Workbench() {
   }, [auth]);
   useEffect(() => { if (selected) dialog.current?.showModal(); }, [selected]);
   useEffect(() => { if (mailOrder) mailDialog.current?.showModal(); }, [mailOrder]);
+  useEffect(() => { if (contactOrder) contactDialog.current?.showModal(); }, [contactOrder]);
+  useEffect(() => { if (auth === "ready") void api("catalog").then((data: { products: CatalogProduct[] }) => setCatalog(data.products)).catch(() => {}); }, [auth, result]);
   async function login(event: FormEvent) {
     event.preventDefault(); if (busy) return; setBusy(true); setError("");
     try { await api("login", { password }); setPassword(""); await load(); }
@@ -227,6 +234,13 @@ export function Workbench() {
     try { await api("supplier-deliver", { id: order.id }); setSupplierFeedback({ orderId: order.id, kind: "success", message: "采购成功，卡密邮件已提交发送。" }); await load(); }
     catch (cause) { setSupplierFeedback({ orderId: order.id, kind: "error", message: cause instanceof ApiError ? cause.message : "连接中断，发货结果不明。请先刷新订单并核查采购记录，不要重复采购。" }); await load(); }
     finally { setSupplierBusy(""); }
+  }
+  async function contactBuyer(event: FormEvent) {
+    event.preventDefault(); if (!contactOrder || contactBusy) return;
+    setContactBusy(true); setContactError("");
+    try { await api("contact-buyer", { id: contactOrder.id, message: contactMessage }); setAlert(`订单 ${contactOrder.code} 的消息已提交发送`); setContactOrder(null); }
+    catch (cause) { setContactError(cause instanceof Error ? cause.message : "发送失败，请核查邮件后重试"); }
+    finally { setContactBusy(false); }
   }
   function open(order: AdminOrder) { setSelected(order); setChecked(false); setReference(""); setDelivery({ email: "", password: "", codeUrl: "" }); setActionError(""); }
   function openMail(order: AdminOrder) {
@@ -304,6 +318,7 @@ export function Workbench() {
       ["待核实到账", result?.summary.awaiting || 0, "买家已反馈付款 · 5 秒自动刷新"],
       ["待交付", result?.summary.processing || 0, `${result?.summary.completed || 0} 笔已完成 · 共 ${result?.summary.total || 0} 笔订单`],
     ].map(([title, value, note]) => <article key={title}><span>{title}</span><strong>{value}</strong><small>{note}</small></article>)}</section>
+    <section className="wb-visitors"><div className="wb-visitor-heading"><div><h2>商品销量与货源</h2><p>销量按已核实收款订单统计；未配置编号的商品保留人工管理。</p></div></div><div className="wb-catalog">{catalog.map(item => <div key={item.title}><strong>{item.category} · {item.title}</strong><span>销量 {item.sales} · 16688 货源编号：{item.supplier || "未配置"}</span></div>)}</div></section>
     <section className="wb-visitors"><div className="wb-visitor-heading"><div><h2>访客数据</h2><p>匿名统计访问次数，不记录访客姓名、联系方式或完整来源网址。</p></div><div className="wb-visitor-stats"><span>今日 <b>{visits?.summary.today ?? "—"}</b></span><span>近 7 天 <b>{visits?.summary.last7Days ?? "—"}</b></span><span>累计 <b>{visits?.summary.total ?? "—"}</b></span></div></div><div className="wb-visit-list"><div className="wb-visit-row wb-visit-head"><span>访问时间</span><span>页面</span><span>来源</span><span>设备</span></div>{visits?.recent.map(visit => <div className="wb-visit-row" key={visit.id}><span>{date(visit.createdAt)}</span><span>{visit.page === "/" ? "商店首页" : visit.page}</span><span>{visitSourceLabels[visit.source] || "其他网站"}</span><span>{visitDeviceLabels[visit.device] || "电脑"}</span></div>)}{visits && visits.recent.length === 0 && <p className="wb-visit-empty">还没有访客记录；访客打开商店后会自动统计。</p>}</div></section>
     {tutorial && <TutorialEditor key={tutorial.updatedAt ?? "new"} tutorial={tutorial} onSaved={setTutorial}/>}
     <section className="wb-order-section"><div className="wb-toolbar"><h2>订单列表</h2><div><button onClick={() => void load()}><RefreshCw size={15}/>刷新</button><button onClick={exportCsv} disabled={!result?.orders.length}><Download size={15}/>导出当前页</button></div></div>
@@ -312,11 +327,12 @@ export function Workbench() {
       <div className="wb-table-scroll"><table><thead><tr><th>订单 / 商品</th><th>买家信息</th><th>金额 / 方式</th><th>状态</th><th>下单时间</th><th>操作</th></tr></thead><tbody>{result?.orders.map(order => <tr key={order.id}>
         <td><strong className="wb-code">{order.code}</strong><span>{order.title}</span><small title={order.id}>{order.id}</small></td><td><small>{order.product === "muse-token" ? "账号邀请码" : "收件邮箱"}</small><span className="wb-target">{order.target}</span></td>
         <td><strong>¥{formatMoney(order.amountCents)}</strong><span>{order.method === "wechat" ? "微信" : "支付宝"}</span></td><td><span className={`wb-status is-${order.status}`}>{labels[order.status]}</span>{order.reference && <small title={order.reference}>交易号：{order.reference}</small>}</td><td><span>{date(order.createdAt)}</span></td>
-        <td>{supplierFeedback?.orderId === order.id && <div className={`wb-supplier-feedback ${supplierFeedback.kind}`} role="alert">{supplierFeedback.message}</div>}{supplierBusy === order.id && <div className="wb-supplier-feedback" role="status">正在向货源查询并处理发货，请稍候…</div>}{order.product === "gpt" && order.supplierState && <small>货源状态：{({ awaiting: "等待货源发货，可再次查询", purchasing: "采购处理中，请核查", purchase_unknown: "采购结果待核查", sending: "邮件发送中，请核查", mail_unknown: "邮件结果待核查", ready: "已获取卡密", sent: "已发货" } as Record<string, string>)[order.supplierState] || order.supplierState}{order.supplierTradeNo ? ` · 采购单 ${order.supplierTradeNo}` : ""}</small>}{!!order.emailSentAt && <div className="wb-mail-sent"><strong>✓ 邮件已发送{(order.emailSendCount || 0) > 1 ? ` · ${order.emailSendCount} 次` : ""}</strong><small>最近发送：{date(order.emailSentAt)}</small></div>}<div className="wb-order-actions">{order.status === "complete" && <span className="wb-done">已交付 · 可售后</span>}{!["processing", "complete"].includes(order.status) && <button className="wb-action wb-verify" onClick={() => open(order)}><ShieldCheck size={14}/>核实收款</button>}{order.product === "gpt" && order.status === "processing" && <button className="wb-action wb-send" disabled={!!supplierBusy} onClick={() => void supplierDeliver(order)}>{supplierBusy === order.id ? "正在发货…" : "采购并发邮件"}</button>}{order.product === "muse" && ["processing", "complete"].includes(order.status) ? <button className={`wb-action ${order.status === "complete" ? "wb-resend" : "wb-send"}`} title="向买家邮箱发送卡密" onClick={() => openMail(order)}><Mail size={14}/>{order.status === "complete" ? "再次发送" : "发送邮件"}</button> : order.product === "muse-token" && order.status === "processing" && <button className="wb-action wb-send" onClick={() => open(order)}>完成充值</button>}</div></td>
+        <td>{supplierFeedback?.orderId === order.id && <div className={`wb-supplier-feedback ${supplierFeedback.kind}`} role="alert">{supplierFeedback.message}</div>}{supplierBusy === order.id && <div className="wb-supplier-feedback" role="status">正在向货源查询并处理发货，请稍候…</div>}{order.product === "gpt" && order.supplierState && <small>货源状态：{({ awaiting: "等待货源发货，可再次查询", purchasing: "采购处理中，请核查", purchase_unknown: "采购结果待核查", sending: "邮件发送中，请核查", mail_unknown: "邮件结果待核查", ready: "已获取卡密", sent: "已发货" } as Record<string, string>)[order.supplierState] || order.supplierState}{order.supplierTradeNo ? ` · 采购单 ${order.supplierTradeNo}` : ""}</small>}{!!order.emailSentAt && <div className="wb-mail-sent"><strong>✓ 邮件已发送{(order.emailSendCount || 0) > 1 ? ` · ${order.emailSendCount} 次` : ""}</strong><small>最近发送：{date(order.emailSentAt)}</small></div>}<div className="wb-order-actions">{(order.product !== "muse-token" || order.contactEmail) && <button className="wb-action" onClick={() => { setContactMessage(""); setContactError(""); setContactOrder(order); }}><Mail size={14}/>联系客户</button>}{order.status === "complete" && <span className="wb-done">已交付 · 可售后</span>}{!["processing", "complete"].includes(order.status) && <button className="wb-action wb-verify" onClick={() => open(order)}><ShieldCheck size={14}/>核实收款</button>}{order.product === "gpt" && order.status === "processing" && <button className="wb-action wb-send" disabled={!!supplierBusy} onClick={() => void supplierDeliver(order)}>{supplierBusy === order.id ? "正在发货…" : "采购并发邮件"}</button>}{order.product === "muse" && ["processing", "complete"].includes(order.status) ? <button className={`wb-action ${order.status === "complete" ? "wb-resend" : "wb-send"}`} title="向买家邮箱发送卡密" onClick={() => openMail(order)}><Mail size={14}/>{order.status === "complete" ? "再次发送" : "发送邮件"}</button> : order.product === "muse-token" && order.status === "processing" && <button className="wb-action wb-send" onClick={() => open(order)}>完成充值</button>}</div></td>
       </tr>)}</tbody></table></div>
       {!result?.orders.length && <div className="wb-empty"><ShoppingBagIcon/><h3>暂无匹配订单</h3><p>客户下单后，订单会自动出现在这里。</p></div>}
       <footer className="wb-pagination"><span>共 {result?.count.total || 0} 笔 · 每页 50 笔</span><div><button disabled={page === 0} onClick={() => setPage(page - 1)}>上一页</button><span>{page + 1}</span><button disabled={(page + 1) * 50 >= (result?.count.total || 0)} onClick={() => setPage(page + 1)}>下一页</button></div></footer>
     </section>
+    {contactOrder && <dialog ref={contactDialog} className="wb-dialog" onCancel={e => { if (contactBusy) e.preventDefault(); else setContactOrder(null); }}><button type="button" className="wb-close" aria-label="关闭" disabled={contactBusy} onClick={() => setContactOrder(null)}><X size={18}/></button><form onSubmit={contactBuyer}><h2>联系客户</h2><p>订单 {contactOrder.code} · 收件邮箱：{contactOrder.product === "muse-token" ? contactOrder.contactEmail : contactOrder.target}</p><label>邮件内容<textarea required maxLength={3000} rows={6} value={contactMessage} onChange={e => setContactMessage(e.target.value)} placeholder="输入想告诉客户的内容"/></label>{contactError && <p role="alert" className="wb-error">{contactError}</p>}<button className="wb-primary" disabled={contactBusy}>{contactBusy ? "发送中…" : "发送邮件"}</button></form></dialog>}
     {selected && <dialog ref={dialog} className={`wb-dialog ${selected.status === "processing" ? "wb-complete-dialog" : "wb-verify-dialog"}`} onCancel={e => { if (busy) e.preventDefault(); else setSelected(null); }} aria-labelledby="wb-action-title"><button className="wb-close" aria-label="关闭" disabled={busy} onClick={() => setSelected(null)}><X size={18}/></button>
       <form onSubmit={save}><p className="wb-eyebrow">订单码 {selected.code}</p><h2 id="wb-action-title">{selected.status === "processing" ? "完成交付" : "核实收款"}</h2><p>{selected.title} · ¥{formatMoney(selected.amountCents)} · {selected.method === "wechat" ? "微信" : "支付宝"}</p><p className="wb-target">{selected.product === "muse-token" ? "账号邀请码" : "收件邮箱"}：{selected.target}</p>
         {selected.status === "processing" ? <>{selected.product === "muse" && <><label>交付账号<input required value={delivery.email} maxLength={254} onChange={e => setDelivery({ ...delivery, email: e.target.value })}/></label><label>账号密码<input required value={delivery.password} maxLength={256} onChange={e => setDelivery({ ...delivery, password: e.target.value })}/></label><label>接码链接<input required type="url" pattern="https://.*" value={delivery.codeUrl} maxLength={1000} placeholder="https://…" onChange={e => setDelivery({ ...delivery, codeUrl: e.target.value })}/></label></>}<label className="wb-check"><input type="checkbox" required checked={checked} onChange={e => setChecked(e.target.checked)}/>{selected.product === "muse-token" ? "我已为此邀请码完成充值" : "我已核对账号资料，确认交付给买家"}</label></> : <><div className="wb-notice">请确认已收到 ¥{formatMoney(selected.amountCents)}，付款备注包含订单码 <b>{selected.code}</b>。</div><label>支付交易单号（选填）<input minLength={6} maxLength={100} value={reference} onChange={e => setReference(e.target.value)} placeholder="可选：从收款账单中复制交易单号"/></label></>}
