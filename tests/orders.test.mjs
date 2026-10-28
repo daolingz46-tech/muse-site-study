@@ -182,6 +182,13 @@ test("订单、收款核实和交付的数据库流程", async t => {
   });
   await t.test("GPT 核款后手动采购并发送，重复发货不重复采购", async () => {
     session = (await call("/api/admin/login", { password })).cookie;
+    const oldAccount = await call("/api/orders", { product: "gpt", planId: "halfPriceAccount", email: "old@example.com", method: "alipay", acceptedTerms: true, requestId: randomUUID() });
+    const newAccount = await call("/api/orders", { product: "gpt", planId: "halfPriceAccountOneMonth", email: "new@example.com", method: "alipay", acceptedTerms: true, requestId: randomUUID() });
+    assert.equal(oldAccount.data.title, "GPT · 两个月半价资格账号");
+    assert.equal(newAccount.data.title, "GPT · 一个月半价资格账号");
+    assert.equal(newAccount.data.amountCents, 1500);
+    assert.equal((await db.prepare("SELECT supplierPlan FROM orders WHERE id=?").bind(oldAccount.data.id).first()).supplierPlan, "halfPriceAccount");
+    assert.equal((await db.prepare("SELECT supplierPlan FROM orders WHERE id=?").bind(newAccount.data.id).first()).supplierPlan, "halfPriceAccountOneMonth");
     const payload = { product: "gpt", planId: "philippinesTopup", email: "gpt@example.com", method: "alipay", acceptedTerms: true, requestId: randomUUID() };
     const created = await call("/api/orders", payload); assert.equal(created.status, 201); assert.equal(created.data.amountCents, 11900);
     const gpt = created.data;

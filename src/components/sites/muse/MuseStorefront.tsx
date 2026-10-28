@@ -24,7 +24,7 @@ const terms = [
 const assetBase = process.env.NEXT_PUBLIC_BASE_PATH || "";
 const canonicalStore = "https://musetoken.store/";
 const gptPlans = [
-  { id: "halfPriceAccount", label: "两个月半价资格账号", amountCents: 1500 },
+  { id: "halfPriceAccountOneMonth", label: "一个月半价资格账号", amountCents: 1500 },
   { id: "halfPriceTopup", label: "一个月半价代充", amountCents: 7500 },
   { id: "philippinesTopup", label: "菲律宾正价代充", amountCents: 11900 },
 ] as const;
@@ -285,7 +285,7 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
               <p className="muse-subtitle">{product === "gpt" ? "选择商品 · 邮箱交付" : isToken ? "Token 充值 · 不含账号" : "成品账号 + 10亿 Token"}</p>
               {product === "gpt" ? <>
                 <fieldset className="muse-token-plans"><legend className="sr-only">选择 GPT 商品</legend>{gptPlans.map(plan => <label key={plan.id} className={gptPlanId === plan.id ? "is-selected" : ""}><input type="radio" name="gpt-plan" checked={gptPlanId === plan.id} onChange={() => { setGptPlanId(plan.id); setEligibleConfirmed(false); }}/><span className="muse-token-plan-name">{plan.label}</span><strong><span>¥</span>{plan.amountCents / 100}</strong></label>)}</fieldset>
-                {gptPlanId === "halfPriceAccount" && <div className="muse-token-notice">此商品为具有两个月半价资格的账号，不包含 Plus 订阅，可更换绑定邮箱。</div>}
+                {gptPlanId === "halfPriceAccountOneMonth" && <div className="muse-token-notice">此商品为具有一个月半价资格的账号，不包含 Plus 订阅，可更换绑定邮箱。</div>}
                 {gptPlanId === "halfPriceTopup" && <div className="muse-token-notice"><label><input type="checkbox" checked={eligibleConfirmed} onChange={event => setEligibleConfirmed(event.target.checked)}/> 我确认账号已有半价资格</label><p>没有资格无法使用，请先购买资格账号并确认。</p></div>}
                 <div className="muse-email-field"><label htmlFor="muse-email">收件邮箱</label><div className="muse-input-wrap"><Mail size={17}/><input id="muse-email" type="email" placeholder="you@example.com" maxLength={254} value={email} onChange={event => setEmail(event.target.value)}/></div><p className="muse-field-hint">卡密和使用说明将发送到此邮箱</p></div>
               </> : isToken ? <>
