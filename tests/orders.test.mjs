@@ -13,10 +13,11 @@ test("订单、收款核实和交付的数据库流程", async t => {
   const sentMessages = [];
   let supplierPurchases = 0;
   let supplierTimeout = false;
+  let supplierBalanceEnough = true;
   const mf = new Miniflare(convertV4MiniflareOptions({ workers: [{ name: "test-store", modules: true, scriptPath: "temp/worker/index.js", compatibilityDate: "2026-10-01", d1Databases: { DB: "test-orders" }, bindings: { ADMIN_PASSWORD_HASH: createHash("sha256").update(password).digest("hex"), GMAIL_SCRIPT_URL: "https://mail.test/exec", GMAIL_SCRIPT_TOKEN: "test-token", SUPPLIER_APP_ID: "test-app", SUPPLIER_SECRET: "test-secret" }, outboundService: async request => {
     if (new URL(request.url).hostname === "www.16688.com.cn") {
       const path = new URL(request.url).pathname;
-      if (path.endsWith("/quotePrice")) return Response.json({ code: 1, data: { balance_enough: true, total_amount: 110 } });
+      if (path.endsWith("/quotePrice")) return Response.json({ code: 1, data: { balance_enough: supplierBalanceEnough, total_amount: 110 } });
       if (path.endsWith("/create")) { supplierPurchases++; if (supplierTimeout) throw new Error("simulated network failure"); return Response.json({ code: 1, data: { trade_no: "TEST-16688" } }); }
       if (path.endsWith("/query")) return Response.json({ code: 1, data: { status: 4, cards: [{ code: "TEST-CARD" }], instruction: "test instructions" } });
       throw new Error("unexpected supplier request");
@@ -187,6 +188,10 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal((await call("/api/admin/supplier-deliver", { id: gpt.id }, session)).status, 409);
     assert.equal(supplierPurchases, 0);
     assert.equal((await call("/api/admin/update", { id: gpt.id, action: "confirm" }, session)).status, 200);
+    supplierBalanceEnough = false;
+    const insufficient = await call("/api/admin/supplier-deliver", { id: gpt.id }, session);
+    assert.equal(insufficient.status, 409); assert.match(insufficient.data.message, /运营钱包余额不足/); assert.equal(supplierPurchases, 0);
+    supplierBalanceEnough = true;
     assert.equal((await call("/api/admin/supplier-deliver", { id: gpt.id }, session)).status, 200);
     assert.equal(supplierPurchases, 1);
     assert.equal((await call("/api/admin/supplier-deliver", { id: gpt.id }, session)).status, 409);
