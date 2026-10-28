@@ -1,5 +1,6 @@
 /** Server-side 16688 Open API client. Never expose credentials to the browser. */
 export type SupplierCredentials = { appId: string; secret: string };
+export const MUSE_ACCOUNT_SUPPLIER = { goodsNo: "G72563978", priceCents: 1500 } as const;
 export const GPT_SUPPLIER_PRODUCTS = {
   halfPriceAccount: { goodsNo: "G26126458", priceCents: 1500, title: "GPT · 两个月半价资格账号" },
   halfPriceAccountOneMonth: { goodsNo: "G75777360", priceCents: 1500, title: "GPT · 一个月半价资格账号" },
