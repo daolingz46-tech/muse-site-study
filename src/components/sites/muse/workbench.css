@@ -13,5 +13,20 @@
 .wb-supplier-feedback.success { border-color: #9cdbb5; background: #effaf3; color: #236644; }
 
 .wb-catalog { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px; margin-top:15px; }
-.wb-catalog div { border:1px solid #e5e9f0; border-radius:10px; padding:12px; display:flex; flex-direction:column; gap:6px; }
-.wb-catalog span { font-size:12px; color:#65748c; }
+.wb-catalog-group h3 { margin:18px 0 0; color:#56647a; font-size:13px; }
+.wb-catalog-card { display:flex; align-items:flex-start; gap:12px; min-width:0; padding:15px; border:1px solid #e5e9f0; border-radius:12px; background:#fff; }
+.wb-catalog-icon { flex-shrink:0; width:42px; height:42px; object-fit:contain; border:1px solid #eef0f4; border-radius:10px; padding:5px; background:#fff; }
+.wb-catalog-fallback { display:grid; place-items:center; font-weight:700; color:#53627a; }
+.wb-catalog-details { min-width:0; display:flex; flex-direction:column; gap:4px; }
+.wb-catalog-details strong { color:#283144; font-size:13px; line-height:1.45; overflow-wrap:anywhere; }
+.wb-catalog-details span { font-size:12px; color:#65748c; overflow-wrap:anywhere; }
+.wb-contact-dialog { max-width:520px; }
+.wb-contact-dialog .wb-contact-intro { margin-bottom:16px; }
+.wb-contact-recipient { display:flex; flex-direction:column; gap:3px; padding:12px 14px; border:1px solid #e4eaf4; border-radius:10px; background:#f7f9fc; }
+.wb-contact-recipient span { color:#77839a; font-size:12px; }
+.wb-contact-recipient strong { color:#34435d; overflow-wrap:anywhere; font-size:14px; }
+.wb-contact-dialog label { margin:20px 0 8px; font-weight:600; color:#34435d; }
+.wb-contact-dialog textarea { display:block; width:100%; min-height:150px; resize:vertical; padding:12px 14px; border:1px solid #cdd6e4; border-radius:10px; background:#fff; color:#283144; font:inherit; line-height:1.65; }
+.wb-contact-dialog textarea:focus-visible { outline:3px solid #91adff; outline-offset:2px; }
+.wb-contact-hint { display:flex; justify-content:space-between; gap:10px; margin-top:7px; color:#8190a5; font-size:12px; }
+.wb-contact-dialog .wb-error { margin:12px 0 0; }
