@@ -253,20 +253,23 @@ async function createOrder(env: Env, request: Request, input: Record<string, unk
   throw new HttpError(503, "当前订单较多，请稍后再试或联系支持");
 }
 function cookie(request: Request) { return request.headers.get("Cookie")?.match(/(?:^|;\s*)muse_admin=([a-f0-9]{64})(?:;|$)/)?.[1] || ""; }
+function adminSession(request: Request) { return cookie(request) || request.headers.get("Authorization")?.match(/^Bearer ([a-f0-9]{64})$/)?.[1] || ""; }
 function cookieHeader(request: Request, value: string, age: number) { const secure = new URL(request.url).protocol === "https:"; return `muse_admin=${value}; HttpOnly; SameSite=${secure ? "None" : "Lax"}; Path=/api/admin; Max-Age=${age}${secure ? "; Secure" : ""}`; }
 async function requireAdmin(env: Env, request: Request) {
-  const session = cookie(request);
+  const session = adminSession(request);
   if (!session || !await env.DB.prepare("SELECT hash FROM sessions WHERE hash=? AND expiresAt>?").bind(await hash(session), Date.now()).first()) throw new HttpError(401, "请登录工作台");
 }
 async function admin(env: Env, request: Request, path: string) {
-  if (path === "/api/admin/login" && request.method === "POST") {
+  if ((path === "/api/admin/login" || path === "/api/admin/mini-login") && request.method === "POST") {
+    const miniLogin = path.endsWith("/mini-login");
+    if (miniLogin && request.headers.has("Origin")) throw new HttpError(403, "请求来源无效");
     await limit(env, request, "login", 8, 900);
     if (!/^[a-f0-9]{64}$/.test(env.ADMIN_PASSWORD_HASH || "")) throw new HttpError(503, "工作台尚未配置登录密码");
     const input = await body(request); const password = str(input.password, 256);
     if (!password || !same(await hash(password), env.ADMIN_PASSWORD_HASH)) throw new HttpError(401, "密码不正确");
     const session = await hash(crypto.randomUUID() + crypto.randomUUID());
     await env.DB.prepare("INSERT INTO sessions(hash,expiresAt) VALUES(?,?)").bind(await hash(session), Date.now() + 8 * 3600000).run();
-    return json({ ok: true }, 200, { "Set-Cookie": cookieHeader(request, session, 28800) });
+    return miniLogin ? json({ ok: true, session }) : json({ ok: true }, 200, { "Set-Cookie": cookieHeader(request, session, 28800) });
   }
   await requireAdmin(env, request);
   if (path === "/api/admin/contact-buyer" && request.method === "POST") {
@@ -330,7 +333,7 @@ async function admin(env: Env, request: Request, path: string) {
       return json({ ok: true });
     } catch { throw new HttpError(502, "测试推送未送达，请检查 iPhone 通知权限后重试"); }
   }
-  if (path === "/api/admin/logout" && request.method === "POST") { await env.DB.prepare("DELETE FROM sessions WHERE hash=?").bind(await hash(cookie(request))).run(); return json({ ok: true }, 200, { "Set-Cookie": cookieHeader(request, "", 0) }); }
+  if (path === "/api/admin/logout" && request.method === "POST") { await env.DB.prepare("DELETE FROM sessions WHERE hash=?").bind(await hash(adminSession(request))).run(); return json({ ok: true }, 200, { "Set-Cookie": cookieHeader(request, "", 0) }); }
   if (path === "/api/admin/orders" && request.method === "GET") {
     await expire(env);
     const url = new URL(request.url); const search = str(url.searchParams.get("q")); const status = str(url.searchParams.get("status"), 20); const page = Math.max(0, Math.min(100000, Number(url.searchParams.get("page")) || 0));
@@ -631,7 +634,8 @@ const worker = {
         if (!corsOrigin) throw new HttpError(403, "请求来源无效，请刷新页面");
         return withCors(new Response(null, { status: 204 }));
       }
-      if (request.method !== "GET" && !corsOrigin) throw new HttpError(403, "请求来源无效，请刷新页面");
+      const nativeAdmin = !origin && path.startsWith("/api/admin/") && (path === "/api/admin/mini-login" || /^Bearer [a-f0-9]{64}$/.test(request.headers.get("Authorization") || ""));
+      if (request.method !== "GET" && !corsOrigin && !nativeAdmin) throw new HttpError(403, "请求来源无效，请刷新页面");
       if (request.method === "GET" && origin && !corsOrigin) throw new HttpError(403, "请求来源无效，请刷新页面");
       if (path === "/api/health" && request.method === "GET") {
         await env.DB.prepare("SELECT id FROM orders LIMIT 1").all();
