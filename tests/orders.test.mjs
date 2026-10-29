@@ -20,9 +20,9 @@ test("订单、收款核实和交付的数据库流程", async t => {
     if (new URL(request.url).hostname === "www.16688.com.cn") {
       const path = new URL(request.url).pathname;
       const params = await request.json();
-      if (path.endsWith("/quotePrice")) return Response.json({ code: 1, data: { balance_enough: supplierBalanceEnough, available_quantity: supplierStock, total_amount: params.goods_no === "G72563978" ? 2.88 : params.goods_no === "G39595340" ? 11.31 : params.goods_no === "G97316889" ? 60.65 : 110 } });
+      if (path.endsWith("/quotePrice")) return Response.json({ code: 1, data: { balance_enough: supplierBalanceEnough, available_quantity: supplierStock, total_amount: params.goods_no === "G43844575" ? 4.12 : params.goods_no === "G39595340" ? 11.31 : params.goods_no === "G97316889" ? 60.65 : 110 } });
       if (path.endsWith("/create")) { supplierGoods = params.goods_no; supplierPurchases++; if (supplierTimeout) throw new Error("simulated network failure"); return Response.json({ code: 1, data: { trade_no: "TEST-16688" } }); }
-      if (path.endsWith("/query")) return Response.json({ code: 1, data: { status: 4, cards: [{ code: supplierGoods === "G72563978" ? "muse@example.com|https://example.com/code" : "TEST-CARD" }], instruction: "<h3>使用说明</h3><p>打开 <a href=\"https://example.com/redeem\">兑换地址</a></p>" } });
+      if (path.endsWith("/query")) return Response.json({ code: 1, data: { status: 4, cards: [{ code: supplierGoods === "G43844575" ? "muse@example.com—mailpass--https://example.com/code" : "TEST-CARD" }], instruction: "<h3>使用说明</h3><p>打开 <a href=\"https://example.com/redeem\">兑换地址</a></p>" } });
       throw new Error("unexpected supplier request");
     }
     assert.equal(new URL(request.url).hostname, "mail.test");
@@ -99,7 +99,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal((await call("/api/orders/lookup", order)).data.status, "complete");
     const audit = await db.prepare("SELECT * FROM audit WHERE orderId=?").bind(order.id).all(); assert.equal(audit.results.length, 2);
     const account = (await call("/api/orders", { product: "muse", email: "buyer@example.com", method: "alipay", acceptedTerms: true, requestId: randomUUID() })).data;
-    assert.equal(account.amountCents, 1050);
+    assert.equal(account.amountCents, 1200);
     assert.equal(account.title, "Muse AI · 成品账号 + 10亿 Token");
     await call("/api/admin/update", { id: account.id, action: "confirm", checked: true, reference: "TEST-ALIPAY-002" }, session);
     assert.equal((await call("/api/admin/update", { id: account.id, action: "complete", checked: true }, session)).status, 400);
@@ -267,9 +267,9 @@ test("订单、收款核实和交付的数据库流程", async t => {
     await call("/api/admin/update", { id: account.id, action: "confirm" }, session);
     const before = supplierPurchases;
     assert.equal((await call("/api/admin/supplier-deliver", { id: account.id }, session)).status, 200);
-    assert.equal(supplierPurchases, before + 1); assert.equal(supplierGoods, "G72563978");
+    assert.equal(supplierPurchases, before + 1); assert.equal(supplierGoods, "G43844575");
     const mail = sentMessages.find(item => item.to === "muse-buyer@example.com" && item.text.includes("muse@example.com"));
-    assert.ok(mail); assert.match(mail.text, /Muse 登录账号/); assert.match(mail.text, /邮箱验证码获取地址/);
+    assert.ok(mail); assert.match(mail.text, /Muse 登录账号/); assert.match(mail.text, /邮箱密码：mailpass/); assert.match(mail.text, /邮箱验证码获取地址/);
     assert.equal((await call("/api/admin/send-delivery", { id: account.id, card: "OTHER" }, session)).status, 409);
     assert.equal((await call("/api/admin/supplier-deliver", { id: account.id }, session)).status, 409);
     const manual = (await call("/api/orders", { product: "muse", email: "manual@example.com", method: "alipay", acceptedTerms: true, requestId: randomUUID() })).data;
@@ -278,7 +278,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal((await call("/api/admin/supplier-deliver", { id: manual.id }, session)).status, 409);
     assert.equal(supplierPurchases, before + 1);
     const catalog = await call("/api/admin/catalog", undefined, session);
-    assert.ok(catalog.data.products.some(item => item.supplier === "G72563978"));
+    assert.ok(catalog.data.products.some(item => item.supplier === "G43844575"));
   });
 
   await t.test("20 元 Plus 成品账号使用指定货源及售后邮箱", async () => {

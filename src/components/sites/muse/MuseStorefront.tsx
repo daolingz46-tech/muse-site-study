@@ -16,10 +16,10 @@ type Step = "details" | "notice" | "payment";
 type PaymentMethod = "alipay" | "wechat";
 
 const terms = [
-  { title: "仅质保首次登录", body: "不提供后续使用质保。首次登录有问题，请保留订单号和截图联系支持。" },
+  { title: "仅质保首次登录", body: "24 小时内仅保障首次登录，首次登录成功后质保失效。首次登录有问题，请保留订单号和截图联系支持。" },
   { title: "商品内容", body: `${formatMoney(accountPriceCents)} 元包含 1 个 Muse AI 成品账号及该账号的 10 亿 Token，无需另购此额度。` },
   { title: "邮箱交付", body: "店主确认收款后准备成品账号卡密，发送到你填写的邮箱，请核对邮箱地址。" },
-  { title: "登录后立即更换邮箱", body: "首次登录成功后，请立即在 Muse 内更换为自己的邮箱，并删除旧邮箱。" },
+  { title: "登录后立即更换邮箱", body: "登录需使用美国 IP；首次登录成功后，请立即在 Muse 内更换为自己的邮箱，并删除旧邮箱。" },
 ];
 const assetBase = process.env.NEXT_PUBLIC_BASE_PATH || "";
 const canonicalStore = "https://musetoken.store/";
