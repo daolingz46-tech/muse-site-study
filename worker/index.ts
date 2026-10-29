@@ -474,10 +474,12 @@ async function admin(env: Env, request: Request, path: string) {
       task = { ...task, state: "ready", card, instruction };
     }
     if (task.state !== "ready" || !task.card) throw new HttpError(409, "该订单正在处理或结果待核查，请查看货源及邮件记录，勿重复采购");
+    const needsSupplierSupport = order.supplierPlan === "plusAccount" || order.supplierPlan === "plus15Day";
+    if (needsSupplierSupport && !task.tradeNo?.trim()) throw new HttpError(409, "缺少源头订单编号，请核查采购记录后再发货");
     const claim = await env.DB.prepare("UPDATE supplier_fulfillment SET state='sending',updatedAt=? WHERE orderId=? AND state='ready'").bind(Date.now(), id).run();
     if (!claim.meta.changes) throw new HttpError(409, "邮件正在发送，请刷新订单");
     const loginGuide = order.supplierPlan === "plus15Day" ? "登录步骤：\n1. 打开 ChatGPT 登录页面，输入邮件中的账号和密码。\n2. 将邮件中的 2FA 密钥输入 https://2fa.fun/ 或 https://2fa.live/，获取一次性验证码。\n3. 在登录页面输入验证码。请勿换绑、修改密码或 2FA，否则供货商不再提供质保。" : "";
-    const { html, text } = deliveryEmail({ title: order.title, code: order.code, card: task.card, instructions: [loginGuide, task.instruction || ""].filter(Boolean).join("\n\n"), support: order.supplierPlan === "plusAccount" || order.supplierPlan === "plus15Day" ? "售后请直接联系货源商邮箱：692972690@qq.com；请保留北京时间和登录过程录屏。" : undefined });
+    const { html, text } = deliveryEmail({ title: order.title, code: order.code, card: task.card, instructions: [loginGuide, task.instruction || ""].filter(Boolean).join("\n\n"), supplierOrderNo: needsSupplierSupport ? task.tradeNo! : undefined });
     try { await sendEmail(env, `supplier-delivery:${id}`, `${order.title} · 订单 ${order.code}`, html, text, order.target, [], "buyer_delivery"); }
     catch { await env.DB.prepare("UPDATE supplier_fulfillment SET state='mail_unknown',updatedAt=? WHERE orderId=?").bind(Date.now(), id).run(); throw new HttpError(502, "邮件发送结果不明，请先核查发件箱和客户邮箱；卡密已采购，请勿重复采购"); }
     const now = Date.now();
