@@ -325,4 +325,16 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal((await call("/api/admin/supplier-deliver", { id: account.id }, session)).status, 409);
   });
 
+  await t.test("小程序凭工作台密码登录，令牌可用且不能绕过跨站限制", async () => {
+    await db.prepare("DELETE FROM rate_limits").run();
+    const native = (path, method, data, headers = {}) => mf.dispatchFetch(`https://shop.example/api/admin/${path}`, { method, headers: { "Content-Type": "application/json", ...headers }, body: data ? JSON.stringify(data) : undefined });
+    assert.equal((await native("mini-login", "POST", { password }, { Origin: "https://evil.example" })).status, 403);
+    const login = await native("mini-login", "POST", { password }); assert.equal(login.status, 200);
+    const token = (await login.json()).session; assert.match(token, /^[a-f0-9]{64}$/);
+    assert.equal((await native("orders", "GET", undefined, { Authorization: `Bearer ${token}` })).status, 200);
+    assert.equal((await native("logout", "POST", {}, { Authorization: `Bearer ${token}`, Origin: "https://evil.example" })).status, 403);
+    assert.equal((await native("logout", "POST", {}, { Authorization: `Bearer ${token}` })).status, 200);
+    assert.equal((await native("orders", "GET", undefined, { Authorization: `Bearer ${token}` })).status, 401);
+  });
+
 });
