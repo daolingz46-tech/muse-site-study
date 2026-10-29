@@ -22,6 +22,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
       const params = await request.json();
       if (path.endsWith("/quotePrice")) return Response.json({ code: 1, data: { balance_enough: supplierBalanceEnough, available_quantity: supplierStock, total_amount: params.goods_no === "G43844575" ? 4.12 : params.goods_no === "G39595340" ? 11.31 : params.goods_no === "G97316889" ? 60.65 : 110 } });
       if (path.endsWith("/create")) { supplierGoods = params.goods_no; supplierPurchases++; if (supplierTimeout) throw new Error("simulated network failure"); return Response.json({ code: 1, data: { trade_no: "TEST-16688" } }); }
+      if (path.endsWith("/query") && params.trade_no === "INVENTORY-ORDER") return Response.json({ code: 1, data: { goods_no: "G43844575", status: 4, cards: [{ code: "stock@example.com—pass--https://example.com/code" }], instruction: "说明" } });
       if (path.endsWith("/query")) return Response.json({ code: 1, data: { status: 4, cards: [{ code: supplierGoods === "G43844575" ? "muse@example.com—mailpass--https://example.com/code" : "TEST-CARD" }], instruction: "<h3>使用说明</h3><p>打开 <a href=\"https://example.com/redeem\">兑换地址</a></p>" } });
       throw new Error("unexpected supplier request");
     }
@@ -305,6 +306,35 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.ok(mail); assert.match(mail.text, /692972690@qq\.com/); assert.match(mail.text, /源头订单编号：TEST-16688/); assert.match(mail.text, /联系售后时，请提供以上源头订单编号/); assert.match(mail.html, /源头订单编号：/); assert.match(mail.html, /TEST-16688/); assert.match(mail.text, /https:\/\/2fa\.fun\//); assert.match(mail.text, /请勿换绑/);
     const catalog = await call("/api/admin/catalog", undefined, session);
     assert.ok(catalog.data.products.some(item => item.supplier === "G97316889" && item.sales === 1));
+  });
+
+  await t.test("导入已购库存后优先发货，重复导入和发货不重复使用", async () => {
+    await db.prepare("DELETE FROM rate_limits").run();
+    assert.equal((await call("/api/admin/inventory-import", { tradeNo: "INVENTORY-ORDER" })).status, 401);
+    assert.equal((await call("/api/admin/inventory-import", { tradeNo: "INVENTORY-ORDER" }, session)).data.added, 1);
+    assert.equal((await call("/api/admin/inventory-import", { tradeNo: "INVENTORY-ORDER" }, session)).data.added, 0);
+    const account = (await call("/api/orders", { product: "muse", email: "stock-buyer@example.com", method: "alipay", acceptedTerms: true, requestId: randomUUID() })).data;
+    await call("/api/admin/update", { id: account.id, action: "confirm" }, session);
+    const before = supplierPurchases;
+    assert.equal((await call("/api/admin/supplier-deliver", { id: account.id }, session)).status, 200);
+    assert.equal(supplierPurchases, before);
+    assert.equal((await call("/api/admin/inventory", undefined, session)).data.available, 0);
+    const history = await call(`/api/admin/delivery-history?orderId=${account.id}`, undefined, session);
+    assert.equal(history.data.history[0].state, "sent");
+    assert.match(history.data.history[0].text, /stock@example.com/);
+    assert.equal((await call("/api/admin/supplier-deliver", { id: account.id }, session)).status, 409);
+  });
+
+  await t.test("小程序凭工作台密码登录，令牌可用且不能绕过跨站限制", async () => {
+    await db.prepare("DELETE FROM rate_limits").run();
+    const native = (path, method, data, headers = {}) => mf.dispatchFetch(`https://shop.example/api/admin/${path}`, { method, headers: { "Content-Type": "application/json", ...headers }, body: data ? JSON.stringify(data) : undefined });
+    assert.equal((await native("mini-login", "POST", { password }, { Origin: "https://evil.example" })).status, 403);
+    const login = await native("mini-login", "POST", { password }); assert.equal(login.status, 200);
+    const token = (await login.json()).session; assert.match(token, /^[a-f0-9]{64}$/);
+    assert.equal((await native("orders", "GET", undefined, { Authorization: `Bearer ${token}` })).status, 200);
+    assert.equal((await native("logout", "POST", {}, { Authorization: `Bearer ${token}`, Origin: "https://evil.example" })).status, 403);
+    assert.equal((await native("logout", "POST", {}, { Authorization: `Bearer ${token}` })).status, 200);
+    assert.equal((await native("orders", "GET", undefined, { Authorization: `Bearer ${token}` })).status, 401);
   });
 
 });

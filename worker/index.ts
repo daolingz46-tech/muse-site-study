@@ -253,20 +253,23 @@ async function createOrder(env: Env, request: Request, input: Record<string, unk
   throw new HttpError(503, "当前订单较多，请稍后再试或联系支持");
 }
 function cookie(request: Request) { return request.headers.get("Cookie")?.match(/(?:^|;\s*)muse_admin=([a-f0-9]{64})(?:;|$)/)?.[1] || ""; }
+function adminSession(request: Request) { return cookie(request) || request.headers.get("Authorization")?.match(/^Bearer ([a-f0-9]{64})$/)?.[1] || ""; }
 function cookieHeader(request: Request, value: string, age: number) { const secure = new URL(request.url).protocol === "https:"; return `muse_admin=${value}; HttpOnly; SameSite=${secure ? "None" : "Lax"}; Path=/api/admin; Max-Age=${age}${secure ? "; Secure" : ""}`; }
 async function requireAdmin(env: Env, request: Request) {
-  const session = cookie(request);
+  const session = adminSession(request);
   if (!session || !await env.DB.prepare("SELECT hash FROM sessions WHERE hash=? AND expiresAt>?").bind(await hash(session), Date.now()).first()) throw new HttpError(401, "请登录工作台");
 }
 async function admin(env: Env, request: Request, path: string) {
-  if (path === "/api/admin/login" && request.method === "POST") {
+  if ((path === "/api/admin/login" || path === "/api/admin/mini-login") && request.method === "POST") {
+    const miniLogin = path.endsWith("/mini-login");
+    if (miniLogin && request.headers.has("Origin")) throw new HttpError(403, "请求来源无效");
     await limit(env, request, "login", 8, 900);
     if (!/^[a-f0-9]{64}$/.test(env.ADMIN_PASSWORD_HASH || "")) throw new HttpError(503, "工作台尚未配置登录密码");
     const input = await body(request); const password = str(input.password, 256);
     if (!password || !same(await hash(password), env.ADMIN_PASSWORD_HASH)) throw new HttpError(401, "密码不正确");
     const session = await hash(crypto.randomUUID() + crypto.randomUUID());
     await env.DB.prepare("INSERT INTO sessions(hash,expiresAt) VALUES(?,?)").bind(await hash(session), Date.now() + 8 * 3600000).run();
-    return json({ ok: true }, 200, { "Set-Cookie": cookieHeader(request, session, 28800) });
+    return miniLogin ? json({ ok: true, session }) : json({ ok: true }, 200, { "Set-Cookie": cookieHeader(request, session, 28800) });
   }
   await requireAdmin(env, request);
   if (path === "/api/admin/contact-buyer" && request.method === "POST") {
@@ -330,7 +333,7 @@ async function admin(env: Env, request: Request, path: string) {
       return json({ ok: true });
     } catch { throw new HttpError(502, "测试推送未送达，请检查 iPhone 通知权限后重试"); }
   }
-  if (path === "/api/admin/logout" && request.method === "POST") { await env.DB.prepare("DELETE FROM sessions WHERE hash=?").bind(await hash(cookie(request))).run(); return json({ ok: true }, 200, { "Set-Cookie": cookieHeader(request, "", 0) }); }
+  if (path === "/api/admin/logout" && request.method === "POST") { await env.DB.prepare("DELETE FROM sessions WHERE hash=?").bind(await hash(adminSession(request))).run(); return json({ ok: true }, 200, { "Set-Cookie": cookieHeader(request, "", 0) }); }
   if (path === "/api/admin/orders" && request.method === "GET") {
     await expire(env);
     const url = new URL(request.url); const search = str(url.searchParams.get("q")); const status = str(url.searchParams.get("status"), 20); const page = Math.max(0, Math.min(100000, Number(url.searchParams.get("page")) || 0));
@@ -414,6 +417,40 @@ async function admin(env: Env, request: Request, path: string) {
     ]);
     return json({ ok: true });
   }
+  if (path === "/api/admin/inventory" && request.method === "GET") {
+    const count = await env.DB.prepare("SELECT COUNT(*) AS available FROM inventory_cards WHERE product='muse' AND orderId IS NULL").first<{ available: number }>();
+    return json({ available: count?.available || 0 });
+  }
+  if (path === "/api/admin/inventory-import" && request.method === "POST") {
+    const tradeNo = str((await body(request)).tradeNo, 128);
+    if (!tradeNo) throw new HttpError(400, "请填写 16688 采购订单编号");
+    if (!env.SUPPLIER_APP_ID || !env.SUPPLIER_SECRET) throw new HttpError(503, "货源接口尚未配置");
+    const existing = await env.DB.prepare("SELECT orderId FROM supplier_fulfillment WHERE tradeNo=?").bind(tradeNo).first();
+    if (existing) throw new HttpError(409, "这笔采购已关联商店订单，不能作为库存导入");
+    let result: { code: number; data?: Record<string, unknown> };
+    try { result = await supplierRequest({ appId: env.SUPPLIER_APP_ID, secret: env.SUPPLIER_SECRET }, "purchase", "query", { trade_no: tradeNo }) as typeof result; }
+    catch { throw new HttpError(502, "查询采购订单失败，请稍后重试"); }
+    const data = result.data;
+    if (result.code !== 1 || !data || ![4, 5].includes(Number(data.status))) throw new HttpError(409, "采购订单尚未发货或无法查询");
+    if (!["G43844575", "G72563978"].includes(String(data.goods_no))) throw new HttpError(400, "该采购单不是支持导入的 Muse 10 亿成品账号货源");
+    const cards = Array.isArray(data.cards) ? data.cards : [];
+    const unique = [...new Set(cards.map(value => typeof value === "object" && value !== null && "code" in value ? str(value.code, 4000) : "").filter(Boolean))];
+    if (!unique.length) throw new HttpError(409, "采购订单未返回卡密");
+    let added = 0;
+    for (const card of unique) {
+      const used = await env.DB.prepare("SELECT orderId FROM supplier_fulfillment WHERE card=? LIMIT 1").bind(card).first();
+      if (used) continue;
+      const saved = await env.DB.prepare("INSERT OR IGNORE INTO inventory_cards(id,product,card,cardHash,tradeNo,instruction,createdAt) VALUES(?,?,?,?,?,?,?)").bind(crypto.randomUUID(), "muse", card, await hash(card), tradeNo, typeof data.instruction === "string" ? data.instruction : "", Date.now()).run();
+      added += saved.meta.changes;
+    }
+    return json({ added, skipped: unique.length - added });
+  }
+  if (path === "/api/admin/delivery-history" && request.method === "GET") {
+    const id = str(new URL(request.url).searchParams.get("orderId"), 64);
+    const rows = await env.DB.prepare("SELECT text,state,createdAt FROM delivery_history WHERE orderId=? ORDER BY createdAt DESC LIMIT 20").bind(id).all();
+    const old = rows.results.length ? null : await env.DB.prepare("SELECT card,instruction,state,tradeNo FROM supplier_fulfillment WHERE orderId=? AND card IS NOT NULL").bind(id).first();
+    return json({ history: rows.results, legacy: old });
+  }
   if (path === "/api/admin/supplier-check" && request.method === "POST") {
     const input = await body(request);
     if (typeof input.planId !== "string" || (input.planId !== "museAccount" && !Object.hasOwn(GPT_SUPPLIER_PRODUCTS, input.planId))) throw new HttpError(400, "商品不存在");
@@ -437,6 +474,13 @@ async function admin(env: Env, request: Request, path: string) {
     const creds = { appId: env.SUPPLIER_APP_ID, secret: env.SUPPLIER_SECRET };
     type SupplierResult = { code: number; msg?: string; data?: Record<string, unknown> };
     let task = await env.DB.prepare("SELECT state,tradeNo,card,instruction FROM supplier_fulfillment WHERE orderId=?").bind(id).first<{ state: string; tradeNo: string | null; card: string | null; instruction: string | null }>();
+    if (!task && order.product === "muse") {
+      await env.DB.batch([
+        env.DB.prepare("INSERT OR IGNORE INTO supplier_fulfillment(orderId,state,tradeNo,card,instruction,inventoryId,updatedAt) SELECT ?,'ready',tradeNo,card,instruction,id,? FROM inventory_cards WHERE product='muse' AND orderId IS NULL AND NOT EXISTS (SELECT 1 FROM delivery_emails WHERE orderId=?) ORDER BY createdAt,id LIMIT 1").bind(id, Date.now(), id),
+        env.DB.prepare("UPDATE inventory_cards SET orderId=? WHERE id=(SELECT inventoryId FROM supplier_fulfillment WHERE orderId=?) AND orderId IS NULL").bind(id, id),
+      ]);
+      task = await env.DB.prepare("SELECT state,tradeNo,card,instruction FROM supplier_fulfillment WHERE orderId=?").bind(id).first<{ state: string; tradeNo: string | null; card: string | null; instruction: string | null }>();
+    }
     if (!task) {
       let quote: SupplierResult;
       try { quote = await supplierRequest(creds, "purchase", "quotePrice", { goods_no: plan.goodsNo, quantity: 1 }) as SupplierResult; }
@@ -480,10 +524,13 @@ async function admin(env: Env, request: Request, path: string) {
     if (!claim.meta.changes) throw new HttpError(409, "邮件正在发送，请刷新订单");
     const loginGuide = order.supplierPlan === "plus15Day" ? "登录步骤：\n1. 打开 ChatGPT 登录页面，输入邮件中的账号和密码。\n2. 将邮件中的 2FA 密钥输入 https://2fa.fun/ 或 https://2fa.live/，获取一次性验证码。\n3. 在登录页面输入验证码。请勿换绑、修改密码或 2FA，否则供货商不再提供质保。" : "";
     const { html, text } = deliveryEmail({ title: order.title, code: order.code, card: task.card, instructions: [loginGuide, task.instruction || ""].filter(Boolean).join("\n\n"), supplierOrderNo: needsSupplierSupport ? task.tradeNo! : undefined });
+    const historyId = crypto.randomUUID();
+    await env.DB.prepare("INSERT INTO delivery_history(id,orderId,text,state,createdAt) VALUES(?,?,?,'sending',?)").bind(historyId, id, text, Date.now()).run();
     try { await sendEmail(env, `supplier-delivery:${id}`, `${order.title} · 订单 ${order.code}`, html, text, order.target, [], "buyer_delivery"); }
-    catch { await env.DB.prepare("UPDATE supplier_fulfillment SET state='mail_unknown',updatedAt=? WHERE orderId=?").bind(Date.now(), id).run(); throw new HttpError(502, "邮件发送结果不明，请先核查发件箱和客户邮箱；卡密已采购，请勿重复采购"); }
+    catch { await env.DB.prepare("UPDATE delivery_history SET state='unknown' WHERE id=?").bind(historyId).run(); await env.DB.prepare("UPDATE supplier_fulfillment SET state='mail_unknown',updatedAt=? WHERE orderId=?").bind(Date.now(), id).run(); throw new HttpError(502, "邮件发送结果不明，请先核查发件箱和客户邮箱；卡密已采购，请勿重复采购"); }
     const now = Date.now();
     await env.DB.batch([
+      env.DB.prepare("UPDATE delivery_history SET state='sent' WHERE id=?").bind(historyId),
       env.DB.prepare("UPDATE supplier_fulfillment SET state='sent',updatedAt=? WHERE orderId=? AND state='sending'").bind(now, id),
       env.DB.prepare("UPDATE orders SET status='complete',completedAt=?,delivery=?,updatedAt=? WHERE id=? AND status='processing'").bind(now, JSON.stringify({ method: "email", sentAt: now }), now, id),
       env.DB.prepare("INSERT INTO audit(orderId,action,createdAt) VALUES(?,'supplier_delivery',?)").bind(id, now),
@@ -519,14 +566,18 @@ async function admin(env: Env, request: Request, path: string) {
       ? await env.DB.prepare("UPDATE delivery_emails SET status='sending' WHERE orderId=? AND status='sent'").bind(order.id).run()
       : await env.DB.prepare("INSERT OR IGNORE INTO delivery_emails(orderId,status,createdAt) SELECT ?,'sending',? WHERE NOT EXISTS (SELECT 1 FROM supplier_fulfillment WHERE orderId=?)").bind(order.id, Date.now(), order.id).run();
     if (!claimed.meta.changes) throw new HttpError(409, "这笔订单的邮件正在发送，请稍后重试");
+    const historyId = crypto.randomUUID();
+    await env.DB.prepare("INSERT INTO delivery_history(id,orderId,text,state,createdAt) VALUES(?,?,?,'sending',?)").bind(historyId, order.id, text, Date.now()).run();
     try { await sendEmail(env, `delivery:${order.id}:${crypto.randomUUID()}`, `Muse 成品账号卡密 · 订单 ${order.code}`, html, text, order.target, files, "buyer_delivery"); }
     catch {
+      await env.DB.prepare("UPDATE delivery_history SET state='unknown' WHERE id=?").bind(historyId).run();
       if (previous) await env.DB.prepare("UPDATE delivery_emails SET status='sent' WHERE orderId=? AND status='sending'").bind(order.id).run();
       else await env.DB.prepare("DELETE FROM delivery_emails WHERE orderId=? AND status='sending'").bind(order.id).run();
       throw new HttpError(502, "发信失败，请检查发件箱；确认未送达后再试");
     }
     const now = Date.now();
     await env.DB.batch([
+      env.DB.prepare("UPDATE delivery_history SET state='sent' WHERE id=?").bind(historyId),
       env.DB.prepare("UPDATE delivery_emails SET status='sent',sentAt=?,sendCount=sendCount+1 WHERE orderId=? AND status='sending'").bind(now, order.id),
       env.DB.prepare("UPDATE orders SET status='complete',completedAt=COALESCE(completedAt,?),delivery=?,updatedAt=? WHERE id=? AND status IN ('processing','complete')").bind(now, JSON.stringify({ method: "email", sentAt: now }), now, order.id),
       env.DB.prepare("INSERT INTO audit(orderId,action,createdAt) VALUES(?,?,?)").bind(order.id, previous ? "email_redelivery" : "email_delivery", now),
@@ -583,7 +634,8 @@ const worker = {
         if (!corsOrigin) throw new HttpError(403, "请求来源无效，请刷新页面");
         return withCors(new Response(null, { status: 204 }));
       }
-      if (request.method !== "GET" && !corsOrigin) throw new HttpError(403, "请求来源无效，请刷新页面");
+      const nativeAdmin = !origin && path.startsWith("/api/admin/") && (path === "/api/admin/mini-login" || /^Bearer [a-f0-9]{64}$/.test(request.headers.get("Authorization") || ""));
+      if (request.method !== "GET" && !corsOrigin && !nativeAdmin) throw new HttpError(403, "请求来源无效，请刷新页面");
       if (request.method === "GET" && origin && !corsOrigin) throw new HttpError(403, "请求来源无效，请刷新页面");
       if (path === "/api/health" && request.method === "GET") {
         await env.DB.prepare("SELECT id FROM orders LIMIT 1").all();
