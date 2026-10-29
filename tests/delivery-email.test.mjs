@@ -27,3 +27,11 @@ test("formats Muse account and verification link without adding a password", () 
   assert.match(result.html, /href="https:\/\/example.com\/code\?token=abc"/);
   assert.doesNotMatch(result.text, /密码/);
 });
+
+
+test("formats Muse email password and verification link from the new supplier", () => {
+  const result = deliveryEmail({ title: "Muse AI · 成品账号", code: "1111", card: "buyer@example.com—mail-pass--https://example.com/code?token=abc" });
+  assert.match(result.text, /Muse 登录账号：buyer@example.com/);
+  assert.match(result.text, /邮箱密码：mail-pass/);
+  assert.match(result.text, /邮箱验证码获取地址：https:\/\/example.com\/code\?token=abc/);
+});
