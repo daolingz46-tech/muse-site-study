@@ -289,7 +289,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal((await call("/api/admin/supplier-deliver", { id: account.id }, session)).status, 200);
     assert.equal(supplierGoods, "G39595340");
     const mail = sentMessages.find(item => item.to === "plus@example.com" && item.text.includes("TEST-CARD"));
-    assert.ok(mail); assert.match(mail.text, /692972690@qq\.com/); assert.doesNotMatch(mail.text, /3557785836/);
+    assert.ok(mail); assert.match(mail.text, /692972690@qq\.com/); assert.match(mail.text, /源头订单编号：TEST-16688/); assert.match(mail.text, /联系售后时，请提供以上源头订单编号/); assert.match(mail.html, /源头订单编号：/); assert.match(mail.html, /TEST-16688/); assert.doesNotMatch(mail.text, /3557785836/);
     const catalog = await call("/api/admin/catalog", undefined, session);
     assert.ok(catalog.data.products.some(item => item.supplier === "G39595340" && item.sales === 1));
   });
@@ -302,7 +302,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal((await call("/api/admin/supplier-deliver", { id: account.id }, session)).status, 200);
     assert.equal(supplierGoods, "G97316889");
     const mail = sentMessages.find(item => item.to === "plus15@example.com" && item.text.includes("TEST-CARD"));
-    assert.ok(mail); assert.match(mail.text, /692972690@qq\.com/); assert.match(mail.text, /https:\/\/2fa\.fun\//); assert.match(mail.text, /请勿换绑/);
+    assert.ok(mail); assert.match(mail.text, /692972690@qq\.com/); assert.match(mail.text, /源头订单编号：TEST-16688/); assert.match(mail.text, /联系售后时，请提供以上源头订单编号/); assert.match(mail.html, /源头订单编号：/); assert.match(mail.html, /TEST-16688/); assert.match(mail.text, /https:\/\/2fa\.fun\//); assert.match(mail.text, /请勿换绑/);
     const catalog = await call("/api/admin/catalog", undefined, session);
     assert.ok(catalog.data.products.some(item => item.supplier === "G97316889" && item.sales === 1));
   });
