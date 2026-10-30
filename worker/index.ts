@@ -279,10 +279,13 @@ async function admin(env: Env, request: Request, path: string) {
     if (!order || !email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400,"订单没有有效联系邮箱");
     const related = await env.DB.prepare("SELECT id,code,title,status,createdAt,paidAt,completedAt FROM orders WHERE lower(CASE WHEN product='muse-token' THEN contactEmail ELSE target END)=lower(?) ORDER BY createdAt DESC LIMIT 100").bind(email).all<{id:string;code:string;title:string;status:string;createdAt:number}>();
     if (!env.GMAIL_SCRIPT_URL || !env.GMAIL_SCRIPT_TOKEN) return json({email,orders:related.results,messages:[],mailError:"邮箱读取尚未配置"});
-    let result: {ok?:boolean;messages?:Array<{subject:string;[key:string]:unknown}>};
+    let result: {ok?:boolean;message?:string;messages?:Array<{subject:string;[key:string]:unknown}>};
     try { const response=await fetch(env.GMAIL_SCRIPT_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({token:env.GMAIL_SCRIPT_TOKEN,purpose:"customer_threads",email}),redirect:"follow",signal:AbortSignal.timeout(15000)}); result=await response.json(); }
     catch { return json({email,orders:related.results,messages:[],mailError:"邮箱读取失败，请检查邮件桥接部署和授权"}); }
-    if (!result.ok || !Array.isArray(result.messages)) return json({email,orders:related.results,messages:[],mailError:"邮箱读取尚未启用，请更新并授权邮件桥接"});
+    if (!result.ok || !Array.isArray(result.messages)) {
+      const reasons: Record<string,string> = { unauthorized:"邮件桥接令牌不匹配，请检查脚本属性与线上配置", invalid_id:"线上邮件桥接仍是旧版本，请在原部署选择新版本并部署", invalid_purpose:"线上邮件桥接仍是旧版本，请在原部署选择新版本并部署", invalid_email:"邮箱地址未通过邮件桥接校验", send_failed:"邮件桥接执行失败；请检查 Apps Script 的执行记录及 Gmail 授权" };
+      return json({email,orders:related.results,messages:[],mailError:reasons[result.message || ""] || "邮件桥接返回异常，请检查部署和授权"});
+    }
     const messages=result.messages.map(message=>{const matches=related.results.filter(o=>new RegExp(`(?:订单\\s*)${o.code}(?!\\d)`).test(message.subject || ""));return {...message,matchedOrder:matches.length===1?matches[0].code:null};});
     return json({email,orders:related.results,messages});
   }
