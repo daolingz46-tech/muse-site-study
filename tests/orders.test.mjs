@@ -15,13 +15,14 @@ test("订单、收款核实和交付的数据库流程", async t => {
   let supplierTimeout = false;
   let supplierBalanceEnough = true;
   let supplierStock = null;
-  let supplierGoods = "";
+  let supplierGoods = ""; let supplierQuantity = 0;
   const mf = new Miniflare(convertV4MiniflareOptions({ workers: [{ name: "test-store", modules: true, scriptPath: "temp/worker/index.js", compatibilityDate: "2026-10-01", d1Databases: { DB: "test-orders" }, bindings: { ADMIN_PASSWORD_HASH: createHash("sha256").update(password).digest("hex"), GMAIL_SCRIPT_URL: "https://mail.test/exec", GMAIL_SCRIPT_TOKEN: "test-token", SUPPLIER_APP_ID: "test-app", SUPPLIER_SECRET: "test-secret" }, outboundService: async request => {
     if (new URL(request.url).hostname === "www.16688.com.cn") {
       const path = new URL(request.url).pathname;
       const params = await request.json();
-      if (path.endsWith("/quotePrice")) return Response.json({ code: 1, data: { balance_enough: supplierBalanceEnough, available_quantity: supplierStock, total_amount: params.goods_no === "G43844575" ? 4.12 : params.goods_no === "G39595340" ? 11.31 : params.goods_no === "G97316889" ? 60.65 : 110 } });
-      if (path.endsWith("/create")) { supplierGoods = params.goods_no; supplierPurchases++; if (supplierTimeout) throw new Error("simulated network failure"); return Response.json({ code: 1, data: { trade_no: "TEST-16688" } }); }
+      if (path.endsWith("/quotePrice")) return Response.json({ code: 1, data: { balance_enough: supplierBalanceEnough, available_quantity: supplierStock, total_amount: params.goods_no === "G85161614" ? params.quantity * 1.03 : params.goods_no === "G43844575" ? 4.12 : params.goods_no === "G39595340" ? 11.31 : params.goods_no === "G97316889" ? 60.65 : 110 } });
+      if (path.endsWith("/create")) { supplierGoods = params.goods_no; supplierQuantity = params.quantity; supplierPurchases++; if (supplierTimeout) throw new Error("simulated network failure"); return Response.json({ code: 1, data: { trade_no: "TEST-16688" } }); }
+      if (path.endsWith("/query") && supplierGoods === "G85161614") return Response.json({code:1,data:{status:4,cards:Array.from({length:supplierQuantity},(_,i)=>({code:`TEST-${i}`}))}});
       if (path.endsWith("/query") && params.trade_no === "INVENTORY-ORDER") return Response.json({ code: 1, data: { goods_no: "G43844575", status: 4, cards: [{ code: "stock@example.com—pass--https://example.com/code" }], instruction: "说明" } });
       if (path.endsWith("/query")) return Response.json({ code: 1, data: { status: 4, cards: [{ code: supplierGoods === "G43844575" ? "muse@example.com—mailpass--https://example.com/code" : "TEST-CARD" }], instruction: "<h3>使用说明</h3><p>打开 <a href=\"https://example.com/redeem\">兑换地址</a></p>" } });
       throw new Error("unexpected supplier request");
@@ -346,6 +347,21 @@ test("订单、收款核实和交付的数据库流程", async t => {
     const second = await native(); assert.equal(second.status, 200); assert.equal((await second.json()).id, order.id);
     const lookup = await mf.dispatchFetch("https://shop.example/api/orders/lookup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: order.id, token: order.token }) });
     assert.equal(lookup.status, 200);
+  });
+
+  await t.test("Token 多件采购依据订单数量，不重复采购，手动核实后完成", async () => {
+    supplierStock = 50;
+    await db.prepare("DELETE FROM rate_limits").run();
+    const order = (await call("/api/orders", {product:"muse-token",planId:"100",inviteCode:"TEST",email:"token@example.com",method:"wechat",acceptedTerms:true,requestId:randomUUID()})).data;
+    assert.equal((await call("/api/admin/token-quote", {id:order.id}, session)).status,409);
+    await call("/api/admin/update", {id:order.id,action:"confirm"}, session);
+    const quote = await call("/api/admin/token-quote", {id:order.id}, session); assert.equal(quote.data.quantity,10);
+    const before = supplierPurchases;
+    assert.equal((await call("/api/admin/token-purchase", {id:order.id,expectedCents:1},session)).status,409);
+    const result = await call("/api/admin/token-purchase", {id:order.id,expectedCents:Math.round(quote.data.total*100)},session);
+    assert.equal(result.status,200); assert.equal(supplierGoods,"G85161614"); assert.equal(supplierQuantity,10); assert.equal(result.data.card.split("\n").length,10);
+    assert.equal((await call("/api/admin/token-purchase", {id:order.id},session)).status,200); assert.equal(supplierPurchases,before+1);
+    assert.equal((await call("/api/admin/update", {id:order.id,action:"complete",checked:true},session)).status,200);
   });
 
 });

@@ -290,7 +290,7 @@ async function admin(env: Env, request: Request, path: string) {
     const sales = await env.DB.prepare("SELECT product,title,supplierPlan,COUNT(*) AS sales FROM orders WHERE paidAt IS NOT NULL GROUP BY product,title,supplierPlan").all<{product:string;title:string;supplierPlan:string|null;sales:number}>();
     const products = [
       { category: "Muse", title: accountTitle, supplier: MUSE_ACCOUNT_SUPPLIER.goodsNo, sales: sales.results.filter(x => x.product === "muse").reduce((n,x) => n + x.sales,0) },
-      ...tokenPlans.map(p => ({ category: "Muse Token", title: `Muse Token · ${p.label}`, supplier: null, sales: sales.results.filter(x => x.product === "muse-token" && x.title === `Muse Token · ${p.label}`).reduce((n,x) => n + x.sales,0) })),
+      ...tokenPlans.map(p => ({ category: "Muse Token", title: `Muse Token · ${p.label}`, supplier: "G85161614", sales: sales.results.filter(x => x.product === "muse-token" && x.title === `Muse Token · ${p.label}`).reduce((n,x) => n + x.sales,0) })),
       ...Object.entries(GPT_SUPPLIER_PRODUCTS).filter(([key]) => key !== "halfPriceAccount").map(([key,p]) => ({ category: "GPT", title: p.title, supplier: p.goodsNo, sales: sales.results.filter(x => x.product === "gpt" && x.supplierPlan === key).reduce((n,x) => n + x.sales,0) })),
     ];
     return json({ products });
@@ -451,6 +451,49 @@ async function admin(env: Env, request: Request, path: string) {
     const old = rows.results.length ? null : await env.DB.prepare("SELECT card,instruction,state,tradeNo FROM supplier_fulfillment WHERE orderId=? AND card IS NOT NULL").bind(id).first();
     return json({ history: rows.results, legacy: old });
   }
+  if ((path === "/api/admin/token-quote" || path === "/api/admin/token-purchase") && request.method === "POST") {
+    const input = await body(request), id = str(input.id, 64);
+    const order = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).first<Row>();
+    if (!order || order.product !== "muse-token") throw new HttpError(404, "未找到 Token 订单");
+    if (order.status !== "processing") throw new HttpError(409, "请先核实收款，订单须为待交付状态");
+    const match = order.title.match(/^Muse Token · (100|150|200|300)亿 Token$/);
+    if (!match) throw new HttpError(409, "无法确认该订单的充值档位，请人工核查");
+    const quantity = Number(match[1]) / 10;
+    if (!env.SUPPLIER_APP_ID || !env.SUPPLIER_SECRET) throw new HttpError(503, "货源接口尚未配置");
+    const creds = { appId: env.SUPPLIER_APP_ID, secret: env.SUPPLIER_SECRET };
+    type Result = { code: number; data?: Record<string, unknown> };
+    let task = await env.DB.prepare("SELECT state,tradeNo,card FROM supplier_fulfillment WHERE orderId=?").bind(id).first<{state:string;tradeNo:string|null;card:string|null}>();
+    if (path.endsWith("token-quote") && task) return json({ quantity, state: task.state, tradeNo: task.tradeNo });
+    if (!task) {
+      let quote: Result;
+      try { quote = await supplierRequest(creds, "purchase", "quotePrice", {goods_no:"G85161614",quantity}) as Result; } catch { throw new HttpError(502, "货源询价失败，未采购"); }
+      const total = Number(quote.data?.total_amount), available = quote.data?.available_quantity;
+      if (quote.code !== 1 || !Number.isFinite(total) || total <= 0) throw new HttpError(409, "货源询价失败，未采购；请确认已代理该货源");
+      if (path.endsWith("token-quote")) return json({quantity,total,stock:available,balanceEnough:quote.data?.balance_enough === true});
+      if (!Number.isSafeInteger(input.expectedCents) || input.expectedCents !== Math.round(total * 100)) throw new HttpError(409, "采购报价已变化，请关闭窗口重新询价");
+      if (typeof available === "number" && available < quantity) throw new HttpError(409, "货源库存不足，未采购");
+      if (quote.data?.balance_enough !== true) throw new HttpError(409, `运营钱包余额不足，采购需 ¥${total.toFixed(2)}，未采购`);
+      if (Math.round(total * 100) > order.amountCents) throw new HttpError(409, "采购成本高于订单售价，未采购");
+      const claim = await env.DB.prepare("INSERT OR IGNORE INTO supplier_fulfillment(orderId,state,updatedAt) SELECT ?,'purchasing',? WHERE EXISTS (SELECT 1 FROM orders WHERE id=? AND status='processing')").bind(id,Date.now(),id).run();
+      if (!claim.meta.changes) throw new HttpError(409, "订单已有采购操作，请刷新查看，勿重复采购");
+      let purchase: Result;
+      try { purchase = await supplierRequest(creds,"purchase","create",{goods_no:"G85161614",quantity,remark:`Muse订单:${id}`}) as Result; }
+      catch { await env.DB.prepare("UPDATE supplier_fulfillment SET state='purchase_unknown',updatedAt=? WHERE orderId=?").bind(Date.now(),id).run(); throw new HttpError(502, "采购结果不明，请核查 16688，勿重复采购"); }
+      if (purchase.code !== 1 || typeof purchase.data?.trade_no !== "string" || !purchase.data.trade_no.trim()) { await env.DB.prepare("UPDATE supplier_fulfillment SET state='purchase_unknown',updatedAt=? WHERE orderId=?").bind(Date.now(),id).run(); throw new HttpError(502, "采购未确认，请核查 16688，勿重复采购"); }
+      await env.DB.prepare("UPDATE supplier_fulfillment SET state='awaiting',tradeNo=?,updatedAt=? WHERE orderId=?").bind(purchase.data.trade_no,Date.now(),id).run();
+      task = {state:"awaiting",tradeNo:purchase.data.trade_no,card:null};
+    }
+    if (task.state === "awaiting" && task.tradeNo) {
+      let result: Result; try { result = await supplierRequest(creds,"purchase","query",{trade_no:task.tradeNo}) as Result; } catch { throw new HttpError(502,"查询采购结果失败，可稍后重试，不会重复采购"); }
+      if (result.code !== 1 || !result.data || ![4,5].includes(Number(result.data.status))) throw new HttpError(409,"货源尚未发货，可稍后重试查询");
+      const cards = Array.isArray(result.data.cards) ? result.data.cards.map(x => x && typeof x === "object" && "code" in x ? String(x.code) : "").filter(Boolean) : [];
+      if (cards.length !== quantity || new Set(cards).size !== quantity) throw new HttpError(409, `货源返回 ${cards.length} 件，需 ${quantity} 件且不能重复；请核查采购单`);
+      await env.DB.prepare("UPDATE supplier_fulfillment SET state='ready',card=?,instruction=?,updatedAt=? WHERE orderId=? AND state='awaiting'").bind(cards.join("\n"),typeof result.data.instruction === "string" ? result.data.instruction : "",Date.now(),id).run();
+      task = { ...task, state:"ready",card:cards.join("\n") };
+    }
+    if (task.state !== "ready" || !task.card) throw new HttpError(409,"采购正在处理或结果待核查，请勿重复采购");
+    return json({quantity,tradeNo:task.tradeNo,card:task.card});
+  }
   if (path === "/api/admin/supplier-check" && request.method === "POST") {
     const input = await body(request);
     if (typeof input.planId !== "string" || (input.planId !== "museAccount" && !Object.hasOwn(GPT_SUPPLIER_PRODUCTS, input.planId))) throw new HttpError(400, "商品不存在");
@@ -595,10 +638,11 @@ async function admin(env: Env, request: Request, path: string) {
     } else if (input.action === "complete") {
       if (row.status !== "processing") throw new HttpError(409, "请先核对并确认收款");
       if (row.product === "gpt") throw new HttpError(409, "GPT 订单请使用采购并发邮件按钮");
+      if (row.product === "muse-token") { const task = await env.DB.prepare("SELECT state FROM supplier_fulfillment WHERE orderId=?").bind(row.id).first<{state:string}>(); if (task && task.state !== "ready") throw new HttpError(409, "采购结果待核查，请先核查采购状态"); }
       let delivery: string | null = null;
       if (row.product === "muse") { const d = input.delivery as Record<string, unknown> | undefined; const email = str(d?.email, 254), password = str(d?.password, 256), codeUrl = str(d?.codeUrl, 1000); if (!email || !password || !/^https:\/\//.test(codeUrl)) throw new HttpError(400, "请填写交付账号、密码和 HTTPS 接码链接"); delivery = JSON.stringify({ email, password, codeUrl }); }
       if (input.checked !== true) throw new HttpError(400, "请确认已经完成充值或交付");
-      sql = "UPDATE orders SET status='complete',completedAt=?,delivery=?,updatedAt=? WHERE id=? AND status=?"; args = [now, delivery, now, row.id, row.status];
+      sql = "UPDATE orders SET status='complete',completedAt=?,delivery=?,updatedAt=? WHERE id=? AND status=?" + (row.product === "muse-token" ? " AND NOT EXISTS (SELECT 1 FROM supplier_fulfillment WHERE orderId=orders.id AND state != 'ready')" : ""); args = [now, delivery, now, row.id, row.status];
     } else throw new HttpError(400, "操作无效");
     try {
       const result = await env.DB.batch([
