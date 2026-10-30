@@ -337,4 +337,15 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal((await native("orders", "GET", undefined, { Authorization: `Bearer ${token}` })).status, 401);
   });
 
+  await t.test("微信商店无 Origin 请求可下单，重试不重复创建且跨站请求仍被拒绝", async () => {
+    await db.prepare("DELETE FROM rate_limits").run();
+    const payload = { product: "muse", email: "mini@example.com", method: "wechat", acceptedTerms: true, requestId: randomUUID() };
+    const native = (origin) => mf.dispatchFetch("https://shop.example/api/orders", { method: "POST", headers: { "Content-Type": "application/json", ...(origin ? { Origin: origin } : {}) }, body: JSON.stringify(payload) });
+    assert.equal((await native("https://evil.example")).status, 403);
+    const first = await native(); assert.equal(first.status, 201); const order = await first.json();
+    const second = await native(); assert.equal(second.status, 200); assert.equal((await second.json()).id, order.id);
+    const lookup = await mf.dispatchFetch("https://shop.example/api/orders/lookup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: order.id, token: order.token }) });
+    assert.equal(lookup.status, 200);
+  });
+
 });

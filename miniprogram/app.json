@@ -1,1 +1,1 @@
-{"pages":["pages/index/index"],"window":{"navigationBarTitleText":"卡密大王 · 店主工作台","navigationBarBackgroundColor":"#f4f6fb","navigationBarTextStyle":"black","backgroundColor":"#f4f6fb"},"sitemapLocation":"sitemap.json","style":"v2"}
+{"pages":["pages/store/index","pages/index/index"],"window":{"navigationBarTitleText":"卡密大王","navigationBarBackgroundColor":"#f4f6fb","navigationBarTextStyle":"black","backgroundColor":"#f4f6fb"},"sitemapLocation":"sitemap.json","style":"v2"}
