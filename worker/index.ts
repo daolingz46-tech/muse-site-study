@@ -319,6 +319,12 @@ async function admin(env: Env, request: Request, path: string) {
     ];
     return json({ products });
   }
+  if (path === "/api/admin/email-bridge-match" && request.method === "POST") {
+    const candidate = str((await body(request)).url, 500);
+    if (!/^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/.test(candidate)) throw new HttpError(400, "请粘贴完整的网页应用网址，网址应以 /exec 结尾");
+    if (!env.GMAIL_SCRIPT_URL) throw new HttpError(503, "线上尚未配置邮件桥接地址");
+    return json({matches: same(candidate, env.GMAIL_SCRIPT_URL.trim())});
+  }
   if (path === "/api/admin/email-status" && request.method === "GET") {
     const [buyerDelivery, attachments] = await Promise.all([hasBuyerDelivery(env), hasAttachmentDelivery(env)]);
     return json({ configured: hasEmailConfig(env), buyerDelivery, attachments, provider: env.GMAIL_SCRIPT_URL && env.GMAIL_SCRIPT_TOKEN ? "gmail" : env.RESEND_API_KEY ? "resend" : "none" });
