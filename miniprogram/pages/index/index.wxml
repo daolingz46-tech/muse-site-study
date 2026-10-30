@@ -1,7 +1,11 @@
 <view class="page">
-  <view class="heading"><view><text class="eyebrow">卡密大王</text><view class="title">店主工作台</view><view class="muted">订单与发货 · 仅供店主使用</view></view><button wx:if="{{loggedIn}}" class="link" bindtap="logout">退出</button></view>
-  <view wx:if="{{!loggedIn}}" class="panel login"><view class="panel-title">登录工作台</view><text class="muted">请输入你现有的工作台密码</text><input password maxlength="256" value="{{password}}" bindinput="passwordInput" placeholder="工作台密码"/><button class="primary" loading="{{busy}}" disabled="{{busy}}" bindtap="login">登录</button></view>
-  <block wx:else>
+  <view wx:if="{{!loggedIn}}" class="login-screen">
+    <view class="login-intro"><view class="brand-mark">K</view><view class="login-brand">卡密大王 <text>· 店主专用</text></view><view class="login-title">欢迎回来</view><view class="login-subtitle">登录工作台，随时查看订单和处理发货</view></view>
+    <view class="login-card"><view class="login-card-title">登录工作台</view><view class="login-card-description">使用你现有的店主工作台密码</view><view class="field-label">工作台密码</view><view class="password-field"><input password="{{!showPassword}}" maxlength="256" value="{{password}}" bindinput="passwordInput" bindconfirm="login" placeholder="请输入工作台密码" placeholder-class="password-placeholder"/><button class="password-toggle" bindtap="togglePassword">{{showPassword ? '隐藏' : '显示'}}</button></view><view wx:if="{{message}}" class="login-error" role="alert"><text class="error-icon">!</text><text>{{message}}</text></view><button class="login-submit" loading="{{busy}}" disabled="{{busy || !password}}" bindtap="login">{{busy ? '正在登录…' : '登录工作台'}}</button><view class="login-hint"><text class="hint-dot"></text>密码与电脑工作台相同</view></view>
+    <view class="login-footer">安全登录 · 仅限店主使用</view>
+  </view>
+  <view wx:else class="heading"><view><text class="eyebrow">卡密大王</text><view class="title">店主工作台</view><view class="muted">订单与发货 · 仅供店主使用</view></view><button class="link" bindtap="logout">退出</button></view>
+  <block wx:if="{{loggedIn}}">
     <view class="notice">小程序在前台时每 10 秒检查订单。切到后台或锁屏后，语音提醒可能停止。</view>
     <button class="sound" bindtap="enableSound">{{sound ? '🔊 声音已开启 · 点击试听' : '🔔 开启新订单语音提醒'}}</button>
     <view class="metrics"><view><text>待核实</text><text class="metric-value">{{summary.awaiting || 0}}</text></view><view><text>待交付</text><text class="metric-value">{{summary.processing || 0}}</text></view><view><text>已完成</text><text class="metric-value">{{summary.completed || 0}}</text></view></view>
@@ -10,7 +14,7 @@
     <block wx:for="{{orders}}" wx:key="id"><view wx:if="{{!filter || filter === item.status}}" class="order"><view class="order-head"><text class="code">订单 {{item.code}}</text><text class="status">{{item.statusLabel}}</text></view><view class="product">{{item.title}}</view><view class="detail">{{item.product === 'muse-token' ? '邀请码' : '邮箱'}}：{{item.target}}</view><view class="detail">¥{{item.amount}} · {{item.method === 'wechat' ? '微信' : '支付宝'}} · {{item.date}}</view><view wx:if="{{item.supplierState}}" class="detail">发货状态：{{item.supplierState}} {{item.supplierTradeNo}}</view><view class="actions"><button wx:if="{{item.status === 'reported' || item.status === 'pending' || item.status === 'expired'}}" data-id="{{item.id}}" disabled="{{busy}}" bindtap="confirmPaid">核实收款</button><button wx:if="{{item.status === 'processing' && item.product !== 'muse-token'}}" data-id="{{item.id}}" disabled="{{busy}}" bindtap="deliver">{{item.product === 'muse' ? '优先库存发货' : '采购并发货'}}</button><button wx:if="{{item.status === 'processing' && item.product === 'muse-token'}}" data-id="{{item.id}}" disabled="{{busy}}" bindtap="completeToken">完成充值</button><button wx:if="{{item.product !== 'muse-token'}}" data-id="{{item.id}}" bindtap="history">查看发货内容</button><button wx:if="{{item.product !== 'muse-token' || item.contactEmail}}" data-id="{{item.id}}" bindtap="openContact">联系客户</button></view></view></block>
     <view wx:if="{{!orders.length}}" class="empty">暂无订单</view>
   </block>
-  <view wx:if="{{message}}" class="message">{{message}}</view>
+  <view wx:if="{{message && loggedIn}}" class="message">{{message}}</view>
   <view wx:if="{{history !== null}}" class="overlay"><view class="sheet"><view class="sheet-head"><text>发货内容</text><button bindtap="closeHistory">关闭</button></view><scroll-view scroll-y class="history"><text selectable="true">{{history}}</text></scroll-view></view></view>
   <view wx:if="{{contactId}}" class="overlay"><view class="sheet"><view class="sheet-head"><text>联系客户</text><button bindtap="closeContact">关闭</button></view><textarea maxlength="3000" value="{{contactText}}" bindinput="contactInput" placeholder="输入要发送给客户的内容"/><button class="primary" disabled="{{busy || !contactText}}" bindtap="sendContact">发送邮件</button></view></view>
 </view>

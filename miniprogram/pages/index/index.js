@@ -2,11 +2,11 @@ const BASE = 'https://api.musetoken.store/api/admin/';
 const labels = { pending: '待付款', reported: '待核实到账', processing: '待交付', complete: '已完成', expired: '已超时' };
 let session = '';
 function request(path, data) {
-  return new Promise((resolve, reject) => wx.request({ url: BASE + path, method: data === undefined ? 'GET' : 'POST', data, timeout: path === 'supplier-deliver' ? 90000 : 15000, header: { 'content-type': 'application/json', ...(session ? { Authorization: 'Bearer ' + session } : {}) }, success: res => { if (res.statusCode >= 200 && res.statusCode < 300) resolve(res.data); else reject(new Error(res.data?.message || `请求失败（${res.statusCode}）`)); }, fail: () => reject(new Error('网络连接失败，请检查网络；发货结果请先核查，避免重复采购。')) }));
+  return new Promise((resolve, reject) => wx.request({ url: BASE + path, method: data === undefined ? 'GET' : 'POST', data, timeout: path === 'supplier-deliver' ? 90000 : 15000, header: { 'content-type': 'application/json', ...(session ? { Authorization: 'Bearer ' + session } : {}) }, success: res => { if (res.statusCode >= 200 && res.statusCode < 300) resolve(res.data); else reject(new Error(res.data?.message || `请求失败（${res.statusCode}）`)); }, fail: err => { const detail = String(err.errMsg || ''); const message = path === 'supplier-deliver' ? '连接中断，发货结果尚未确认。请先检查订单和采购记录，避免重复采购。' : /domain|域名/i.test(detail) ? '接口域名尚未通过微信校验。请检查小程序服务器域名设置或使用真机调试。' : '暂时无法连接工作台。请检查手机网络及小程序的服务器域名设置。'; reject(new Error(message)); } }));
 }
 function modal(title, content) { return new Promise(resolve => wx.showModal({ title, content, success: res => resolve(res.confirm), fail: () => resolve(false) })); }
 Page({
-  data: { loggedIn: false, password: '', busy: false, orders: [], summary: {}, message: '', sound: false, filter: '', history: null, contactId: '', contactText: '' },
+  data: { loggedIn: false, password: '', showPassword: false, busy: false, orders: [], summary: {}, message: '', sound: false, filter: '', history: null, contactId: '', contactText: '' },
   onLoad() { this.audio = wx.createInnerAudioContext(); this.audio.src = '/assets/new-order.mp3'; this.audio.onError(() => this.setData({ message: '提醒声音播放失败，请检查手机音量。' })); },
   onShow() { if (session) { this.refresh(); this.startTimer(); } },
   onHide() { this.stopTimer(); },
@@ -14,7 +14,8 @@ Page({
   onPullDownRefresh() { this.refresh().finally(() => wx.stopPullDownRefresh()); },
   startTimer() { this.stopTimer(); this.timer = setInterval(() => this.refresh(), 10000); },
   stopTimer() { if (this.timer) clearInterval(this.timer); this.timer = null; },
-  passwordInput(e) { this.setData({ password: e.detail.value }); },
+  passwordInput(e) { this.setData({ password: e.detail.value, message: '' }); },
+  togglePassword() { this.setData({ showPassword: !this.data.showPassword }); },
   async login() { if (this.data.busy || !this.data.password) return; this.setData({ busy: true, message: '' }); try { const result = await request('mini-login', { password: this.data.password }); session = result.session; this.known = null; this.setData({ loggedIn: true, password: '' }); await this.refresh(); this.startTimer(); } catch (e) { this.setData({ message: e.message }); } finally { this.setData({ busy: false }); } },
   async logout() { try { await request('logout', {}); } catch (_) {} session = ''; this.stopTimer(); this.known = null; this.setData({ loggedIn: false, orders: [], summary: {}, history: null, message: '' }); },
   enableSound() { this.setData({ sound: true, message: '声音提醒已开启；小程序在前台时生效。' }); this.audio.stop(); this.audio.play(); },
