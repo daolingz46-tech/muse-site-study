@@ -510,7 +510,7 @@ async function admin(env: Env, request: Request, path: string) {
       const claim = await env.DB.prepare("INSERT OR IGNORE INTO supplier_fulfillment(orderId,state,updatedAt) SELECT ?,'purchasing',? WHERE EXISTS (SELECT 1 FROM orders WHERE id=? AND status='processing')").bind(id,Date.now(),id).run();
       if (!claim.meta.changes) throw new HttpError(409, "订单已有采购操作，请刷新查看，勿重复采购");
       let purchase: Result;
-      try { purchase = await supplierRequest(creds,"purchase","create",{goods_no:"G85161614",quantity,remark:`Muse订单:${id}`}) as Result; }
+      try { purchase = await supplierRequest(creds,"purchase","create",{goods_no:"G85161614",quantity,remark:`订单码:${order.code} 平台订单:${id}`}) as Result; }
       catch { await env.DB.prepare("UPDATE supplier_fulfillment SET state='purchase_unknown',updatedAt=? WHERE orderId=?").bind(Date.now(),id).run(); throw new HttpError(502, "采购结果不明，请核查 16688，勿重复采购"); }
       if (purchase.code !== 1 || typeof purchase.data?.trade_no !== "string" || !purchase.data.trade_no.trim()) { await env.DB.prepare("UPDATE supplier_fulfillment SET state='purchase_unknown',updatedAt=? WHERE orderId=?").bind(Date.now(),id).run(); throw new HttpError(502, "采购未确认，请核查 16688，勿重复采购"); }
       await env.DB.prepare("UPDATE supplier_fulfillment SET state='awaiting',tradeNo=?,updatedAt=? WHERE orderId=?").bind(purchase.data.trade_no,Date.now(),id).run();
@@ -570,7 +570,7 @@ async function admin(env: Env, request: Request, path: string) {
       if (!claimed.meta.changes) throw new HttpError(409, "该订单已有发货操作，请先核查订单和邮件");
       await env.DB.prepare("UPDATE orders SET stockIssue=0 WHERE id=?").bind(id).run();
       let purchase: SupplierResult;
-      try { purchase = await supplierRequest(creds, "purchase", "create", { goods_no: plan.goodsNo, quantity: 1, remark: `Muse订单:${order.id}` }) as SupplierResult; }
+      try { purchase = await supplierRequest(creds, "purchase", "create", { goods_no: plan.goodsNo, quantity: 1, remark: `订单码:${order.code} 平台订单:${order.id}` }) as SupplierResult; }
       catch { await env.DB.prepare("UPDATE supplier_fulfillment SET state='purchase_unknown',updatedAt=? WHERE orderId=?").bind(Date.now(), id).run(); throw new HttpError(502, "采购结果不明，请先在 16688 核查采购记录，勿重复采购"); }
       if (purchase.code !== 1 || !purchase.data || typeof purchase.data.trade_no !== "string") {
         await env.DB.prepare("UPDATE supplier_fulfillment SET state='purchase_unknown',updatedAt=? WHERE orderId=?").bind(Date.now(), id).run();
