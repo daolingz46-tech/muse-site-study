@@ -47,6 +47,7 @@ export function Workbench() {
   const [delivery, setDelivery] = useState({ email: "", password: "", codeUrl: "" }), [actionError, setActionError] = useState("");
   const [alert, setAlert] = useState(""), [desktopAlerts, setDesktopAlerts] = useState(false), [soundEnabled, setSoundEnabled] = useState(false);
   const [visits, setVisits] = useState<VisitResult | null>(null);
+  const [bridgeUrl, setBridgeUrl] = useState(""), [bridgeResult, setBridgeResult] = useState(""), [bridgeBusy, setBridgeBusy] = useState(false);
   const [emailConfigured, setEmailConfigured] = useState<boolean | null>(null);
   const [attachmentReady, setAttachmentReady] = useState<boolean | null>(null);
   const [emailTestBusy, setEmailTestBusy] = useState(false);
@@ -330,6 +331,7 @@ export function Workbench() {
     <p className="wb-description">以微信、支付宝收款记录核实到账，再处理充值或账号交付。iPhone 请用 Safari 打开此页，分享 → 添加到主屏幕，从桌面图标进入后点“开启手机推送”。工作台打开时可另点“开启订单叮声”。</p>
     {emailConfigured === false && <div className="wb-email-setup" role="status"><strong>订单邮件提醒还未启用</strong><span>邮件服务尚未配置。可用个人 Gmail 的 Apps Script 免域名发信，或配置 Resend API Key；新订单和买家付款反馈会发到 daolingz46@gmail.com。</span></div>}
     {emailConfigured === true && <div className="wb-email-ready"><span>邮件提醒已连接 · 新订单和付款反馈将发送到 daolingz46@gmail.com</span><button onClick={() => void sendTestEmail()} disabled={emailTestBusy}>{emailTestBusy ? "发送中…" : "发送测试邮件"}</button></div>}
+    <section className="wb-visitors"><h2>核对邮件部署地址</h2><p>从 Apps Script 管理部署中复制网页应用网址，在这里核对是否为工作台当前使用的地址。</p><form onSubmit={async e => { e.preventDefault(); setBridgeBusy(true); setBridgeResult(""); try { const data = await api("email-bridge-match", {url:bridgeUrl.trim()}); setBridgeResult(data.matches ? "匹配：这是工作台正在使用的部署。" : "不匹配：请检查其他部署。 "); } catch (error) { setBridgeResult(error instanceof Error ? error.message : "核对失败"); } finally { setBridgeBusy(false); } }}><input aria-label="网页应用网址" value={bridgeUrl} onChange={e => setBridgeUrl(e.target.value)} placeholder="粘贴以 /exec 结尾的网址" style={{width:"100%",boxSizing:"border-box",padding:12,margin:"12px 0"}}/><button className="wb-primary" disabled={bridgeBusy || !bridgeUrl.trim()}>{bridgeBusy ? "正在核对…" : "核对地址"}</button></form>{bridgeResult && <p role="status">{bridgeResult}</p>}</section>
     {alert && <div className="wb-alert" role="status"><span>{alert}</span><button aria-label="关闭提醒" onClick={() => setAlert("")}>×</button></div>}
     {!!result?.summary.awaiting && <button className="wb-awaiting" onClick={() => { setStatus("reported"); setSearch(""); setQuery(""); setPage(0); }}><strong>待核实到账：{result.summary.awaiting} 笔</strong><span>买家已提交付款反馈，点击查看并核对收款记录 →</span></button>}
     <section className="wb-metrics" aria-label="经营数据">{[
