@@ -10,6 +10,8 @@ function doPost(e) {
     const expected = PropertiesService.getScriptProperties().getProperty("BRIDGE_TOKEN") || "";
     const supplied = String(input.token || "");
     if (!expected || !constantTimeEqual_(expected, supplied)) return json_({ ok: false, message: "unauthorized" });
+    if (input.purpose === "customer_threads") return customerThreads_(input);
+    if (input.purpose === "customer_reply") return customerReply_(input);
     if (input.purpose === "capability_probe") return json_({ ok: true, buyerDelivery: true, attachments: true });
     if (!/^[A-Za-z0-9:_-]{12,120}$/.test(String(input.id || ""))) return json_({ ok: false, message: "invalid_id" });
     const to = String(input.to || "").trim();
@@ -63,4 +65,35 @@ function constantTimeEqual_(a, b) {
   const size = Math.max(a.length, b.length);
   for (let i = 0; i < size; i++) diff |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
   return diff === 0;
+}
+
+function emailAddress_(value) {
+  const match = String(value || "").match(/<?([A-Za-z0-9.!#$%&'*+\/=?^_`{|}~-]+@[A-Za-z0-9.-]+)>?/);
+  return match ? match[1].toLowerCase() : "";
+}
+function customerThreads_(input) {
+  const email = emailAddress_(input.email);
+  if (!email || email !== String(input.email || "").trim().toLowerCase()) return json_({ok:false,message:"invalid_email"});
+  const threads = GmailApp.search(`{from:${email} to:${email}}`, 0, 30);
+  const messages = [];
+  for (const thread of threads) for (const m of thread.getMessages()) {
+    const from = emailAddress_(m.getFrom());
+    const recipients = String(m.getTo() || "").split(",").map(emailAddress_);
+    if (from !== email && !(from === "daolingz46@gmail.com" && recipients.includes(email))) continue;
+    messages.push({id:m.getId(), threadId:thread.getId(), direction:from===email?"received":"sent", subject:m.getSubject().slice(0,250), text:m.getPlainBody().slice(0,8000), date:m.getDate().getTime(), canReply:from===email && emailAddress_(m.getReplyTo() || m.getFrom())===email});
+  }
+  messages.sort((a,b)=>a.date-b.date);
+  return json_({ok:true,messages:messages.slice(-100)});
+}
+function customerReply_(input) {
+  const email = emailAddress_(input.email), messageId = String(input.messageId || ""), text = String(input.text || "").trim(), id = String(input.id || "");
+  if (!email || email !== String(input.email || "").trim().toLowerCase() || !/^[A-Za-z0-9_-]{1,128}$/.test(messageId) || !/^[A-Za-z0-9:_-]{12,120}$/.test(id) || !text || text.length>3000) return json_({ok:false,message:"invalid_input"});
+  const lock=LockService.getScriptLock(); lock.waitLock(10000);
+  try {
+    const cache=CacheService.getScriptCache(), key="reply_"+id;
+    if (cache.get(key)) return json_({ok:true,duplicate:true});
+    const m=GmailApp.getMessageById(messageId);
+    if (!m || emailAddress_(m.getFrom())!==email || emailAddress_(m.getReplyTo() || m.getFrom())!==email) return json_({ok:false,message:"recipient_mismatch"});
+    m.reply(text); cache.put(key,"1",21600); return json_({ok:true});
+  } finally { lock.releaseLock(); }
 }
