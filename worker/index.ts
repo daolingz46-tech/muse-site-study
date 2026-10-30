@@ -272,6 +272,30 @@ async function admin(env: Env, request: Request, path: string) {
     return miniLogin ? json({ ok: true, session }) : json({ ok: true }, 200, { "Set-Cookie": cookieHeader(request, session, 28800) });
   }
   await requireAdmin(env, request);
+  if (path === "/api/admin/customer-timeline" && request.method === "POST") {
+    const input = await body(request), id = str(input.id, 64);
+    const order = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).first<Row>();
+    const email = order?.product === "muse-token" ? order.contactEmail : order?.target;
+    if (!order || !email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400,"订单没有有效联系邮箱");
+    const related = await env.DB.prepare("SELECT id,code,title,status,createdAt,paidAt,completedAt FROM orders WHERE lower(CASE WHEN product='muse-token' THEN contactEmail ELSE target END)=lower(?) ORDER BY createdAt DESC LIMIT 100").bind(email).all<{id:string;code:string;title:string;status:string;createdAt:number}>();
+    if (!env.GMAIL_SCRIPT_URL || !env.GMAIL_SCRIPT_TOKEN) return json({email,orders:related.results,messages:[],mailError:"邮箱读取尚未配置"});
+    let result: {ok?:boolean;messages?:Array<{subject:string;[key:string]:unknown}>};
+    try { const response=await fetch(env.GMAIL_SCRIPT_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({token:env.GMAIL_SCRIPT_TOKEN,purpose:"customer_threads",email}),redirect:"follow",signal:AbortSignal.timeout(15000)}); result=await response.json(); }
+    catch { return json({email,orders:related.results,messages:[],mailError:"邮箱读取失败，请检查邮件桥接部署和授权"}); }
+    if (!result.ok || !Array.isArray(result.messages)) return json({email,orders:related.results,messages:[],mailError:"邮箱读取尚未启用，请更新并授权邮件桥接"});
+    const messages=result.messages.map(message=>{const matches=related.results.filter(o=>new RegExp(`(?:订单\\s*)${o.code}(?!\\d)`).test(message.subject || ""));return {...message,matchedOrder:matches.length===1?matches[0].code:null};});
+    return json({email,orders:related.results,messages});
+  }
+  if (path === "/api/admin/customer-reply" && request.method === "POST") {
+    const input=await body(request), id=str(input.id,64), messageId=str(input.messageId,128), message=str(input.message,3000), requestId=str(input.requestId,64);
+    const order=await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).first<Row>();
+    const email=order?.product === "muse-token" ? order.contactEmail : order?.target;
+    if (!order || !email || !message || !/^[A-Za-z0-9_-]{1,128}$/.test(messageId) || !/^[a-f0-9-]{36}$/.test(requestId)) throw new HttpError(400,"回复信息无效");
+    if (!env.GMAIL_SCRIPT_URL || !env.GMAIL_SCRIPT_TOKEN) throw new HttpError(503,"邮件桥接尚未配置");
+    try { const response=await fetch(env.GMAIL_SCRIPT_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({token:env.GMAIL_SCRIPT_TOKEN,purpose:"customer_reply",email,messageId,text:message,id:`reply:${requestId}`}),redirect:"follow",signal:AbortSignal.timeout(20000)}); const result=await response.json() as {ok?:boolean}; if (!result.ok) throw new Error("reply_failed"); }
+    catch { throw new HttpError(502,"回复结果未确认，请先核查 Gmail 发件箱后再重试"); }
+    await env.DB.prepare("INSERT INTO audit(orderId,action,createdAt) VALUES(?,'customer_reply',?)").bind(id,Date.now()).run(); return json({ok:true});
+  }
   if (path === "/api/admin/contact-buyer" && request.method === "POST") {
     const input = await body(request), id = str(input.id, 64), message = str(input.message, 3000);
     if (!message) throw new HttpError(400, "请填写要发送给客户的内容");

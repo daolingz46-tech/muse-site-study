@@ -30,6 +30,8 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal(new URL(request.url).hostname, "mail.test");
     const input = await request.json();
     if (input.purpose === "capability_probe") return Response.json({ ok: true, buyerDelivery: true, attachments: true });
+    if (input.purpose === "customer_threads") return Response.json({ok:true,messages:[{id:"mail1",direction:"received",subject:"订单 1234",text:"hello",date:100,canReply:true},{id:"mail2",direction:"received",subject:"其他问题",text:"help",date:101,canReply:true}]});
+    if (input.purpose === "customer_reply") { sentMessages.push(input); return Response.json({ok:true}); }
     sentMessages.push(input);
     return Response.json({ ok: true });
   } }] }));
@@ -362,6 +364,19 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal(result.status,200); assert.equal(supplierGoods,"G85161614"); assert.equal(supplierQuantity,10); assert.equal(result.data.card.split("\n").length,10);
     assert.equal((await call("/api/admin/token-purchase", {id:order.id},session)).status,200); assert.equal(supplierPurchases,before+1);
     assert.equal((await call("/api/admin/update", {id:order.id,action:"complete",checked:true},session)).status,200);
+  });
+
+  await t.test("同邮箱订单时间线只对管理员开放且回复绑定订单邮箱", async () => {
+    await db.prepare("DELETE FROM rate_limits").run();
+    const input={product:"muse",email:"timeline@example.com",method:"wechat",acceptedTerms:true,requestId:randomUUID()};
+    const first=(await call("/api/orders",input)).data;
+    const second=(await call("/api/orders",{...input,requestId:randomUUID()})).data;
+    assert.equal((await call("/api/admin/customer-timeline",{id:first.id})).status,401);
+    const timeline=await call("/api/admin/customer-timeline",{id:first.id},session);
+    assert.equal(timeline.status,200);assert.equal(timeline.data.orders.length,2);assert.equal(timeline.data.messages[1].matchedOrder,null);
+    const reply=await call("/api/admin/customer-reply",{id:first.id,messageId:"mail1",message:"hello",requestId:randomUUID()},session);
+    assert.equal(reply.status,200);assert.equal(sentMessages.at(-1).email,"timeline@example.com");
+    assert.notEqual(first.id,second.id);
   });
 
 });
