@@ -635,7 +635,8 @@ const worker = {
         return withCors(new Response(null, { status: 204 }));
       }
       const nativeAdmin = !origin && path.startsWith("/api/admin/") && (path === "/api/admin/mini-login" || /^Bearer [a-f0-9]{64}$/.test(request.headers.get("Authorization") || ""));
-      if (request.method !== "GET" && !corsOrigin && !nativeAdmin) throw new HttpError(403, "请求来源无效，请刷新页面");
+      const nativeStore = !origin && request.method === "POST" && ["/api/orders", "/api/orders/lookup", "/api/orders/report", "/api/orders/find"].includes(path);
+      if (request.method !== "GET" && !corsOrigin && !nativeAdmin && !nativeStore) throw new HttpError(403, "请求来源无效，请刷新页面");
       if (request.method === "GET" && origin && !corsOrigin) throw new HttpError(403, "请求来源无效，请刷新页面");
       if (path === "/api/health" && request.method === "GET") {
         await env.DB.prepare("SELECT id FROM orders LIMIT 1").all();
