@@ -246,8 +246,13 @@ async function createOrder(env: Env, request: Request, input: Record<string, unk
       if (!free) throw new HttpError(503, "四位订单码已用完，请联系店主升级订单编号规则");
       code = free.code;
     }
-    const result = await env.DB.prepare("INSERT OR IGNORE INTO orders(id,requestHash,inputHash,tokenHash,code,product,title,amountCents,target,method,createdAt,expiresAt,updatedAt,supplierPlan,contactEmail) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-      .bind(id, requestHash, inputHash, await hash(token), code, input.product, title, amount, target, input.method, now, now + 15 * 60000, now, input.product === "gpt" ? String(input.planId) : null, contactEmail || null).run();
+    const referralCode = str(input.referralCode,32);
+    if (referralCode && !/^[a-f0-9]{32}$/.test(referralCode)) throw new HttpError(400,"推广码格式无效");
+    const productKey = input.product === "muse" ? "museAccount" : `${input.product}:${input.planId}`;
+    const [result] = await env.DB.batch([
+      env.DB.prepare("INSERT OR IGNORE INTO orders(id,requestHash,inputHash,tokenHash,code,product,title,amountCents,target,method,createdAt,expiresAt,updatedAt,supplierPlan,contactEmail) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(id, requestHash, inputHash, await hash(token), code, input.product, title, amount, target, input.method, now, now + 15 * 60000, now, input.product === "gpt" ? String(input.planId) : null, contactEmail || null),
+      env.DB.prepare("INSERT INTO agent_order_attribution(orderId,agentId,productKey,commissionCents,ruleVersion,createdAt) SELECT ?,a.id,?,COALESCE(r.amountCents,0),COALESCE(r.updatedAt,0),? FROM agents a LEFT JOIN agent_commission_rules r ON r.productKey=? WHERE a.referralCode=? AND a.status='active' AND changes()=1").bind(id,productKey,now,productKey,referralCode),
+    ]);
     const row = await env.DB.prepare("SELECT * FROM orders WHERE requestHash=?").bind(requestHash).first<Row>();
     if (row) { if (!await matchesInput(row)) throw new HttpError(409, "订单内容已改变，请重新下单"); await queueOrderEmail(env, row, "created", ctx); if (result.meta.changes) await queueOrderPush(env, row, "created", ctx); return json(publicOrder(row, token), result.meta.changes ? 201 : 200); }
   }
@@ -276,6 +281,10 @@ async function agentApi(env: Env, request: Request, path: string) {
   const agent=session && await env.DB.prepare("SELECT a.id,a.name,a.referralCode FROM agent_sessions s JOIN agents a ON a.id=s.agentId WHERE s.hash=? AND s.expiresAt>? AND a.status='active'").bind(await hash(session),Date.now()).first<{id:string;name:string;referralCode:string}>();
   if (!agent) throw new HttpError(401,"请登录代理工作台");
   if (path === "/api/agent/me" && request.method === "GET") return json({name:agent.name,referralCode:agent.referralCode});
+  if (path === "/api/agent/orders" && request.method === "GET") {
+    const rows = await env.DB.prepare("SELECT o.code,o.title,o.status,o.createdAt,a.commissionCents FROM agent_order_attribution a JOIN orders o ON o.id=a.orderId WHERE a.agentId=? ORDER BY o.createdAt DESC LIMIT 100").bind(agent.id).all();
+    return json({orders:rows.results},200,{"Cache-Control":"no-store"});
+  }
   if (path === "/api/agent/logout" && request.method === "POST") { await env.DB.prepare("DELETE FROM agent_sessions WHERE hash=?").bind(await hash(session)).run(); return json({ok:true},200,{"Set-Cookie":"agent_session=; HttpOnly; Secure; SameSite=None; Path=/api/agent; Max-Age=0"}); }
   throw new HttpError(404,"接口不存在");
 }
@@ -766,6 +775,12 @@ const worker = {
       if (path === "/api/health" && request.method === "GET") {
         await env.DB.prepare("SELECT id FROM orders LIMIT 1").all();
         return withCors(json({ ok: true, service: "muse-store", checkedAt: Date.now() }));
+      }
+      if (path === "/api/referral" && request.method === "GET") {
+        const code = url.searchParams.get("code") || "";
+        if (!/^[a-f0-9]{32}$/.test(code)) return withCors(json({ valid:false }));
+        const agent = await env.DB.prepare("SELECT id FROM agents WHERE referralCode=? AND status='active'").bind(code).first();
+        return withCors(json({ valid: Boolean(agent) },200,{"Cache-Control":"no-store"}));
       }
       if (path === "/api/availability" && request.method === "GET") {
         await limit(env, request, "availability", 90, 60);

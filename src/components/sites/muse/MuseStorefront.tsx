@@ -69,6 +69,15 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
   const [queryingOrder, setQueryingOrder] = useState(false);
   const orderRequestRef = useRef("");
   const notify = useCallback((message: string) => setNotification(message), []);
+  const referralCheck = useRef<Promise<void>>(Promise.resolve());
+  useEffect(() => {
+    const code = new URLSearchParams(window.location.search).get("ref");
+    if (!code || !/^[a-f0-9]{32}$/.test(code)) return;
+    referralCheck.current = fetch(storeApiUrl(`/api/referral?code=${encodeURIComponent(code)}`), { cache: "no-store", signal: AbortSignal.timeout(8000) })
+      .then(response => response.ok ? response.json() : null)
+      .then(data => { if (data?.valid === true) { try { localStorage.setItem("store-referral", JSON.stringify({ code, expires: Date.now() + 7 * 86400000 })); } catch { /* Storage may be disabled. */ } } })
+      .catch(() => { /* Keep the previously validated referral. */ });
+  }, []);
   useEffect(() => {
     if (product === "muse-token") return;
     let active = true;
@@ -172,7 +181,10 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
       setError("");
       orderRequestRef.current ||= crypto.randomUUID();
       try {
-        const order = await createStoreOrder({ product, planId: isToken ? tokenPlanId : product === "gpt" ? gptPlanId : undefined, eligibleConfirmed,
+        await referralCheck.current;
+        let referralCode: string | undefined;
+        try { const referral = JSON.parse(localStorage.getItem("store-referral") || "null"); if (referral && typeof referral.code === "string" && /^[a-f0-9]{32}$/.test(referral.code) && referral.expires > Date.now()) referralCode=referral.code; } catch { /* Continue without a referral. */ }
+        const order = await createStoreOrder({ product, referralCode, planId: isToken ? tokenPlanId : product === "gpt" ? gptPlanId : undefined, eligibleConfirmed,
           email: email.trim(), inviteCode: isToken ? inviteCode.trim() : undefined,
           method: paymentMethod, acceptedTerms: true }, orderRequestRef.current);
         setOrders(previous => [order, ...previous.filter(item => item.id !== order.id)]);

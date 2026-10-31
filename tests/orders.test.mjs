@@ -392,7 +392,21 @@ test("订单、收款核实和交付的数据库流程", async t => {
     const login=await call("/api/agent/login",{code:created.data.referralCode,password:payload.password});assert.equal(login.status,200);
     assert.equal((await call("/api/agent/me",undefined,login.cookie)).data.name,"测试代理");
     assert.equal((await call("/api/admin/agents",undefined,login.cookie)).status,401);
+    assert.equal((await call(`/api/referral?code=${created.data.referralCode}`)).data.valid,true);
+    assert.equal((await call("/api/referral?code=invalid")).data.valid,false);
+    const checkout={product:"muse",email:"referral@example.com",method:"wechat",acceptedTerms:true,requestId:randomUUID(),referralCode:created.data.referralCode};
+    const orders=await Promise.all([call("/api/orders",checkout),call("/api/orders",checkout)]);assert.equal(orders[0].data.id,orders[1].data.id);
+    const attribution=await db.prepare("SELECT * FROM agent_order_attribution WHERE orderId=?").bind(orders[0].data.id).first();assert.equal(attribution.agentId,created.data.id);assert.equal(attribution.commissionCents,200);
+    assert.equal((await call("/api/agent/orders")).status,401);
+    const agentOrders=await call("/api/agent/orders",undefined,login.cookie);assert.equal(agentOrders.status,200);
+    assert.ok(agentOrders.data.orders.some(order=>order.code===orders[0].data.code));
+    assert.doesNotMatch(JSON.stringify(agentOrders.data),/referral@example.com|tokenHash|passwordHash/);
+    await call("/api/admin/agent-rule",{productKey:"museAccount",amountCents:400},session);
+    assert.equal((await db.prepare("SELECT commissionCents FROM agent_order_attribution WHERE orderId=?").bind(orders[0].data.id).first()).commissionCents,200);
     assert.equal((await call("/api/admin/agent-status",{id:created.data.id,status:"disabled"},session)).status,200);
+    assert.equal((await call(`/api/referral?code=${created.data.referralCode}`)).data.valid,false);
+    const disabledOrder=(await call("/api/orders",{...checkout,requestId:randomUUID()})).data;
+    assert.equal(await db.prepare("SELECT * FROM agent_order_attribution WHERE orderId=?").bind(disabledOrder.id).first(),null);
     assert.equal((await call("/api/agent/me",undefined,login.cookie)).status,401);
   });
 
