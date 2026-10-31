@@ -25,13 +25,16 @@ try {
     return route.fulfill({ status: 404, headers, json: {} });
   });
   await page.goto(`${base}/?ref=${agentA}`);
-  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("store-referral") || "null")?.code)).toBe(agentA);
+  await expect.poll(() => page.evaluate(() => JSON.parse(sessionStorage.getItem("store-referral") || "null")?.code)).toBe(agentA);
   await page.goto(`${base}/?ref=${agentC}`);
-  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("store-referral") || "null")?.code)).toBe(agentC);
+  await expect.poll(() => page.evaluate(() => JSON.parse(sessionStorage.getItem("store-referral") || "null")?.code)).toBe(agentC);
   const invalidResponse = page.waitForResponse(response => response.url().includes("/api/referral"));
   await page.goto(`${base}/?ref=${invalidAgent}`);
   await invalidResponse;
-  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("store-referral") || "null")?.code)).toBe(agentC);
+  expect(await page.evaluate(() => JSON.parse(sessionStorage.getItem("store-referral") || "null")?.code)).toBe(agentC);
+  await page.getByRole("tab", { name: "Muse Token", exact: true }).click();
+  await page.reload();
+  expect(await page.evaluate(() => JSON.parse(sessionStorage.getItem("store-referral") || "null")?.code)).toBe(agentC);
   await page.addInitScript(() => { const now = Date.now.bind(Date); Date.now = () => now() + 366 * 86400000; });
   await page.goto(`${base}/`);
   await page.getByLabel("收件邮箱").fill("buyer@example.com");
@@ -39,8 +42,19 @@ try {
   await page.getByRole("button", { name: "确认订单" }).click();
   await page.getByRole("checkbox").check();
   await page.getByRole("button", { name: "继续下单", exact: true }).click({ timeout: 10000 });
+  await expect.poll(() => submitted !== undefined).toBe(true);
+  expect(submitted.referralCode).toBeUndefined();
+  console.log("PASS: direct visit after a year creates an order without agent attribution");
+
+  submitted = undefined;
+  await page.goto(`${base}/?ref=${agentC}`);
+  await page.getByLabel("收件邮箱").fill("buyer@example.com");
+  await page.getByRole("checkbox").check();
+  await page.getByRole("button", { name: "确认订单" }).click();
+  await page.getByRole("checkbox").check();
+  await page.getByRole("button", { name: "继续下单", exact: true }).click({ timeout: 10000 });
   await expect.poll(() => submitted?.referralCode).toBe(agentC);
-  console.log("PASS: A → C → invalid link; checkout after one year attributes to C");
+  console.log("PASS: opening C's link after a year attributes the order to C");
 
   submitted = undefined;
   referralServiceDown = true;

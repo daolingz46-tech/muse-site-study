@@ -10,8 +10,13 @@ function readReferral(storage: Pick<Storage, "getItem">): ReferralRecord | null 
     || typeof value.code !== "string" || !referralCodePattern.test(value.code)) return null;
   const visitedAt = "visitedAt" in value && typeof value.visitedAt === "number" && Number.isFinite(value.visitedAt)
     ? value.visitedAt : 0;
-  // Older draft records contained an expiry. The current rule deliberately ignores it.
   return { code: value.code, visitedAt };
+}
+
+/** A fresh visit without a referral is natural traffic; reloads and same-site navigation keep the current visit. */
+export function isDirectVisit(navigationType: string | undefined, referrer: string, origin: string): boolean {
+  if (navigationType === "reload" || navigationType === "back_forward") return false;
+  try { return !referrer || new URL(referrer).origin !== origin; } catch { return true; }
 }
 
 export function storedReferralCode(storage: Pick<Storage, "getItem">): string | undefined {

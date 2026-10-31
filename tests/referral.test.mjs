@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { rememberReferral, storedReferralCode } from "../src/components/sites/muse/referral.ts";
+import { isDirectVisit, rememberReferral, storedReferralCode } from "../src/components/sites/muse/referral.ts";
 
 function storage() {
   const entries = new Map();
@@ -10,7 +10,7 @@ function storage() {
   };
 }
 
-test("the last confirmed referral remains selected after a year", t => {
+test("the last confirmed referral remains selected during the visit", t => {
   const saved = storage();
   const agentA = "a".repeat(32), agentC = "c".repeat(32);
   let now = Date.parse("2026-01-01T00:00:00Z");
@@ -18,7 +18,6 @@ test("the last confirmed referral remains selected after a year", t => {
   rememberReferral(saved, agentA, Date.now());
   now += 60_000;
   rememberReferral(saved, agentC, Date.now());
-  now += 366 * 86400000;
   assert.equal(storedReferralCode(saved), agentC);
 });
 
@@ -31,10 +30,11 @@ test("a delayed earlier visit cannot replace a later confirmed visit", () => {
   assert.equal(storedReferralCode(saved), agentC);
 });
 
-test("old draft storage remains usable after its former expiry", () => {
-  const saved = storage(), agentC = "c".repeat(32);
-  saved.setItem("store-referral", JSON.stringify({ code: agentC, expires: 1 }));
-  assert.equal(storedReferralCode(saved), agentC);
-  rememberReferral(saved, "a".repeat(32), 2);
-  assert.equal(storedReferralCode(saved), "a".repeat(32));
+test("a fresh direct or external visit clears attribution; navigation and reload preserve it", () => {
+  const origin = "https://musetoken.store";
+  assert.equal(isDirectVisit("navigate", "", origin), true);
+  assert.equal(isDirectVisit("navigate", "https://example.com/", origin), true);
+  assert.equal(isDirectVisit("navigate", `${origin}/token/`, origin), false);
+  assert.equal(isDirectVisit("reload", "", origin), false);
+  assert.equal(isDirectVisit("back_forward", "", origin), false);
 });
