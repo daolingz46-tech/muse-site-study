@@ -3,6 +3,7 @@ import { buildPushPayload, type PushSubscription } from "@block65/webcrypto-web-
 import { tokenPlans, accountPriceCents, accountTitle } from "../src/lib/products";
 import { GPT_SUPPLIER_PRODUCTS, MUSE_ACCOUNT_SUPPLIER, supplierRequest } from "./supplier16688";
 import { deliveryEmail } from "./delivery-email";
+import { deriveAgentPassword } from "./agent-ledger";
 
 type Env = { DB: D1Database; ASSETS: { fetch(request: Request): Promise<Response> }; ADMIN_PASSWORD_HASH: string; RESEND_API_KEY?: string; GMAIL_SCRIPT_URL?: string; GMAIL_SCRIPT_TOKEN?: string; PUSH_PUBLIC_KEY?: string; PUSH_PRIVATE_KEY?: string; SUPPLIER_APP_ID?: string; SUPPLIER_SECRET?: string };
 type ExecutionContextLike = { waitUntil(promise: Promise<unknown>): void };
@@ -259,6 +260,25 @@ async function requireAdmin(env: Env, request: Request) {
   const session = adminSession(request);
   if (!session || !await env.DB.prepare("SELECT hash FROM sessions WHERE hash=? AND expiresAt>?").bind(await hash(session), Date.now()).first()) throw new HttpError(401, "请登录工作台");
 }
+async function agentApi(env: Env, request: Request, path: string) {
+  if (path === "/api/agent/login" && request.method === "POST") {
+    await limit(env,request,"agent-login",8,900);
+    const input=await body(request), code=str(input.code,32), password=typeof input.password === "string" ? input.password : "";
+    if (!/^[a-f0-9]{32}$/.test(code) || password.length<12 || password.length>256) throw new HttpError(401,"代理账号或密码不正确");
+    const agent=await env.DB.prepare("SELECT a.id,c.salt,c.passwordHash,c.iterations FROM agents a JOIN agent_credentials c ON c.agentId=a.id WHERE a.referralCode=? AND a.status='active'").bind(code).first<{id:string;salt:string;passwordHash:string;iterations:number}>();
+    if (!agent || !same(await deriveAgentPassword(password,agent.salt,agent.iterations),agent.passwordHash)) throw new HttpError(401,"代理账号或密码不正确");
+    const session=await hash(crypto.randomUUID()+crypto.randomUUID());
+    await env.DB.prepare("INSERT INTO agent_sessions(hash,agentId,expiresAt) VALUES(?,?,?)").bind(await hash(session),agent.id,Date.now()+8*3600000).run();
+    const secure=new URL(request.url).protocol === "https:";
+    return json({ok:true},200,{"Set-Cookie":`agent_session=${session}; HttpOnly; SameSite=${secure?"None":"Lax"}; Path=/api/agent; Max-Age=28800${secure?"; Secure":""}`});
+  }
+  const session=request.headers.get("Cookie")?.match(/(?:^|;\s*)agent_session=([a-f0-9]{64})(?:;|$)/)?.[1] || "";
+  const agent=session && await env.DB.prepare("SELECT a.id,a.name,a.referralCode FROM agent_sessions s JOIN agents a ON a.id=s.agentId WHERE s.hash=? AND s.expiresAt>? AND a.status='active'").bind(await hash(session),Date.now()).first<{id:string;name:string;referralCode:string}>();
+  if (!agent) throw new HttpError(401,"请登录代理工作台");
+  if (path === "/api/agent/me" && request.method === "GET") return json({name:agent.name,referralCode:agent.referralCode});
+  if (path === "/api/agent/logout" && request.method === "POST") { await env.DB.prepare("DELETE FROM agent_sessions WHERE hash=?").bind(await hash(session)).run(); return json({ok:true},200,{"Set-Cookie":"agent_session=; HttpOnly; Secure; SameSite=None; Path=/api/agent; Max-Age=0"}); }
+  throw new HttpError(404,"接口不存在");
+}
 async function admin(env: Env, request: Request, path: string) {
   if ((path === "/api/admin/login" || path === "/api/admin/mini-login") && request.method === "POST") {
     const miniLogin = path.endsWith("/mini-login");
@@ -272,6 +292,34 @@ async function admin(env: Env, request: Request, path: string) {
     return miniLogin ? json({ ok: true, session }) : json({ ok: true }, 200, { "Set-Cookie": cookieHeader(request, session, 28800) });
   }
   await requireAdmin(env, request);
+  if (path === "/api/admin/agents" && request.method === "GET") {
+    const agents = await env.DB.prepare("SELECT id,name,referralCode,status,createdAt FROM agents ORDER BY createdAt DESC LIMIT 200").all();
+    const rules = await env.DB.prepare("SELECT productKey,amountCents,updatedAt FROM agent_commission_rules ORDER BY productKey").all();
+    return json({agents:agents.results,rules:rules.results});
+  }
+  if (path === "/api/admin/agent-create" && request.method === "POST") {
+    const input=await body(request), name=str(input.name,80), password=typeof input.password === "string" ? input.password : "";
+    if (!name || password.length < 12 || password.length > 256) throw new HttpError(400,"请填写代理名称和至少 12 位密码");
+    const id=crypto.randomUUID(), referralCode=crypto.randomUUID().replaceAll("-", ""), salt=crypto.randomUUID().replaceAll("-", ""), now=Date.now();
+    const passwordHash=await deriveAgentPassword(password,salt);
+    await env.DB.batch([env.DB.prepare("INSERT INTO agents(id,name,referralCode,status,createdAt) VALUES(?,?,?,'active',?)").bind(id,name,referralCode,now),env.DB.prepare("INSERT INTO agent_credentials(agentId,salt,passwordHash,iterations,createdAt) VALUES(?,?,?,210000,?)").bind(id,salt,passwordHash,now)]);
+    return json({id,name,referralCode},201);
+  }
+  if (path === "/api/admin/agent-status" && request.method === "POST") {
+    const input=await body(request), id=str(input.id,64), status=input.status;
+    if (status !== "active" && status !== "disabled") throw new HttpError(400,"状态无效");
+    const result=await env.DB.prepare("UPDATE agents SET status=? WHERE id=?").bind(status,id).run();
+    if (!result.meta.changes) throw new HttpError(404,"代理不存在");
+    if(status === "disabled") await env.DB.prepare("DELETE FROM agent_sessions WHERE agentId=?").bind(id).run();
+    return json({ok:true});
+  }
+  if (path === "/api/admin/agent-rule" && request.method === "POST") {
+    const input=await body(request), productKey=str(input.productKey,80), amountCents=input.amountCents;
+    const allowed = ["museAccount", ...tokenPlans.map(p=>`muse-token:${p.id}`), ...Object.keys(GPT_SUPPLIER_PRODUCTS).filter(k=>k!=="halfPriceAccount").map(k=>`gpt:${k}`)];
+    if (!allowed.includes(productKey) || !Number.isSafeInteger(amountCents) || Number(amountCents)<0 || Number(amountCents)>10000000) throw new HttpError(400,"商品或佣金金额无效");
+    await env.DB.prepare("INSERT INTO agent_commission_rules(productKey,amountCents,updatedAt) VALUES(?,?,?) ON CONFLICT(productKey) DO UPDATE SET amountCents=excluded.amountCents,updatedAt=excluded.updatedAt").bind(productKey,amountCents,Date.now()).run();
+    return json({ok:true});
+  }
   if (path === "/api/admin/customer-timeline" && request.method === "POST") {
     const input = await body(request), id = str(input.id, 64);
     const order = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).first<Row>();
@@ -730,6 +778,7 @@ const worker = {
         return withCors(json({ stock: Object.fromEntries(entries) }));
       }
       if (path.startsWith("/api/admin/")) return withCors(await admin(env, request, path));
+      if (path.startsWith("/api/agent/")) return withCors(await agentApi(env, request, path));
       if (path === "/api/visit" && request.method === "POST") {
         await limit(env, request, "visit", 60, 60);
         const input = await body(request);

@@ -379,4 +379,21 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.notEqual(first.id,second.id);
   });
 
+  await t.test("代理仅管理员可创建，凭据不出现在管理列表中", async () => {
+    await db.prepare("DELETE FROM rate_limits").run();
+    const payload={name:"测试代理",password:"ExamplePassword-2026"};
+    assert.equal((await call("/api/admin/agent-create",payload)).status,401);
+    const created=await call("/api/admin/agent-create",payload,session);assert.equal(created.status,201);
+    const list=await call("/api/admin/agents",undefined,session);assert.equal(list.status,200);
+    assert.ok(list.data.agents.some(a=>a.id===created.data.id));
+    assert.doesNotMatch(JSON.stringify(list.data),/ExamplePassword|passwordHash|salt/);
+    assert.equal((await call("/api/admin/agent-rule",{productKey:"museAccount",amountCents:200},session)).status,200);
+    assert.equal((await call("/api/admin/agent-rule",{productKey:"bad",amountCents:1},session)).status,400);
+    const login=await call("/api/agent/login",{code:created.data.referralCode,password:payload.password});assert.equal(login.status,200);
+    assert.equal((await call("/api/agent/me",undefined,login.cookie)).data.name,"测试代理");
+    assert.equal((await call("/api/admin/agents",undefined,login.cookie)).status,401);
+    assert.equal((await call("/api/admin/agent-status",{id:created.data.id,status:"disabled"},session)).status,200);
+    assert.equal((await call("/api/agent/me",undefined,login.cookie)).status,401);
+  });
+
 });
