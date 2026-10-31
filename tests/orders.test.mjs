@@ -389,6 +389,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.doesNotMatch(JSON.stringify(list.data),/ExamplePassword|passwordHash|salt/);
     assert.equal((await call("/api/admin/agent-rule",{productKey:"museAccount",amountCents:200},session)).status,200);
     assert.equal((await call("/api/admin/agent-rule",{productKey:"bad",amountCents:1},session)).status,400);
+    assert.equal((await call("/api/admin/agent-rule",{productKey:"museAccount",amountCents:999999},session)).status,400);
     const login=await call("/api/agent/login",{code:created.data.referralCode,password:payload.password});assert.equal(login.status,200);
     assert.equal((await call("/api/agent/me",undefined,login.cookie)).data.name,"测试代理");
     assert.equal((await call("/api/admin/agents",undefined,login.cookie)).status,401);
@@ -401,6 +402,16 @@ test("订单、收款核实和交付的数据库流程", async t => {
     const agentOrders=await call("/api/agent/orders",undefined,login.cookie);assert.equal(agentOrders.status,200);
     assert.ok(agentOrders.data.orders.some(order=>order.code===orders[0].data.code));
     assert.doesNotMatch(JSON.stringify(agentOrders.data),/referral@example.com|tokenHash|passwordHash/);
+    const second=await call("/api/admin/agent-create",{name:"另一位代理",password:"AnotherPassword-2026"},session);
+    const secondLogin=await call("/api/agent/login",{code:second.data.referralCode,password:"AnotherPassword-2026"});
+    const secondOrders=await call("/api/agent/orders",undefined,secondLogin.cookie);
+    assert.equal(secondOrders.data.orders.length,0);
+    const unset=(await call("/api/orders",{product:"muse-token",planId:"100",inviteCode:"TEST",email:"new@example.com",method:"wechat",acceptedTerms:true,requestId:randomUUID(),referralCode:second.data.referralCode})).data;
+    const secondAfter=(await call("/api/agent/orders",undefined,secondLogin.cookie)).data.orders;
+    assert.equal(secondAfter.find(order=>order.code===unset.code).ruleVersion,0);
+    assert.ok(!(await call("/api/agent/orders",undefined,login.cookie)).data.orders.some(order=>order.code===unset.code));
+    const summary=(await call("/api/admin/agents",undefined,session)).data.agents.find(a=>a.id===created.data.id);
+    assert.equal(summary.orderCount,1);assert.equal(summary.completedOrderCount,0);
     await call("/api/admin/agent-rule",{productKey:"museAccount",amountCents:400},session);
     assert.equal((await db.prepare("SELECT commissionCents FROM agent_order_attribution WHERE orderId=?").bind(orders[0].data.id).first()).commissionCents,200);
     assert.equal((await call("/api/admin/agent-status",{id:created.data.id,status:"disabled"},session)).status,200);
@@ -408,6 +419,12 @@ test("订单、收款核实和交付的数据库流程", async t => {
     const disabledOrder=(await call("/api/orders",{...checkout,requestId:randomUUID()})).data;
     assert.equal(await db.prepare("SELECT * FROM agent_order_attribution WHERE orderId=?").bind(disabledOrder.id).first(),null);
     assert.equal((await call("/api/agent/me",undefined,login.cookie)).status,401);
+    assert.equal((await call("/api/admin/agent-status",{id:created.data.id,status:"active"},session)).status,200);
+    assert.equal((await call("/api/agent/me",undefined,login.cookie)).status,401);
+    const audit=await db.prepare("SELECT action,agentId,productKey,amountCents FROM agent_audit WHERE agentId=? OR productKey='museAccount'").bind(created.data.id).all();
+    assert.ok(audit.results.some(event=>event.action==="create"));
+    assert.ok(audit.results.some(event=>event.action==="rule" && event.amountCents===400));
+    assert.doesNotMatch(JSON.stringify(audit.results),/ExamplePassword|passwordHash|salt/);
   });
 
 });

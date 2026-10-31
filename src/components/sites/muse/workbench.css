@@ -20,6 +20,42 @@
 .wb-catalog-details { min-width:0; display:flex; flex-direction:column; gap:4px; }
 .wb-catalog-details strong { color:#283144; font-size:13px; line-height:1.45; overflow-wrap:anywhere; }
 .wb-catalog-details span { font-size:12px; color:#65748c; overflow-wrap:anywhere; }
+
+.wb-agents { scroll-margin-top: 20px; }
+.wb-agent-explainer { margin: 16px 0; padding: 12px 14px; background: #f2f6fd; color: #486181; border-radius: 10px; }
+.wb-agent-success { margin: 12px 0 !important; color: #237348; }
+.wb-agent-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 16px 0 8px; }
+.wb-agent-summary>div { display: flex; flex-direction: column; padding: 14px; border: 1px solid #e7ebf3; border-radius: 10px; background: #fafbfe; }
+.wb-agent-summary span, .wb-agent-help { color: #728097; font-size: 12px; }
+.wb-agent-summary strong { font-size: 22px; color: #293e70; }
+.wb-agent-section-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 24px 0 12px; }
+.wb-agent-section-title h3 { margin: 0; font-size: 16px; color: #27364d; }
+.wb-agent-section-title span { color: #728097; font-size: 12px; }
+.wb-agent-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 10px; }
+.wb-agent-card, .wb-agent-create, .wb-agent-rule { padding: 16px; border: 1px solid #e5eaf3; border-radius: 11px; background: #fbfcff; }
+.wb-agent-card-heading, .wb-agent-card-heading>div, .wb-agent-card-actions { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.wb-agent-card-heading>div { justify-content: flex-start; }
+.wb-agent-card p { color: #728097; font-size: 12px; margin: 8px 0 !important; }
+.wb-agent-card label, .wb-agent-create label { display: block; color: #56647a; font-size: 12px; }
+.wb-agent-card input, .wb-agent-create input, .wb-agent-rule input { display: block; width: 100%; border: 1px solid #dce3ef; border-radius: 8px; padding: 9px 10px; background: #fff; color: #293e50; }
+.wb-agent-card input, .wb-agent-create input { margin: 5px 0 10px; }
+.wb-agent-card-actions { justify-content: flex-start; flex-wrap: wrap; }
+.wb-agent-card-actions details { color: #52698d; font-size: 12px; overflow-wrap: anywhere; }
+.wb-agent-card-actions summary { cursor: pointer; }
+.wb-agent-card-actions code { display: block; margin: 6px 0; }
+.wb-agent-active, .wb-agent-disabled { font-size: 12px; padding: 2px 8px; border-radius: 6px; background: #e5f5ed; color: #208354; }
+.wb-agent-disabled { background: #edf0f4; color: #738095; }
+.wb-agent-create { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; margin-bottom: 14px; }
+.wb-agent-create p { grid-column: 1 / -1; margin: 0 !important; font-size: 12px; color: #728097; }
+.wb-agent-create button { justify-self: start; }
+.wb-agent-category h4 { margin: 16px 0 8px; color: #56647a; font-size: 13px; }
+.wb-agent-rule { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 8px; }
+.wb-agent-rule>div:first-child { display: flex; flex-direction: column; gap: 4px; }
+.wb-agent-rule span, .wb-agent-rule label { color: #728097; font-size: 12px; }
+.wb-agent-rule-input { display: flex; align-items: center; gap: 8px; }
+.wb-agent-rule-input input { width: 100px; }
+.wb-agent-rule .wb-error { margin: 0 !important; }
+@media(max-width: 700px) { .wb-agent-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .wb-agent-create { grid-template-columns: 1fr; } .wb-agent-rule { align-items: stretch; flex-direction: column; gap: 8px; } .wb-agent-rule-input { flex-wrap: wrap; } }
 .wb-contact-dialog { max-width:520px; }
 .wb-contact-dialog .wb-contact-intro { margin-bottom:16px; }
 .wb-contact-recipient { display:flex; flex-direction:column; gap:3px; padding:12px 14px; border:1px solid #e4eaf4; border-radius:10px; background:#f7f9fc; }
