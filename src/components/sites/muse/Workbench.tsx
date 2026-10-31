@@ -5,6 +5,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { formatMoney, storeName } from "./catalog";
 import { storeApiUrl } from "./store-api";
+import { AgentManagement } from "./AgentManagement";
 import "./workbench.css";
 
 type AdminOrder = {
@@ -340,6 +341,8 @@ export function Workbench() {
       ["待核实到账", result?.summary.awaiting || 0, "买家已反馈付款 · 5 秒自动刷新"],
       ["待交付", result?.summary.processing || 0, `${result?.summary.completed || 0} 笔已完成 · 共 ${result?.summary.total || 0} 笔订单`],
     ].map(([title, value, note]) => <article key={title}><span>{title}</span><strong>{value}</strong><small>{note}</small></article>)}</section>
+    <p><a href="#agent-management">前往代理管理 ↓</a></p>
+    <AgentManagement api={api}/>
     <InventoryManager version={inventoryVersion} onChange={() => setInventoryVersion(v => v + 1)}/>
     <section className="wb-visitors"><div className="wb-visitor-heading"><div><h2>商品销量与货源</h2><p>销量按已核实收款订单统计；未配置编号的商品保留人工管理。</p></div></div>{Array.from(new Set(catalog.map(item => item.category))).map(category => <div className="wb-catalog-group" key={category}><h3>{category}</h3><div className="wb-catalog">{catalog.filter(item => item.category === category).map(item => <article className="wb-catalog-card" key={item.title}>{catalogIcons[category] ? <Image className="wb-catalog-icon" src={catalogIcons[category]} alt="" width={42} height={42}/> : <span className="wb-catalog-icon wb-catalog-fallback" aria-hidden="true">{category.slice(0, 1)}</span>}<div className="wb-catalog-details"><strong>{item.title.replace(/^(GPT|Muse AI|Muse Token)\s*·\s*/, "")}</strong><span>销量 {item.sales}</span><span>货源编号：{item.supplier || "未配置"}</span></div></article>)}</div></div>)}</section>
     <section className="wb-visitors"><div className="wb-visitor-heading"><div><h2>访客数据</h2><p>匿名统计访问次数，不记录访客姓名、联系方式或完整来源网址。</p></div><div className="wb-visitor-stats"><span>今日 <b>{visits?.summary.today ?? "—"}</b></span><span>近 7 天 <b>{visits?.summary.last7Days ?? "—"}</b></span><span>累计 <b>{visits?.summary.total ?? "—"}</b></span></div></div><div className="wb-visit-list"><div className="wb-visit-row wb-visit-head"><span>访问时间</span><span>页面</span><span>来源</span><span>设备</span></div>{visits?.recent.map(visit => <div className="wb-visit-row" key={visit.id}><span>{date(visit.createdAt)}</span><span>{visit.page === "/" ? "商店首页" : visit.page}</span><span>{visitSourceLabels[visit.source] || "其他网站"}</span><span>{visitDeviceLabels[visit.device] || "电脑"}</span></div>)}{visits && visits.recent.length === 0 && <p className="wb-visit-empty">还没有访客记录；访客打开商店后会自动统计。</p>}</div></section>

@@ -13,6 +13,7 @@ export type CreateStoreOrder = {
   method: "alipay" | "wechat";
   acceptedTerms: true;
   eligibleConfirmed?: boolean;
+  referralCode?: string;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
