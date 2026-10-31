@@ -12,11 +12,12 @@ test("commission only settles after both payment and fulfillment", () => {
   assert.throws(() => nextBeijingDay(NaN));
 });
 
-test("last valid active referral before checkout wins; expired and future visits are excluded", async () => {
+test("last valid active referral wins even after a year; future visits are excluded", async () => {
   const { lastValidReferral } = await import("../worker/agent-ledger.ts");
-  const active = new Set(["A", "B"]);
-  assert.equal(lastValidReferral([{code:"A",visitedAt:1},{code:"B",visitedAt:3}], 4, 7, active)?.code, "B");
-  assert.equal(lastValidReferral([{code:"A",visitedAt:1},{code:"B",visitedAt:3}], 4, 7, new Set(["A"]))?.code, "A");
-  assert.equal(lastValidReferral([{code:"A",visitedAt:1}], 8, 7, active), null);
-  assert.equal(lastValidReferral([{code:"A",visitedAt:9}], 8, 7, active), null);
+  const active = new Set(["A", "C"]);
+  const visits = [{ code: "A", visitedAt: 1000 }, { code: "C", visitedAt: 2000 }];
+  const oneYearLater = 2000 + 366 * 86400000;
+  assert.equal(lastValidReferral(visits, oneYearLater, active)?.code, "C");
+  assert.equal(lastValidReferral(visits, oneYearLater, new Set(["A"]))?.code, "A");
+  assert.equal(lastValidReferral([{ code: "A", visitedAt: oneYearLater + 1 }], oneYearLater, active), null);
 });

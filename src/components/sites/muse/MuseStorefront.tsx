@@ -8,6 +8,7 @@ import { OrderPayment, PurchaseNotice, RecentOrders, orderLink, type StoreOrder 
 import { accountPriceCents, accountTitle, formatMoney, storeName, supportQQ, tokenPlans, tokenTerms } from "./catalog";
 import { createStoreOrder, lookupStoreOrder, findStoreOrder, storeApiUrl, type OrderSummary } from "./store-api";
 import { importSavedOrders, readSavedOrders, saveOrder, type SavedOrder } from "./saved-orders";
+import { rememberReferral, storedReferralCode } from "./referral";
 import "./muse.css";
 
 type Product = "muse" | "muse-token" | "gpt";
@@ -69,14 +70,28 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
   const [queryingOrder, setQueryingOrder] = useState(false);
   const orderRequestRef = useRef("");
   const notify = useCallback((message: string) => setNotification(message), []);
-  const referralCheck = useRef<Promise<void>>(Promise.resolve());
+  const referralCheck = useRef<Promise<boolean>>(Promise.resolve(true));
+  const retryReferralCheck = useRef<(() => Promise<boolean>) | null>(null);
+  const temporaryReferral = useRef<string | undefined>(undefined);
   useEffect(() => {
     const code = new URLSearchParams(window.location.search).get("ref");
     if (!code || !/^[a-f0-9]{32}$/.test(code)) return;
-    referralCheck.current = fetch(storeApiUrl(`/api/referral?code=${encodeURIComponent(code)}`), { cache: "no-store", signal: AbortSignal.timeout(8000) })
-      .then(response => response.ok ? response.json() : null)
-      .then(data => { if (data?.valid === true) { try { localStorage.setItem("store-referral", JSON.stringify({ code, expires: Date.now() + 7 * 86400000 })); } catch { /* Storage may be disabled. */ } } })
-      .catch(() => { /* Keep the previously validated referral. */ });
+    const visitedAt = Date.now();
+    const verify = async () => {
+      try {
+        const response = await fetch(storeApiUrl(`/api/referral?code=${encodeURIComponent(code)}`), { cache: "no-store", signal: AbortSignal.timeout(8000) });
+        if (!response.ok) return false;
+        const data: unknown = await response.json();
+        if (!data || typeof data !== "object" || !("valid" in data) || typeof data.valid !== "boolean") return false;
+        if (data.valid) {
+          try { rememberReferral(localStorage, code, visitedAt); }
+          catch { temporaryReferral.current = code; }
+        }
+        return true;
+      } catch { return false; }
+    };
+    retryReferralCheck.current = verify;
+    referralCheck.current = verify();
   }, []);
   useEffect(() => {
     if (product === "muse-token") return;
@@ -181,9 +196,14 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
       setError("");
       orderRequestRef.current ||= crypto.randomUUID();
       try {
-        await referralCheck.current;
-        let referralCode: string | undefined;
-        try { const referral = JSON.parse(localStorage.getItem("store-referral") || "null"); if (referral && typeof referral.code === "string" && /^[a-f0-9]{32}$/.test(referral.code) && referral.expires > Date.now()) referralCode=referral.code; } catch { /* Continue without a referral. */ }
+        let referralVerified = await referralCheck.current;
+        if (!referralVerified && retryReferralCheck.current) {
+          referralCheck.current = retryReferralCheck.current();
+          referralVerified = await referralCheck.current;
+        }
+        if (!referralVerified) throw new Error("推广链接暂时无法验证，请检查网络后重试。");
+        let referralCode = temporaryReferral.current;
+        if (!referralCode) { try { referralCode = storedReferralCode(localStorage); } catch { /* Storage may be disabled. */ } }
         const order = await createStoreOrder({ product, referralCode, planId: isToken ? tokenPlanId : product === "gpt" ? gptPlanId : undefined, eligibleConfirmed,
           email: email.trim(), inviteCode: isToken ? inviteCode.trim() : undefined,
           method: paymentMethod, acceptedTerms: true }, orderRequestRef.current);
