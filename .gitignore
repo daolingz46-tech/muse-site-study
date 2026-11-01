@@ -15,6 +15,8 @@ dist/
 .env.development.local
 .env.test.local
 .env.production.local
+.env.*
+!.env.example
 
 # Debug
 npm-debug.log*
@@ -47,6 +49,9 @@ next-env.d.ts
 
 # Local temp files
 temp/
+output/
+.workbuddy-ai/
+.wbapp*
 .wrangler/
 .dev.vars
 .dev.vars.*
@@ -56,6 +61,7 @@ gmail-bridge-token.local.txt
 push-vapid.local.json
 wrangler.production.json
 orders-backup*.sql
+miniprogram/project.private.config.json
 
 # Personal collection code is supplied separately for the local storefront.
 public/sites/muse/wechat-collection.local.png
