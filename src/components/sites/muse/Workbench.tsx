@@ -8,10 +8,12 @@ import { storeApiUrl } from "./store-api";
 import "./workbench.css";
 
 type AdminOrder = {
-  id: string; code: string; product: "muse" | "muse-token"; title: string;
+  id: string; code: string; product: "muse" | "muse-token" | "gpt"; title: string;
   amountCents: number; target: string; method: "wechat" | "alipay";
   status: string; createdAt: number; reportedAt: number | null;
   reference: string | null; emailSentAt?: number | null; emailSendCount?: number;
+  supplierState?: string | null; supplierTradeNo?: string | null;
+  contactEmail?: string | null;
 };
 type Result = { orders: AdminOrder[]; count: { total: number }; page: number;
   summary: { total: number; awaiting: number; processing: number; completed: number; revenueCents: number; todayCents: number } };
@@ -20,6 +22,8 @@ type VisitResult = { summary: { total: number; today: number; last7Days: number 
 type TutorialBlock = { type: "text"; content: string } | { type: "image"; url: string; caption: string };
 type Tutorial = { title: string; blocks: TutorialBlock[]; updatedAt: number | null };
 type DeliveryFile = { id: string; name: string; mime: string; size: number; uploadedBytes: number };
+type CatalogProduct = { category: string; title: string; supplier: string | null; sales: number };
+const catalogIcons: Record<string, string> = { GPT: "/sites/muse/openai-mark.svg", Muse: "/sites/muse/muse-logo.svg", "Muse Token": "/sites/muse/muse-logo.svg" };
 const labels: Record<string, string> = { pending: "待付款", reported: "待核实到账", processing: "待交付", complete: "已完成", expired: "已超时" };
 const visitSourceLabels: Record<string, string> = { direct: "直接访问", wechat: "微信", search: "搜索引擎", social: "社交平台", external: "其他网站" };
 const visitDeviceLabels: Record<string, string> = { mobile: "手机", tablet: "平板", desktop: "电脑" };
@@ -30,7 +34,7 @@ function pushKeyBytes(key: string) {
 }
 class ApiError extends Error { constructor(public status: number, message: string) { super(message); } }
 async function api(path: string, input?: unknown) {
-  const response = await fetch(storeApiUrl(`/api/admin/${path}`), { method: input === undefined ? "GET" : "POST", headers: input === undefined ? {} : { "Content-Type": "application/json" }, body: input === undefined ? undefined : JSON.stringify(input), credentials: "include", cache: "no-store", signal: AbortSignal.timeout(path === "send-delivery" ? 90000 : 15000) });
+  const response = await fetch(storeApiUrl(`/api/admin/${path}`), { method: input === undefined ? "GET" : "POST", headers: input === undefined ? {} : { "Content-Type": "application/json" }, body: input === undefined ? undefined : JSON.stringify(input), credentials: "include", cache: "no-store", signal: AbortSignal.timeout(["send-delivery", "supplier-deliver"].includes(path) ? 90000 : 15000) });
   const data = await response.json().catch(() => null);
   if (!response.ok) throw new ApiError(response.status, data?.message || "工作台连接失败，请稍后重试");
   return data;
@@ -43,6 +47,7 @@ export function Workbench() {
   const [delivery, setDelivery] = useState({ email: "", password: "", codeUrl: "" }), [actionError, setActionError] = useState("");
   const [alert, setAlert] = useState(""), [desktopAlerts, setDesktopAlerts] = useState(false), [soundEnabled, setSoundEnabled] = useState(false);
   const [visits, setVisits] = useState<VisitResult | null>(null);
+  const [bridgeUrl, setBridgeUrl] = useState(""), [bridgeResult, setBridgeResult] = useState(""), [bridgeBusy, setBridgeBusy] = useState(false);
   const [emailConfigured, setEmailConfigured] = useState<boolean | null>(null);
   const [attachmentReady, setAttachmentReady] = useState<boolean | null>(null);
   const [emailTestBusy, setEmailTestBusy] = useState(false);
@@ -50,6 +55,17 @@ export function Workbench() {
   const [mailOrder, setMailOrder] = useState<AdminOrder | null>(null), [card, setCard] = useState(""), [includeTutorial, setIncludeTutorial] = useState(true);
   const [mailFiles, setMailFiles] = useState<DeliveryFile[]>([]), [selectedFileIds, setSelectedFileIds] = useState<string[]>([]);
   const [mailBusy, setMailBusy] = useState(false), [uploadingFile, setUploadingFile] = useState(false), [mailError, setMailError] = useState("");
+  const [tokenOrder, setTokenOrder] = useState<AdminOrder | null>(null), [tokenData, setTokenData] = useState<{quantity:number;total?:number;stock?:number;balanceEnough?:boolean;state?:string;tradeNo?:string;card?:string} | null>(null), [tokenError, setTokenError] = useState("");
+  const tokenDialog = useRef<HTMLDialogElement>(null);
+  const [supplierBusy, setSupplierBusy] = useState("");
+  const [supplierFeedback, setSupplierFeedback] = useState<{ orderId: string; message: string; kind: "success" | "error" } | null>(null);
+  const [contactOrder, setContactOrder] = useState<AdminOrder | null>(null), [contactMessage, setContactMessage] = useState(""), [contactError, setContactError] = useState(""), [contactBusy, setContactBusy] = useState(false);
+  const [contactFeedback, setContactFeedback] = useState<{ orderId: string; message: string } | null>(null);
+  const [inventoryVersion, setInventoryVersion] = useState(0);
+  const [historyOrder, setHistoryOrder] = useState<AdminOrder | null>(null);
+  const [timelineOrder, setTimelineOrder] = useState<AdminOrder | null>(null);
+  const [catalog, setCatalog] = useState<CatalogProduct[]>([]);
+  const contactDialog = useRef<HTMLDialogElement>(null);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [mailSuccess, setMailSuccess] = useState<{code: string; to: string} | null>(null);
   const [pushEndpoint, setPushEndpoint] = useState("");
@@ -156,9 +172,12 @@ export function Workbench() {
   }, [auth]);
   useEffect(() => { if (selected) dialog.current?.showModal(); }, [selected]);
   useEffect(() => { if (mailOrder) mailDialog.current?.showModal(); }, [mailOrder]);
+  useEffect(() => { if (tokenOrder) tokenDialog.current?.showModal(); }, [tokenOrder]);
+  useEffect(() => { if (contactOrder) contactDialog.current?.showModal(); }, [contactOrder]);
+  useEffect(() => { if (auth === "ready") void api("catalog").then((data: { products: CatalogProduct[] }) => setCatalog(data.products)).catch(() => {}); }, [auth, result]);
   async function login(event: FormEvent) {
     event.preventDefault(); if (busy) return; setBusy(true); setError("");
-    try { await api("login", { password }); setPassword(""); await load(); }
+    try { await api("login", { password }); setPassword(""); await load(); setInventoryVersion(v => v + 1); }
     catch (e) { setError(e instanceof Error ? e.message : "登录失败"); }
     finally { setBusy(false); }
   }
@@ -216,6 +235,33 @@ export function Workbench() {
     try { await api("email-test", {}); setAlert("测试邮件已提交发送，请检查 daolingz46@gmail.com 收件箱和垃圾邮件"); }
     catch (e) { setAlert(e instanceof Error ? e.message : "测试邮件发送失败"); }
     finally { setEmailTestBusy(false); }
+  }
+  async function supplierDeliver(order: AdminOrder) {
+    if (supplierBusy || !window.confirm(`确认已核实收款，向 ${order.target} 发货？Muse 成品号会优先使用已导入库存，库存不足时再采购。`)) return;
+    setSupplierFeedback(null);
+    setSupplierBusy(order.id);
+    try { await api("supplier-deliver", { id: order.id }); setSupplierFeedback({ orderId: order.id, kind: "success", message: "卡密邮件已提交发送。" }); await load(); }
+    catch (cause) { setSupplierFeedback({ orderId: order.id, kind: "error", message: cause instanceof ApiError ? cause.message : "连接中断，发货结果不明。请先刷新订单并核查采购记录，不要重复采购。" }); await load(); }
+    finally { setSupplierBusy(""); }
+  }
+  async function openToken(order: AdminOrder) {
+    setTokenOrder(order); setTokenData(null); setTokenError("");
+    try { setTokenData(await api("token-quote", { id: order.id })); } catch (e) { setTokenError(e instanceof Error ? e.message : "询价失败"); }
+  }
+  async function buyToken() {
+    if (!tokenOrder || !tokenData || supplierBusy) return;
+    if (!tokenData.state && !window.confirm(`确认采购 ${tokenData.quantity} 件，询价 ¥${tokenData.total?.toFixed(2)}？实际采购前会重新询价。`)) return;
+    setSupplierBusy(tokenOrder.id); setTokenError("");
+    try { setTokenData(await api("token-purchase", { id: tokenOrder.id, expectedCents: tokenData.total === undefined ? undefined : Math.round(tokenData.total * 100) })); await load(); }
+    catch (e) { setTokenError(e instanceof Error ? e.message : "结果不明，请核查货源订单，勿重复采购"); await load(); }
+    finally { setSupplierBusy(""); }
+  }
+  async function contactBuyer(event: FormEvent) {
+    event.preventDefault(); if (!contactOrder || contactBusy) return;
+    setContactBusy(true); setContactError("");
+    try { await api("contact-buyer", { id: contactOrder.id, message: contactMessage }); setContactFeedback({ orderId: contactOrder.id, message: "邮件已提交发送，请留意客户回复。" }); setContactOrder(null); }
+    catch (cause) { setContactError(cause instanceof Error ? cause.message : "发送失败，请核查邮件后重试"); }
+    finally { setContactBusy(false); }
   }
   function open(order: AdminOrder) { setSelected(order); setChecked(false); setReference(""); setDelivery({ email: "", password: "", codeUrl: "" }); setActionError(""); }
   function openMail(order: AdminOrder) {
@@ -285,6 +331,7 @@ export function Workbench() {
     <p className="wb-description">以微信、支付宝收款记录核实到账，再处理充值或账号交付。iPhone 请用 Safari 打开此页，分享 → 添加到主屏幕，从桌面图标进入后点“开启手机推送”。工作台打开时可另点“开启订单叮声”。</p>
     {emailConfigured === false && <div className="wb-email-setup" role="status"><strong>订单邮件提醒还未启用</strong><span>邮件服务尚未配置。可用个人 Gmail 的 Apps Script 免域名发信，或配置 Resend API Key；新订单和买家付款反馈会发到 daolingz46@gmail.com。</span></div>}
     {emailConfigured === true && <div className="wb-email-ready"><span>邮件提醒已连接 · 新订单和付款反馈将发送到 daolingz46@gmail.com</span><button onClick={() => void sendTestEmail()} disabled={emailTestBusy}>{emailTestBusy ? "发送中…" : "发送测试邮件"}</button></div>}
+    <section className="wb-visitors"><h2>核对邮件部署地址</h2><p>从 Apps Script 管理部署中复制网页应用网址，在这里核对是否为工作台当前使用的地址。</p><form onSubmit={async e => { e.preventDefault(); setBridgeBusy(true); setBridgeResult(""); try { const data = await api("email-bridge-match", {url:bridgeUrl.trim()}); setBridgeResult(data.matches ? "匹配：这是工作台正在使用的部署。" : "不匹配：请检查其他部署。 "); } catch (error) { setBridgeResult(error instanceof Error ? error.message : "核对失败"); } finally { setBridgeBusy(false); } }}><input aria-label="网页应用网址" value={bridgeUrl} onChange={e => setBridgeUrl(e.target.value)} placeholder="粘贴以 /exec 结尾的网址" style={{width:"100%",boxSizing:"border-box",padding:12,margin:"12px 0"}}/><button className="wb-primary" disabled={bridgeBusy || !bridgeUrl.trim()}>{bridgeBusy ? "正在核对…" : "核对地址"}</button></form>{bridgeResult && <p role="status">{bridgeResult}</p>}</section>
     {alert && <div className="wb-alert" role="status"><span>{alert}</span><button aria-label="关闭提醒" onClick={() => setAlert("")}>×</button></div>}
     {!!result?.summary.awaiting && <button className="wb-awaiting" onClick={() => { setStatus("reported"); setSearch(""); setQuery(""); setPage(0); }}><strong>待核实到账：{result.summary.awaiting} 笔</strong><span>买家已提交付款反馈，点击查看并核对收款记录 →</span></button>}
     <section className="wb-metrics" aria-label="经营数据">{[
@@ -293,6 +340,9 @@ export function Workbench() {
       ["待核实到账", result?.summary.awaiting || 0, "买家已反馈付款 · 5 秒自动刷新"],
       ["待交付", result?.summary.processing || 0, `${result?.summary.completed || 0} 笔已完成 · 共 ${result?.summary.total || 0} 笔订单`],
     ].map(([title, value, note]) => <article key={title}><span>{title}</span><strong>{value}</strong><small>{note}</small></article>)}</section>
+    <nav className="wb-workspace-nav" aria-label="管理工作台"><Link className="active" aria-current="page" href="/admin/">订单工作台</Link><Link href="/admin/agents/">代理管理</Link></nav>
+    <InventoryManager version={inventoryVersion} onChange={() => setInventoryVersion(v => v + 1)}/>
+    <section className="wb-visitors"><div className="wb-visitor-heading"><div><h2>商品销量与货源</h2><p>销量按已核实收款订单统计；未配置编号的商品保留人工管理。</p></div></div>{Array.from(new Set(catalog.map(item => item.category))).map(category => <div className="wb-catalog-group" key={category}><h3>{category}</h3><div className="wb-catalog">{catalog.filter(item => item.category === category).map(item => <article className="wb-catalog-card" key={item.title}>{catalogIcons[category] ? <Image className="wb-catalog-icon" src={catalogIcons[category]} alt="" width={42} height={42}/> : <span className="wb-catalog-icon wb-catalog-fallback" aria-hidden="true">{category.slice(0, 1)}</span>}<div className="wb-catalog-details"><strong>{item.title.replace(/^(GPT|Muse AI|Muse Token)\s*·\s*/, "")}</strong><span>销量 {item.sales}</span><span>货源编号：{item.supplier || "未配置"}</span></div></article>)}</div></div>)}</section>
     <section className="wb-visitors"><div className="wb-visitor-heading"><div><h2>访客数据</h2><p>匿名统计访问次数，不记录访客姓名、联系方式或完整来源网址。</p></div><div className="wb-visitor-stats"><span>今日 <b>{visits?.summary.today ?? "—"}</b></span><span>近 7 天 <b>{visits?.summary.last7Days ?? "—"}</b></span><span>累计 <b>{visits?.summary.total ?? "—"}</b></span></div></div><div className="wb-visit-list"><div className="wb-visit-row wb-visit-head"><span>访问时间</span><span>页面</span><span>来源</span><span>设备</span></div>{visits?.recent.map(visit => <div className="wb-visit-row" key={visit.id}><span>{date(visit.createdAt)}</span><span>{visit.page === "/" ? "商店首页" : visit.page}</span><span>{visitSourceLabels[visit.source] || "其他网站"}</span><span>{visitDeviceLabels[visit.device] || "电脑"}</span></div>)}{visits && visits.recent.length === 0 && <p className="wb-visit-empty">还没有访客记录；访客打开商店后会自动统计。</p>}</div></section>
     {tutorial && <TutorialEditor key={tutorial.updatedAt ?? "new"} tutorial={tutorial} onSaved={setTutorial}/>}
     <section className="wb-order-section"><div className="wb-toolbar"><h2>订单列表</h2><div><button onClick={() => void load()}><RefreshCw size={15}/>刷新</button><button onClick={exportCsv} disabled={!result?.orders.length}><Download size={15}/>导出当前页</button></div></div>
@@ -301,11 +351,15 @@ export function Workbench() {
       <div className="wb-table-scroll"><table><thead><tr><th>订单 / 商品</th><th>买家信息</th><th>金额 / 方式</th><th>状态</th><th>下单时间</th><th>操作</th></tr></thead><tbody>{result?.orders.map(order => <tr key={order.id}>
         <td><strong className="wb-code">{order.code}</strong><span>{order.title}</span><small title={order.id}>{order.id}</small></td><td><small>{order.product === "muse-token" ? "账号邀请码" : "收件邮箱"}</small><span className="wb-target">{order.target}</span></td>
         <td><strong>¥{formatMoney(order.amountCents)}</strong><span>{order.method === "wechat" ? "微信" : "支付宝"}</span></td><td><span className={`wb-status is-${order.status}`}>{labels[order.status]}</span>{order.reference && <small title={order.reference}>交易号：{order.reference}</small>}</td><td><span>{date(order.createdAt)}</span></td>
-        <td>{!!order.emailSentAt && <div className="wb-mail-sent"><strong>✓ 邮件已发送{(order.emailSendCount || 0) > 1 ? ` · ${order.emailSendCount} 次` : ""}</strong><small>最近发送：{date(order.emailSentAt)}</small></div>}<div className="wb-order-actions">{order.status === "complete" && <span className="wb-done">已交付 · 可售后</span>}{!["processing", "complete"].includes(order.status) && <button className="wb-action wb-verify" onClick={() => open(order)}><ShieldCheck size={14}/>核实收款</button>}{order.product === "muse" && ["processing", "complete"].includes(order.status) ? <button className={`wb-action ${order.status === "complete" ? "wb-resend" : "wb-send"}`} title="向买家邮箱发送卡密" onClick={() => openMail(order)}><Mail size={14}/>{order.status === "complete" ? "再次发送" : "发送邮件"}</button> : order.product === "muse-token" && order.status === "processing" && <button className="wb-action wb-send" onClick={() => open(order)}>完成充值</button>}</div></td>
+        <td>{contactFeedback?.orderId === order.id && <div className="wb-supplier-feedback success" role="status">{contactFeedback.message}</div>}{supplierFeedback?.orderId === order.id && <div className={`wb-supplier-feedback ${supplierFeedback.kind}`} role="alert">{supplierFeedback.message}</div>}{supplierBusy === order.id && <div className="wb-supplier-feedback" role="status">正在向货源查询并处理发货，请稍候…</div>}{(order.product === "gpt" || order.product === "muse") && order.supplierState && <small>货源状态：{({ awaiting: "等待货源发货，可再次查询", purchasing: "采购处理中，请核查", purchase_unknown: "采购结果待核查", sending: "邮件发送中，请核查", mail_unknown: "邮件结果待核查", ready: "已获取卡密", sent: "已发货" } as Record<string, string>)[order.supplierState] || order.supplierState}{order.supplierTradeNo ? ` · 采购单 ${order.supplierTradeNo}` : ""}</small>}{!!order.emailSentAt && <div className="wb-mail-sent"><strong>✓ 邮件已发送{(order.emailSendCount || 0) > 1 ? ` · ${order.emailSendCount} 次` : ""}</strong><small>最近发送：{date(order.emailSentAt)}</small></div>}<div className="wb-order-actions">{(order.product === "muse" || order.product === "gpt") && <button className="wb-action" onClick={() => setHistoryOrder(order)}>查看发货内容</button>}{(order.product !== "muse-token" || order.contactEmail) && <button className="wb-action" onClick={() => setTimelineOrder(order)}>客户邮件与订单</button>}{(order.product !== "muse-token" || order.contactEmail) && <button className="wb-action" onClick={() => { setContactMessage(""); setContactError(""); setContactOrder(order); }}><Mail size={14}/>联系客户</button>}{order.status === "complete" && <span className="wb-done">已交付 · 可售后</span>}{!["processing", "complete"].includes(order.status) && <button className="wb-action wb-verify" onClick={() => open(order)}><ShieldCheck size={14}/>核实收款</button>}{(order.product === "gpt" || order.product === "muse") && order.status === "processing" && <button className="wb-action wb-send" disabled={!!supplierBusy} onClick={() => void supplierDeliver(order)}>{supplierBusy === order.id ? "正在发货…" : (order.product === "muse" ? "优先库存并发货" : "采购并发邮件")}</button>}{order.product === "muse-token" && order.status === "processing" && <button className="wb-action wb-send" disabled={!!supplierBusy} onClick={() => void openToken(order)}>批量采购卡密</button>}{order.product === "muse" && ["processing", "complete"].includes(order.status) ? <button className={`wb-action ${order.status === "complete" ? "wb-resend" : "wb-send"}`} title="向买家邮箱发送卡密" onClick={() => openMail(order)}><Mail size={14}/>{order.status === "complete" ? "再次发送" : "发送邮件"}</button> : order.product === "muse-token" && order.status === "processing" && <button className="wb-action wb-send" onClick={() => open(order)}>完成充值</button>}</div></td>
       </tr>)}</tbody></table></div>
       {!result?.orders.length && <div className="wb-empty"><ShoppingBagIcon/><h3>暂无匹配订单</h3><p>客户下单后，订单会自动出现在这里。</p></div>}
       <footer className="wb-pagination"><span>共 {result?.count.total || 0} 笔 · 每页 50 笔</span><div><button disabled={page === 0} onClick={() => setPage(page - 1)}>上一页</button><span>{page + 1}</span><button disabled={(page + 1) * 50 >= (result?.count.total || 0)} onClick={() => setPage(page + 1)}>下一页</button></div></footer>
     </section>
+    {timelineOrder && <CustomerTimeline order={timelineOrder} onClose={() => setTimelineOrder(null)}/>}
+    {tokenOrder && <dialog ref={tokenDialog} className="wb-dialog wb-mail-dialog" onCancel={e => { if (supplierBusy) e.preventDefault(); else setTokenOrder(null); }}><button className="wb-close" aria-label="关闭" disabled={!!supplierBusy} onClick={() => setTokenOrder(null)}><X size={18}/></button><h2>批量采购 · 订单 {tokenOrder.code}</h2><p>{tokenOrder.title} · 客户邀请码：{tokenOrder.target}</p><p>每件对应 10 亿 Token。采购后请自行操作并核实到账，再点击“完成充值”。</p>{tokenData && <><p>采购数量：<strong>{tokenData.quantity} 件</strong>{tokenData.total !== undefined && <> · 询价 ¥{tokenData.total.toFixed(2)}（含手续费）</>}</p>{tokenData.balanceEnough === false && <p className="wb-error">运营钱包余额不足，请充值。</p>}{tokenData.state && <p>采购状态：{tokenData.state}{tokenData.tradeNo ? ` · 采购单 ${tokenData.tradeNo}` : ""}</p>}{tokenData.card && <><p>已采购卡密（仅店主可见）：</p><textarea readOnly rows={8} value={tokenData.card}/></>}{!tokenData.card && <button className="wb-primary" disabled={!!supplierBusy || tokenData.balanceEnough === false} onClick={() => void buyToken()}>{supplierBusy ? "处理中…" : tokenData.state ? "查询已采购卡密" : "确认采购"}</button>}</>}{!tokenData && !tokenError && <p>正在询价…</p>}{tokenError && <p className="wb-error" role="alert">{tokenError}</p>}</dialog>}
+    {historyOrder && <DeliveryHistory order={historyOrder} onClose={() => setHistoryOrder(null)}/>}
+    {contactOrder && <dialog ref={contactDialog} className="wb-dialog wb-contact-dialog" onCancel={e => { if (contactBusy) e.preventDefault(); else setContactOrder(null); }} aria-labelledby="wb-contact-title"><button type="button" className="wb-close" aria-label="关闭" disabled={contactBusy} onClick={() => setContactOrder(null)}><X size={18}/></button><form onSubmit={contactBuyer}><h2 id="wb-contact-title">联系客户</h2><p className="wb-contact-intro">邮件将发送给该订单的客户。</p><div className="wb-contact-recipient"><span>订单 {contactOrder.code}</span><strong>{contactOrder.product === "muse-token" ? contactOrder.contactEmail : contactOrder.target}</strong></div><label htmlFor="wb-contact-message">邮件内容</label><textarea id="wb-contact-message" required maxLength={3000} rows={6} value={contactMessage} onChange={e => setContactMessage(e.target.value)} placeholder="例如：您好，您购买的商品暂时缺货，请联系我协商处理。"/><div className="wb-contact-hint"><span>请写明处理方式或你的联系方式</span><span>{contactMessage.length}/3000</span></div>{contactError && <p role="alert" className="wb-error">{contactError}</p>}<button className="wb-primary" disabled={contactBusy || !contactMessage.trim()}>{contactBusy ? "发送中…" : "发送邮件"}</button></form></dialog>}
     {selected && <dialog ref={dialog} className={`wb-dialog ${selected.status === "processing" ? "wb-complete-dialog" : "wb-verify-dialog"}`} onCancel={e => { if (busy) e.preventDefault(); else setSelected(null); }} aria-labelledby="wb-action-title"><button className="wb-close" aria-label="关闭" disabled={busy} onClick={() => setSelected(null)}><X size={18}/></button>
       <form onSubmit={save}><p className="wb-eyebrow">订单码 {selected.code}</p><h2 id="wb-action-title">{selected.status === "processing" ? "完成交付" : "核实收款"}</h2><p>{selected.title} · ¥{formatMoney(selected.amountCents)} · {selected.method === "wechat" ? "微信" : "支付宝"}</p><p className="wb-target">{selected.product === "muse-token" ? "账号邀请码" : "收件邮箱"}：{selected.target}</p>
         {selected.status === "processing" ? <>{selected.product === "muse" && <><label>交付账号<input required value={delivery.email} maxLength={254} onChange={e => setDelivery({ ...delivery, email: e.target.value })}/></label><label>账号密码<input required value={delivery.password} maxLength={256} onChange={e => setDelivery({ ...delivery, password: e.target.value })}/></label><label>接码链接<input required type="url" pattern="https://.*" value={delivery.codeUrl} maxLength={1000} placeholder="https://…" onChange={e => setDelivery({ ...delivery, codeUrl: e.target.value })}/></label></>}<label className="wb-check"><input type="checkbox" required checked={checked} onChange={e => setChecked(e.target.checked)}/>{selected.product === "muse-token" ? "我已为此邀请码完成充值" : "我已核对账号资料，确认交付给买家"}</label></> : <><div className="wb-notice">请确认已收到 ¥{formatMoney(selected.amountCents)}，付款备注包含订单码 <b>{selected.code}</b>。</div><label>支付交易单号（选填）<input minLength={6} maxLength={100} value={reference} onChange={e => setReference(e.target.value)} placeholder="可选：从收款账单中复制交易单号"/></label></>}
@@ -386,4 +440,32 @@ function TutorialEditor({ tutorial, onSaved }: { tutorial: Tutorial; onSaved: (v
     </form>}
     {error && <p className="wb-error" role="alert">{error}</p>}{notice && <p className="wb-tutorial-notice" role="status">{notice}</p>}
   </section>;
+}
+
+function InventoryManager({ version, onChange }: { version: number; onChange: () => void }) {
+  const [available, setAvailable] = useState<number | null>(null), [tradeNo, setTradeNo] = useState(""), [message, setMessage] = useState(""), [busy, setBusy] = useState(false);
+  useEffect(() => { void api("inventory").then((value: { available: number }) => setAvailable(value.available)).catch(() => setAvailable(null)); }, [version]);
+  async function submit(event: FormEvent) {
+    event.preventDefault(); if (!window.confirm("请确认此采购订单中的卡密全部尚未发给任何客户。确认后导入库存？")) return;
+    setBusy(true); setMessage("");
+    try { const result = await api("inventory-import", { tradeNo }); setMessage(`导入 ${result.added} 份，跳过 ${result.skipped} 份已导入或已关联的卡密。`); setTradeNo(""); onChange(); }
+    catch (e) { setMessage(e instanceof Error ? e.message : "导入失败"); } finally { setBusy(false); }
+  }
+  return <section className="wb-visitors"><div className="wb-visitor-heading"><div><h2>Muse 成品账号库存</h2><p>可用库存：{available === null ? "读取中" : `${available} 份`}。发货时优先使用这里的库存。</p><p>在 16688 采购订单中复制订单编号，只导入从未发给客户的卡密。支持当前及上一款 Muse 10 亿账号货源。</p></div></div><form onSubmit={submit} style={{display:"flex",gap:8,flexWrap:"wrap"}}><input aria-label="16688 采购订单编号" value={tradeNo} onChange={e => setTradeNo(e.target.value)} placeholder="输入 16688 采购订单编号" maxLength={128} required/><button className="wb-primary" disabled={busy}>{busy ? "导入中…" : "导入未使用的采购单"}</button></form>{message && <p role="status">{message}</p>}</section>;
+}
+function DeliveryHistory({ order, onClose }: { order: AdminOrder; onClose: () => void }) {
+  const ref = useRef<HTMLDialogElement>(null);
+  const [data, setData] = useState<{ history: { text: string; state: string; createdAt: number }[]; legacy: { card: string; instruction: string | null; state: string; tradeNo: string | null } | null } | null>(null), [error, setError] = useState("");
+  useEffect(() => { ref.current?.showModal(); void api(`delivery-history?orderId=${encodeURIComponent(order.id)}`).then(setData).catch(e => setError(e instanceof Error ? e.message : "读取失败")); }, [order.id]);
+  return <dialog ref={ref} className="wb-dialog" onCancel={onClose}><button type="button" className="wb-close" aria-label="关闭" onClick={onClose}><X size={18}/></button><h2>发货内容 · 订单 {order.code}</h2><p>仅店主可查看，请妥善保管账号和卡密。</p>{error && <p role="alert">{error}</p>}{!data && !error && <p>正在读取…</p>}{data?.history.map((item, index) => <div key={index}><strong>{item.state === "sent" ? "已发送" : "发送结果待核查"} · {date(item.createdAt)}</strong><pre style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere",maxHeight:360,overflow:"auto"}}>{item.text}</pre></div>)}{data && !data.history.length && (data.legacy ? <><p>历史记录仅保存了货源卡密及说明，无法还原当时的完整邮件。</p><pre style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere"}}>{data.legacy.card}{"\n\n"}{data.legacy.instruction}</pre></> : <p>没有可查看的发货内容；早期手动发货未保存邮件正文。</p>)}</dialog>;
+}
+
+type TimelineData = {email:string;orders:{id:string;code:string;title:string;status:string;createdAt:number}[];messages:{id:string;direction:string;subject:string;text:string;date:number;canReply:boolean;matchedOrder:string|null}[];mailError?:string};
+function CustomerTimeline({order,onClose}:{order:AdminOrder;onClose:()=>void}) {
+  const ref=useRef<HTMLDialogElement>(null); const [data,setData]=useState<TimelineData|null>(null),[error,setError]=useState(""),[replyTo,setReplyTo]=useState(""),[message,setMessage]=useState(""),[busy,setBusy]=useState(false),[notice,setNotice]=useState("");
+  const load=useCallback(async()=>{try{setData(await api("customer-timeline",{id:order.id}));setError("");}catch(e){setError(e instanceof Error?e.message:"读取失败");}},[order.id]);
+  useEffect(()=>{ref.current?.showModal();void load();},[load]);
+  async function send(e:FormEvent){e.preventDefault();if(!message.trim()||busy)return;setBusy(true);setError("");try{await api("customer-reply",{id:order.id,messageId:replyTo,message,requestId:crypto.randomUUID()});setMessage("");setReplyTo("");setNotice("回复已提交 Gmail；请刷新时间线确认。");await load();}catch(e){setError(e instanceof Error?e.message:"发送结果未确认，请核查发件箱");}finally{setBusy(false);}}
+  const entries=[...(data?.orders||[]).map(item=>({kind:"order" as const,time:item.createdAt,item})),...(data?.messages||[]).map(item=>({kind:"mail" as const,time:item.date,item}))].sort((a,b)=>a.time-b.time);
+  return <dialog ref={ref} className="wb-dialog wb-mail-dialog" onCancel={e=>{if(busy)e.preventDefault();else onClose();}}><button type="button" className="wb-close" aria-label="关闭" disabled={busy} onClick={onClose}><X size={18}/></button><h2>客户邮件与订单</h2><p>{data?.email || "正在读取…"}</p><p>按同一邮箱展示订单与邮件；未标注订单的邮件需人工确认归属。</p>{data?.mailError&&<p role="alert" className="wb-error">{data.mailError}</p>}{error&&<p role="alert" className="wb-error">{error}</p>}{notice&&<p role="status">{notice}</p>}<div style={{maxHeight:"48vh",overflow:"auto"}}>{entries.map(entry=>entry.kind==="order"?<article key={`o-${entry.item.id}`} style={{padding:"12px",margin:"8px 0",background:"#eef3fa",borderRadius:8}}><strong>订单 {entry.item.code} · {entry.item.title}</strong><p>{date(entry.time)} · {labels[entry.item.status]||entry.item.status}</p></article>:<article key={`m-${entry.item.id}`} style={{padding:"12px",margin:"8px 0",border:"1px solid #e2e8f0",borderRadius:8}}><strong>{entry.item.direction==="received"?"收到":"已发送（不代表送达）"} · {date(entry.time)}</strong><p>{entry.item.subject} · {entry.item.matchedOrder?`疑似订单 ${entry.item.matchedOrder}`:"同邮箱，订单待确认"}</p><pre style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere",fontFamily:"inherit"}}>{entry.item.text}</pre>{entry.item.canReply&&<button type="button" className="wb-action" onClick={()=>{setReplyTo(entry.item.id);setMessage("");}}>回复此邮件</button>}</article>)}</div>{data&&!entries.length&&<p>暂无关联订单或邮件。</p>}{replyTo&&<form onSubmit={send}><label>回复内容<textarea rows={5} maxLength={3000} required value={message} onChange={e=>setMessage(e.target.value)}/></label><button className="wb-primary" disabled={busy||!message.trim()}>{busy?"发送中…":"发送回复"}</button><button type="button" onClick={()=>setReplyTo("")}>取消</button></form>}</dialog>;
 }
