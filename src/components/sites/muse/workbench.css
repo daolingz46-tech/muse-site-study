@@ -22,6 +22,10 @@
 .wb-catalog-details span { font-size:12px; color:#65748c; overflow-wrap:anywhere; }
 
 .wb-agents { scroll-margin-top: 20px; }
+.wb-workspace-nav { display:flex; gap:8px; flex-wrap:wrap; margin:22px 0; padding:6px; width:fit-content; max-width:100%; border:1px solid #e2e8f1; border-radius:14px; background:#fff; }
+.wb-workspace-nav a { color:#58677c; padding:10px 18px; border-radius:10px; font-size:14px; font-weight:650; text-decoration:none; }
+.wb-workspace-nav a:hover { background:#f2f6fc; }
+.wb-workspace-nav a.active { color:#fff; background:#294a86; }
 .wb-agent-explainer { margin: 16px 0; padding: 12px 14px; background: #f2f6fd; color: #486181; border-radius: 10px; }
 .wb-agent-success { margin: 12px 0 !important; color: #237348; }
 .wb-agent-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 16px 0 8px; }
