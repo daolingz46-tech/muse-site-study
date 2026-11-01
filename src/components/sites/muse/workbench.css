@@ -90,3 +90,35 @@
 .wb-contact-dialog textarea:focus-visible { outline:3px solid #91adff; outline-offset:2px; }
 .wb-contact-hint { display:flex; justify-content:space-between; gap:10px; margin-top:7px; color:#8190a5; font-size:12px; }
 .wb-contact-dialog .wb-error { margin:12px 0 0; }
+
+/* Keep the management screens readable in bright light and on smaller screens. */
+.workbench { background:#e9edf5; color:#17243a; }
+.wb-eyebrow, .wb-description, .wb-metrics article>span, .wb-metrics small,
+.wb-visitor-heading p, .wb-visit-head, .wb-visit-empty, .wb-tutorial-heading p,
+.wb-agent-summary span, .wb-agent-help, .wb-agent-section-title span,
+.wb-agent-card p, .wb-agent-create p, .wb-agent-rule span, .wb-agent-rule label,
+.wb-withdrawal-card p, .wb-owner-login p, .wb-contact-recipient span,
+.wb-contact-hint, .wb-file-heading span, .wb-file-help { color:#475a75; }
+.wb-metrics article, .wb-order-section, .wb-visitors, .wb-tutorial, .wb-login {
+  border-color:#becbdd; box-shadow:0 5px 18px rgba(28,47,77,.07);
+}
+.workbench th { background:#e8eef7; color:#354a68; font-weight:700; }
+.workbench td { border-top-color:#d8e0ec; }
+.workbench td small, .wb-pagination, .wb-empty { color:#4b5d77; }
+.wb-header nav a, .wb-header nav button, .wb-toolbar button, .wb-pagination button {
+  border-color:#aebed2; color:#273e60; font-weight:600;
+}
+.workbench .wb-primary { background:#193f80; }
+.workbench .wb-primary:hover:not(:disabled) { background:#123266; }
+.wb-action { background:#e4edfc; border-color:#9db5dd; color:#1d427b; font-weight:600; }
+.wb-workspace-nav { background:#dce5f2; border-color:#aebfd5; }
+.wb-workspace-nav a { color:#263e61; }
+.wb-workspace-nav a.active { background:#193f80; color:#fff; }
+.wb-agent-summary>div, .wb-agent-card, .wb-agent-create, .wb-agent-rule,
+.wb-withdrawal-card, .wb-owner-login, .wb-commission-controls, .wb-catalog-card {
+  border-color:#c4d1e1; background:#f4f7fc;
+}
+.wb-filters>div, .wb-filters select, .wb-login input, .wb-dialog input:not([type=checkbox]),
+.wb-agent-card input, .wb-agent-create input, .wb-agent-rule input,
+.wb-owner-login input, .wb-payment-reference input, .wb-payment-reference textarea,
+.wb-commission-controls input, .wb-commission-controls textarea { border-color:#aebed2; }
