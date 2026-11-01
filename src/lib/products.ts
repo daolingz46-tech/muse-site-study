@@ -4,5 +4,5 @@ export const tokenPlans = [
   { id: "150", label: "150亿 Token", amountCents: 4500 },
   { id: "100", label: "100亿 Token", amountCents: 2900 },
 ] as const;
-export const accountPriceCents = 1500;
+export const accountPriceCents = 1400;
 export const accountTitle = "Muse AI · 成品账号 + 10亿 Token";
