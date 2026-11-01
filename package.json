@@ -34,13 +34,15 @@
     "db:local": "wrangler d1 migrations apply muse-orders --local",
     "setup:admin": "node scripts/setup-admin.mjs",
     "deploy:store": "node scripts/deploy-store.mjs",
-    "test:orders": "node --test tests/orders.test.mjs"
+    "test:orders": "node --test tests/orders.test.mjs",
+    "test:delivery": "node --test tests/delivery-email.test.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.3.0",
     "@block65/webcrypto-web-push": "^2.0.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "htmlparser2": "^12.0.0",
     "lucide-react": "^1.6.0",
     "next": "^16.4.2",
     "react": "19.2.4",

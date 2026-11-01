@@ -1,8 +1,8 @@
 const { app, BrowserWindow, shell } = require("electron");
 const path = require("node:path");
 
-const ADMIN_URL = "https://daolingz46-tech.github.io/muse-site-study/admin/";
-const STORE_URL = "https://daolingz46-tech.github.io/muse-site-study/";
+const ADMIN_URL = "https://musetoken.store/admin/";
+const STORE_URL = "https://musetoken.store/";
 
 function isAdminUrl(value) {
   try {

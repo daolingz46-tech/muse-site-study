@@ -1,0 +1,1 @@
+CREATE TABLE agent_audit (id INTEGER PRIMARY KEY AUTOINCREMENT, action TEXT NOT NULL, agentId TEXT, productKey TEXT, amountCents INTEGER, createdAt INTEGER NOT NULL);
