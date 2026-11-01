@@ -1,11 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { storeApiUrl } from "./store-api";
 import "./agent-workbench.css";
 
 type Agent = { id: string; name: string; referralCode: string };
-type AgentOrder = { code: string; title: string; status: string; createdAt: number; commissionCents: number; ruleVersion: number };
+type AgentOrder = { code: string; title: string; status: string; createdAt: number; commissionCents: number; ruleVersion: number; commissionState: string };
+type Balance = { availableCents: number; pendingCents: number; reservedCents: number; paidCents: number; debtCents:number; reserveShortfallCents:number; hasHold:boolean };
+type Withdrawal = { id: string; amountCents: number; status: string; requestedAt: number; dueAt: number | null };
+type PendingWithdrawal = { requestId: string; amountCents: number; uncertain: boolean };
 const statusNames: Record<string, string> = { pending: "待付款", reported: "待核款", processing: "处理中", complete: "已完成", expired: "已过期" };
 
 class AgentRequestError extends Error {
@@ -33,9 +36,31 @@ function readAgent(value: unknown): Agent {
 }
 function readOrders(value: unknown, agentId: string): AgentOrder[] {
   if (!value || typeof value !== "object" || !("agentId" in value) || value.agentId !== agentId || !("orders" in value) || !Array.isArray(value.orders)) throw new Error("代理账号状态已变化，请重新登录");
-  if (!value.orders.every(order => order && typeof order.code === "string" && typeof order.title === "string" && typeof order.status === "string" && Number.isFinite(order.createdAt) && Number.isSafeInteger(order.commissionCents) && order.commissionCents >= 0 && Number.isSafeInteger(order.ruleVersion) && order.ruleVersion >= 0)) throw new Error("订单数据异常，请联系店主");
+  if (!value.orders.every(order => order && typeof order.code === "string" && typeof order.title === "string" && typeof order.status === "string" && Number.isFinite(order.createdAt) && Number.isSafeInteger(order.commissionCents) && order.commissionCents >= 0 && Number.isSafeInteger(order.ruleVersion) && order.ruleVersion >= 0 && typeof order.commissionState === "string")) throw new Error("订单数据异常，请联系店主");
   return value.orders as AgentOrder[];
 }
+function readBalance(value: unknown, agentId: string): Balance {
+  if (!value || typeof value !== "object" || !("agentId" in value) || value.agentId !== agentId) throw new Error("余额读取失败，请重新登录");
+  const data = value as Record<string, unknown>;
+  if (typeof data.hasHold !== "boolean" || !["availableCents", "pendingCents", "reservedCents", "paidCents", "debtCents", "reserveShortfallCents"].every(key => Number.isSafeInteger(data[key]) && Number(data[key]) >= 0)) throw new Error("余额数据异常，请联系店主");
+  return data as Balance;
+}
+function readWithdrawals(value: unknown, agentId: string): Withdrawal[] {
+  if (!value || typeof value !== "object" || !("agentId" in value) || value.agentId !== agentId || !("withdrawals" in value) || !Array.isArray(value.withdrawals)) throw new Error("提现记录读取失败，请重新登录");
+  if (!value.withdrawals.every(w => w && typeof w.id === "string" && Number.isSafeInteger(w.amountCents) && w.amountCents > 0 && typeof w.status === "string" && Number.isFinite(w.requestedAt) && (w.dueAt == null || Number.isFinite(w.dueAt)))) throw new Error("提现记录异常，请联系店主");
+  return value.withdrawals as Withdrawal[];
+}
+function money(cents: number) { return `¥${(cents / 100).toFixed(2)}`; }
+function displayDate(value: number) { return new Date(value).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false }); }
+function withdrawalKey(agentId: string) { return `agent-withdrawal-${agentId}`; }
+function recoverWithdrawal(agentId: string): PendingWithdrawal | null {
+  try {
+    const value: unknown = JSON.parse(sessionStorage.getItem(withdrawalKey(agentId)) || "null");
+    if (!value || typeof value !== "object" || !("requestId" in value) || typeof value.requestId !== "string" || !/^[0-9a-f-]{36}$/i.test(value.requestId) || !("amountCents" in value) || !Number.isSafeInteger(value.amountCents) || Number(value.amountCents) <= 0 || !("uncertain" in value) || typeof value.uncertain !== "boolean") return null;
+    return value as PendingWithdrawal;
+  } catch { return null; }
+}
+const withdrawalStatus: Record<string, string> = { pending: "待店主审核", approved: "已批准，等待人工打款", paying: "打款处理中", paid: "已打款", rejected: "已拒绝", unknown: "待店主核实" };
 
 export function AgentWorkbench() {
   const [agent, setAgent] = useState<Agent | null>(null);
@@ -46,22 +71,30 @@ export function AgentWorkbench() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [balance, setBalance] = useState<Balance | null>(null);
+  const [withdrawals, setWithdrawals] = useState<Withdrawal[]>([]);
+  const [withdrawalAmount, setWithdrawalAmount] = useState("");
+  const [pendingWithdrawal, setPendingWithdrawal] = useState<PendingWithdrawal | null>(null);
+  const withdrawalInFlight = useRef(false);
 
   const refresh = useCallback(async () => {
     try {
-      const [agentResult, ordersResult] = await Promise.all([agentRequest("/api/agent/me"), agentRequest("/api/agent/orders")]);
-      const current = readAgent(agentResult), nextOrders = readOrders(ordersResult, current.id);
+      const [agentResult, ordersResult, balanceResult, withdrawalsResult] = await Promise.all([agentRequest("/api/agent/me"), agentRequest("/api/agent/orders"), agentRequest("/api/agent/balance"), agentRequest("/api/agent/withdrawals")]);
+      const current = readAgent(agentResult), nextOrders = readOrders(ordersResult, current.id), nextBalance = readBalance(balanceResult, current.id), nextWithdrawals = readWithdrawals(withdrawalsResult, current.id);
       setAgent(current);
       setOrders(nextOrders);
-    } catch (cause) { setAgent(null); setOrders([]); throw cause; }
+      setBalance(nextBalance); setWithdrawals(nextWithdrawals);
+      setPendingWithdrawal(recoverWithdrawal(current.id));
+    } catch (cause) { setAgent(null); setOrders([]); setBalance(null); setWithdrawals([]); setPendingWithdrawal(null); throw cause; }
   }, []);
   useEffect(() => {
     let active = true;
     void (async () => {
       try {
-        const [agentResult, ordersResult] = await Promise.all([agentRequest("/api/agent/me"), agentRequest("/api/agent/orders")]);
+        const [agentResult, ordersResult, balanceResult, withdrawalsResult] = await Promise.all([agentRequest("/api/agent/me"), agentRequest("/api/agent/orders"), agentRequest("/api/agent/balance"), agentRequest("/api/agent/withdrawals")]);
         const current = readAgent(agentResult), nextOrders = readOrders(ordersResult, current.id);
-        if (active) { setAgent(current); setOrders(nextOrders); }
+        const nextBalance = readBalance(balanceResult, current.id), nextWithdrawals = readWithdrawals(withdrawalsResult, current.id);
+        if (active) { setAgent(current); setOrders(nextOrders); setBalance(nextBalance); setWithdrawals(nextWithdrawals); setPendingWithdrawal(recoverWithdrawal(current.id)); }
       } catch (cause) {
         if (active && !(cause instanceof AgentRequestError && cause.status === 401)) setError(errorMessage(cause));
       } finally { if (active) setLoading(false); }
@@ -83,9 +116,9 @@ export function AgentWorkbench() {
   async function logout() {
     if (busy) return;
     setBusy(true); setError("");
-    try { await agentRequest("/api/agent/logout", {}); setAgent(null); setOrders([]); setPassword(""); setNotice(""); }
+    try { await agentRequest("/api/agent/logout", {}); setAgent(null); setOrders([]); setBalance(null); setWithdrawals([]); setPendingWithdrawal(null); setPassword(""); setNotice(""); }
     catch (cause) {
-      if (cause instanceof AgentRequestError && cause.status === 401) { setAgent(null); setOrders([]); setPassword(""); setNotice(""); }
+      if (cause instanceof AgentRequestError && cause.status === 401) { setAgent(null); setOrders([]); setBalance(null); setWithdrawals([]); setPendingWithdrawal(null); setPassword(""); setNotice(""); }
       else setError(errorMessage(cause));
     }
     finally { setBusy(false); }
@@ -101,6 +134,36 @@ export function AgentWorkbench() {
     try { await refresh(); setNotice("订单已更新"); }
     catch (cause) { setError(errorMessage(cause)); }
     finally { setBusy(false); }
+  }
+  async function submitWithdrawal(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!agent || !balance || busy || withdrawalInFlight.current) return;
+    let attempt = pendingWithdrawal;
+    if (!attempt) {
+      const match = /^(\d{1,10})(?:\.(\d{1,2}))?$/.exec(withdrawalAmount.trim());
+      if (!match) { setError("请输入有效的提现金额，最多保留两位小数。"); return; }
+      const amountCents = Number(match[1]) * 100 + Number((match[2] || "").padEnd(2, "0"));
+      if (!Number.isSafeInteger(amountCents) || amountCents <= 0 || amountCents > balance.availableCents) { setError("提现金额须大于零且不超过可申请金额。"); return; }
+      attempt = { requestId: crypto.randomUUID(), amountCents, uncertain: false };
+    }
+    const previous = attempt;
+    const pending = { ...attempt, uncertain: true };
+    try { sessionStorage.setItem(withdrawalKey(agent.id), JSON.stringify(pending)); }
+    catch { setError("无法保存本次申请记录，请检查浏览器设置后重试。"); return; }
+    setPendingWithdrawal(pending); withdrawalInFlight.current = true; setBusy(true); setError(""); setNotice("");
+    let submitted = false;
+    try {
+      await agentRequest("/api/agent/withdrawals", { amountCents: pending.amountCents, requestId: pending.requestId, expectedAgentId: agent.id });
+      submitted = true;
+      sessionStorage.removeItem(withdrawalKey(agent.id)); setPendingWithdrawal(null); setWithdrawalAmount("");
+      setNotice("提现申请已提交，等待店主审核。");
+      await refresh();
+    } catch (cause) {
+      if (submitted) { setError("申请已提交，但最新记录未能加载，请刷新查看。"); return; }
+      const definitiveRejection = !previous.uncertain && cause instanceof AgentRequestError && cause.status >= 400 && cause.status < 500 && cause.status !== 429;
+      if (definitiveRejection) { try { sessionStorage.removeItem(withdrawalKey(agent.id)); } catch { /* Ignore storage errors. */ } setPendingWithdrawal(null); setError(errorMessage(cause)); }
+      else setError("申请结果暂未确认。请不要重复提交新申请，可使用下方按钮重试同一申请，或联系店主核实。");
+    } finally { withdrawalInFlight.current = false; setBusy(false); }
   }
 
   return <main className="agent-page">
@@ -118,10 +181,19 @@ export function AgentWorkbench() {
           <label className="agent-link-label" htmlFor="agent-link">你的推广链接</label><div className="agent-link-row"><input id="agent-link" readOnly value={`https://musetoken.store/?ref=${agent.referralCode}`} onFocus={event => event.currentTarget.select()} /><button className="agent-primary" type="button" onClick={() => void copyLink()}>复制链接</button></div>
           <p className="agent-hint">客户以后自行直接访问商店下单，订单将按自然流量处理。</p>
         </section>
-        <section className="agent-card"><div className="agent-card-heading"><div><span className="agent-eyebrow">订单记录</span><h2>最近订单</h2></div><button type="button" className="agent-secondary" disabled={busy} onClick={() => void refreshOrders()}>{busy ? "刷新中…" : "刷新"}</button></div>
-          <p className="agent-hint">显示最近 100 笔订单；金额为下单时的佣金规则记录，当前尚未结算，实际结算以店主确认收款和完成交付为准。</p>
+        {balance && <section className="agent-card"><div className="agent-card-heading"><div><span className="agent-eyebrow">佣金与提现</span><h2>结算概览</h2></div><button type="button" className="agent-secondary" disabled={busy} onClick={() => void refreshOrders()}>刷新</button></div>
+          <div className="agent-balances"><div><span>可申请提现</span><strong>{money(balance.availableCents)}</strong></div><div><span>待结算</span><strong>{money(balance.pendingCents)}</strong></div><div><span>提现处理中</span><strong>{money(balance.reservedCents)}</strong></div><div><span>已打款</span><strong>{money(balance.paidCents)}</strong></div></div>
+          {!balance.hasHold && (balance.debtCents > 0 || balance.reserveShortfallCents > 0) && <p className="agent-error">佣金调整后{balance.debtCents > 0 ? `存在 ${money(balance.debtCents)} 待抵扣金额` : "提现预留款需要核查"}，请联系店主。</p>}
+          {balance.hasHold && <p className="agent-error">佣金正在核查，暂不可申请提现，请联系店主。</p>}
+          <p className="agent-hint">订单确认收款并完成交付后，次日（北京时间自然日）结算。提现需店主审核，批准后的次日安排人工打款，请联系店主提供收款信息。</p>
           {error && <p className="agent-error" role="alert">{error}</p>}{notice && <p className="agent-notice" role="status">{notice}</p>}
-          {!orders.length ? <div className="agent-empty">暂无推广订单</div> : <div className="agent-orders">{orders.map((order, index) => <article className="agent-order" key={`${order.code}-${order.createdAt}-${index}`}><div><strong>{order.title}</strong><p>订单码 {order.code} · {new Date(order.createdAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}</p></div><div className="agent-order-end"><span>{statusNames[order.status] || "状态待确认"}</span><b>{order.ruleVersion === 0 ? "未配置佣金" : `规则佣金 ¥${(order.commissionCents / 100).toFixed(2)}`}</b></div></article>)}</div>}
+          <form className="agent-withdraw" onSubmit={submitWithdrawal}><label htmlFor="withdraw-amount">提现金额（元）</label><div className="agent-link-row"><input id="withdraw-amount" type="text" inputMode="decimal" value={pendingWithdrawal ? (pendingWithdrawal.amountCents / 100).toFixed(2) : withdrawalAmount} onChange={event => setWithdrawalAmount(event.target.value)} disabled={busy || !!pendingWithdrawal} placeholder="输入提现金额" /><button type="submit" className="agent-primary" disabled={busy || (!pendingWithdrawal && balance.availableCents <= 0)}>{busy ? "处理中…" : pendingWithdrawal ? "重试同一申请" : "申请提现"}</button></div></form>
+          {pendingWithdrawal && <p className="agent-error">上一笔 {money(pendingWithdrawal.amountCents)} 申请结果尚未确认，请重试同一申请或联系店主核实，避免重复申请。</p>}
+          <h3 className="agent-withdraw-title">提现记录</h3>{!withdrawals.length ? <div className="agent-empty">暂无提现申请</div> : <div className="agent-orders">{withdrawals.map(item => <article className="agent-order" key={item.id}><div><strong>{money(item.amountCents)}</strong><p>申请时间 {displayDate(item.requestedAt)}{item.dueAt ? ` · 计划打款 ${displayDate(item.dueAt)}` : ""}</p></div><div className="agent-order-end"><span>{withdrawalStatus[item.status] || "状态待确认"}</span></div></article>)}</div>}
+        </section>}
+        <section className="agent-card"><div className="agent-card-heading"><div><span className="agent-eyebrow">订单记录</span><h2>最近订单</h2></div><button type="button" className="agent-secondary" disabled={busy} onClick={() => void refreshOrders()}>{busy ? "刷新中…" : "刷新"}</button></div>
+          <p className="agent-hint">显示最近 100 笔订单；金额为下单时的佣金规则记录，到账情况请查看结算概览。</p>
+          {!orders.length ? <div className="agent-empty">暂无推广订单</div> : <div className="agent-orders">{orders.map((order, index) => <article className="agent-order" key={`${order.code}-${order.createdAt}-${index}`}><div><strong>{order.title}</strong><p>订单码 {order.code} · {new Date(order.createdAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}</p></div><div className="agent-order-end"><span>{statusNames[order.status] || "状态待确认"}</span><b>{order.ruleVersion === 0 ? "未配置佣金" : order.commissionState === "review" ? "佣金待店主核查" : order.commissionState === "hold" ? "佣金已冻结" : order.commissionState === "refunded" ? "佣金已冲正" : `规则佣金 ¥${(order.commissionCents / 100).toFixed(2)}`}</b></div></article>)}</div>}
         </section>
       </>}
     </div>

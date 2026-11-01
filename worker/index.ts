@@ -3,9 +3,12 @@ import { buildPushPayload, type PushSubscription } from "@block65/webcrypto-web-
 import { tokenPlans, accountPriceCents, accountTitle } from "../src/lib/products";
 import { GPT_SUPPLIER_PRODUCTS, MUSE_ACCOUNT_SUPPLIER, supplierRequest } from "./supplier16688";
 import { deliveryEmail } from "./delivery-email";
-import { deriveAgentPassword } from "./agent-ledger";
+import { deriveAgentPassword, payoutDueAt } from "./agent-ledger";
+import { agentBalance, commissionReconciliation, withdrawalReservation } from "./agent-finance";
+import { createOwnerSession, hasOwnerSession, clearOwnerSession } from "./owner-auth";
+import { applyCommissionControl, type CommissionControlAction } from "./commission-controls";
 
-type Env = { DB: D1Database; ASSETS: { fetch(request: Request): Promise<Response> }; ADMIN_PASSWORD_HASH: string; RESEND_API_KEY?: string; GMAIL_SCRIPT_URL?: string; GMAIL_SCRIPT_TOKEN?: string; PUSH_PUBLIC_KEY?: string; PUSH_PRIVATE_KEY?: string; SUPPLIER_APP_ID?: string; SUPPLIER_SECRET?: string };
+type Env = { DB: D1Database; ASSETS: { fetch(request: Request): Promise<Response> }; ADMIN_PASSWORD_HASH: string; OWNER_PASSWORD_HASH?: string; RESEND_API_KEY?: string; GMAIL_SCRIPT_URL?: string; GMAIL_SCRIPT_TOKEN?: string; PUSH_PUBLIC_KEY?: string; PUSH_PRIVATE_KEY?: string; SUPPLIER_APP_ID?: string; SUPPLIER_SECRET?: string };
 type ExecutionContextLike = { waitUntil(promise: Promise<unknown>): void };
 type Row = {
   id: string; requestHash: string; inputHash: string; tokenHash: string; code: string;
@@ -291,8 +294,25 @@ async function agentApi(env: Env, request: Request, path: string) {
   if (!agent) throw new HttpError(401,"请登录代理工作台");
   if (path === "/api/agent/me" && request.method === "GET") return json({id:agent.id,name:agent.name,referralCode:agent.referralCode});
   if (path === "/api/agent/orders" && request.method === "GET") {
-    const rows = await env.DB.prepare("SELECT o.code,o.title,o.status,o.createdAt,a.commissionCents,a.ruleVersion FROM agent_order_attribution a JOIN orders o ON o.id=a.orderId WHERE a.agentId=? ORDER BY o.createdAt DESC LIMIT 100").bind(agent.id).all();
+    const rows = await env.DB.prepare("SELECT o.code,o.title,o.status,o.createdAt,a.commissionCents,a.ruleVersion,CASE WHEN c.state='hold' THEN 'hold' WHEN c.state='refunded' THEN 'refunded' WHEN a.ruleVersion=0 THEN 'unconfigured' WHEN a.commissionCents>o.amountCents THEN 'review' WHEN o.status!='complete' OR o.paidAt IS NULL OR o.completedAt IS NULL THEN 'awaiting' ELSE 'eligible' END AS commissionState FROM agent_order_attribution a JOIN orders o ON o.id=a.orderId LEFT JOIN commission_controls c ON c.orderId=a.orderId WHERE a.agentId=? ORDER BY o.createdAt DESC LIMIT 100").bind(agent.id).all();
     return json({agentId:agent.id,orders:rows.results},200,{"Cache-Control":"no-store"});
+  }
+  if (path === "/api/agent/balance" && request.method === "GET") return json({agentId:agent.id,...await agentBalance(env.DB,agent.id,Date.now())});
+  if (path === "/api/agent/withdrawals" && request.method === "GET") {
+    const rows=await env.DB.prepare("SELECT id,amountCents,status,requestedAt,dueAt FROM agent_withdrawals WHERE agentId=? ORDER BY requestedAt DESC LIMIT 100").bind(agent.id).all();
+    return json({agentId:agent.id,withdrawals:rows.results});
+  }
+  if (path === "/api/agent/withdrawals" && request.method === "POST") {
+    const input=await body(request), requestId=str(input.requestId,64), amount=input.amountCents;
+    if (input.expectedAgentId !== agent.id) throw new HttpError(409,"代理账号已变化，请重新登录核对");
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId) || !Number.isSafeInteger(amount) || Number(amount)<=0 || Number(amount)>10000000) throw new HttpError(400,"提现金额或请求无效");
+    await limit(env,request,"agent-withdrawal",20,3600);
+    const id=await hash(`withdrawal:${agent.id}:${requestId}`), now=Date.now();
+    await env.DB.batch([commissionReconciliation(env.DB,agent.id,now),withdrawalReservation(env.DB,agent.id,id,Number(amount),now)]);
+    const withdrawal=await env.DB.prepare("SELECT id,amountCents,status,requestedAt,dueAt FROM agent_withdrawals WHERE id=? AND agentId=?").bind(id,agent.id).first<{amountCents:number}>();
+    if (!withdrawal) throw new HttpError(409,"可提现余额不足，请刷新后重试");
+    if (withdrawal.amountCents!==amount) throw new HttpError(409,"提现内容已改变，请重新提交");
+    return json({withdrawal});
   }
   if (path === "/api/agent/logout" && request.method === "POST") { await env.DB.prepare("DELETE FROM agent_sessions WHERE hash=?").bind(await hash(session)).run(); const secure=new URL(request.url).protocol === "https:"; return json({ok:true},200,{"Set-Cookie":`agent_session=; HttpOnly; SameSite=${secure?"None":"Lax"}; Path=/api/agent; Max-Age=0${secure?"; Secure":""}`}); }
   throw new HttpError(404,"接口不存在");
@@ -310,11 +330,72 @@ async function admin(env: Env, request: Request, path: string) {
     return miniLogin ? json({ ok: true, session }) : json({ ok: true }, 200, { "Set-Cookie": cookieHeader(request, session, 28800) });
   }
   await requireAdmin(env, request);
+  if (path === "/api/admin/owner-login" && request.method === "POST") {
+    await limit(env,request,"owner-login",6,900);
+    const input=await body(request), password=typeof input.password === "string" ? input.password : "";
+    const result=await createOwnerSession(env,adminSession(request),password);
+    if (!result.ok) throw new HttpError(result.reason === "unconfigured" ? 503 : 401,result.reason === "unconfigured" ? "店主审批密码尚未配置" : "店主审批密码不正确");
+    return json({ok:true},200,{"Set-Cookie":result.setCookie});
+  }
+  if (path === "/api/admin/owner-logout" && request.method === "POST") return json({ok:true},200,{"Set-Cookie":await clearOwnerSession(env,request)});
+  if (path.startsWith("/api/admin/owner-")) {
+    if (!await hasOwnerSession(env,request,adminSession(request))) throw new HttpError(401,"请先验证店主审批密码");
+    if (path === "/api/admin/owner-commission" && request.method === "GET") {
+      const code=new URL(request.url).searchParams.get("code") || "";
+      if (!/^\d{4}$/.test(code)) throw new HttpError(400,"请输入 4 位订单码");
+      const row=await env.DB.prepare("SELECT o.id AS orderId,o.code,g.name AS agentName,a.commissionCents AS amountCents,EXISTS(SELECT 1 FROM agent_withdrawals w WHERE w.agentId=a.agentId AND w.status IN ('paying','unknown')) AS payoutInFlight,CASE WHEN a.ruleVersion=0 OR a.commissionCents>o.amountCents THEN 'unconfigured' WHEN c.state='hold' THEN 'held' WHEN c.state='refunded' THEN 'refunded' ELSE 'active' END AS state FROM orders o JOIN agent_order_attribution a ON a.orderId=o.id JOIN agents g ON g.id=a.agentId LEFT JOIN commission_controls c ON c.orderId=o.id WHERE o.code=?").bind(code).first<{payoutInFlight:number;[key:string]:unknown}>();
+      return json({commission:row ? {...row,payoutInFlight:!!row.payoutInFlight} : null});
+    }
+    if (path === "/api/admin/owner-commission-action" && request.method === "POST") {
+      const input=await body(request), orderId=str(input.orderId,64), action=str(input.action,10), reason=str(input.reason,500), requestId=str(input.requestId,64);
+      if (!/^M[a-f0-9]{32}$/.test(orderId) || !["hold","release","refund"].includes(action) || reason.length<10 || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId)) throw new HttpError(400,"佣金操作或原因无效");
+      const row=await env.DB.prepare("SELECT a.orderId FROM agent_order_attribution a JOIN orders o ON o.id=a.orderId WHERE a.orderId=? AND a.ruleVersion>0 AND a.commissionCents<=o.amountCents").bind(orderId).first();
+      if (!row) throw new HttpError(409,"佣金未配置或需核查，暂不能操作");
+      const result=await applyCommissionControl(env.DB,{orderId,operationId:requestId,action:action as CommissionControlAction,reason,now:Date.now()});
+      if (!result.ok) throw new HttpError(409,"佣金状态已变更，或该代理有打款中、待核查的提现，请先核对后重新查询");
+      return json({ok:true,replay:result.replay});
+    }
+    if (path === "/api/admin/owner-withdrawals" && request.method === "GET") {
+      const rawPage=new URL(request.url).searchParams.get("page") || "0";
+      if (!/^\d{1,5}$/.test(rawPage)) throw new HttpError(400,"页码无效");
+      const page=Number(rawPage);
+      const rows=await env.DB.prepare("SELECT w.id,w.agentId,a.name AS agentName,w.amountCents,w.status,w.requestedAt,w.approvedAt,w.dueAt,w.paidAt,w.paymentReference FROM agent_withdrawals w JOIN agents a ON a.id=w.agentId ORDER BY CASE WHEN w.status IN ('pending','approved','paying','unknown') THEN 0 ELSE 1 END,w.requestedAt ASC,w.id ASC LIMIT 51 OFFSET ?").bind(page*50).all();
+      return json({withdrawals:rows.results.slice(0,50),page,hasMore:rows.results.length>50});
+    }
+    if (path === "/api/admin/owner-withdrawal-action" && request.method === "POST") {
+      const input=await body(request), id=str(input.id,64), action=str(input.action,20), now=Date.now();
+      if (!/^[a-f0-9]{64}$/.test(id) || !["approve","reject","begin_payout","mark_unknown","mark_paid","release_unpaid"].includes(action)) throw new HttpError(400,"提现操作无效");
+      const reference=action === "mark_paid" ? str(input.paymentReference,100) : "";
+      const note=action === "release_unpaid" ? str(input.verificationNote,500) : "";
+      if (action === "release_unpaid" && (input.confirmedNoTransfer !== true || note.length<10)) throw new HttpError(400,"请确认未转账并填写至少 10 字的核查说明");
+      if (action === "mark_paid" && reference.length<6) throw new HttpError(400,"请填写至少 6 位的转账流水号");
+      const before=await env.DB.prepare("SELECT status,dueAt,paymentReference FROM agent_withdrawals WHERE id=?").bind(id).first<{status:string;dueAt:number|null;paymentReference:string|null}>();
+      if (!before) throw new HttpError(404,"提现申请不存在");
+      if (action === "begin_payout" && before.status === "paying") throw new HttpError(409,"该申请已开始打款，请先核查转账状态，勿重复转账");
+      if ((action === "approve" && before.status === "approved") || (action === "reject" && before.status === "rejected") || (action === "mark_unknown" && before.status === "unknown") || (action === "mark_paid" && before.status === "paid" && before.paymentReference === reference)) return json({ok:true});
+      if (action === "begin_payout" && before.status === "approved" && (before.dueAt === null || before.dueAt>now)) throw new HttpError(409,"尚未到批准后的次日，不能开始打款");
+      const covered=" AND NOT EXISTS(SELECT 1 FROM agent_order_attribution x JOIN commission_controls c ON c.orderId=x.orderId WHERE x.agentId=agent_withdrawals.agentId AND c.state='hold') AND COALESCE((SELECT SUM(l.amountCents) FROM agent_ledger l WHERE l.agentId=agent_withdrawals.agentId AND l.availableAt<=? AND l.kind IN ('commission','adjustment')),0)>=COALESCE((SELECT SUM(w.amountCents) FROM agent_withdrawals w WHERE w.agentId=agent_withdrawals.agentId AND w.status IN ('pending','approved','paying','unknown','paid')),0)";
+      const sql=action === "approve" ? "UPDATE agent_withdrawals SET status='approved',approvedAt=?,dueAt=?,updatedAt=? WHERE id=? AND status='pending'"+covered
+        : action === "reject" ? "UPDATE agent_withdrawals SET status='rejected',updatedAt=? WHERE id=? AND status IN ('pending','approved')"
+        : action === "begin_payout" ? "UPDATE agent_withdrawals SET status='paying',updatedAt=? WHERE id=? AND status='approved' AND dueAt<=?"+covered
+        : action === "mark_unknown" ? "UPDATE agent_withdrawals SET status='unknown',updatedAt=? WHERE id=? AND status='paying'"
+        : action === "release_unpaid" ? "UPDATE agent_withdrawals SET status='rejected',updatedAt=? WHERE id=? AND status='unknown'"
+        : "UPDATE agent_withdrawals SET status='paid',paidAt=?,updatedAt=?,paymentReference=? WHERE id=? AND status IN ('paying','unknown')";
+      const statement=action === "approve" ? env.DB.prepare(sql).bind(now,payoutDueAt(now),now,id,now) : action === "reject" || action === "mark_unknown" || action === "release_unpaid" ? env.DB.prepare(sql).bind(now,id) : action === "begin_payout" ? env.DB.prepare(sql).bind(now,id,now,now) : env.DB.prepare(sql).bind(now,now,reference,id);
+      let result;
+      try { result=await env.DB.batch([statement,env.DB.prepare("INSERT INTO withdrawal_audit(withdrawalId,action,createdAt,detail) SELECT ?,?,?,? WHERE changes()=1").bind(id,action,now,note || null)]); }
+      catch (error) { if (String(error).includes("UNIQUE")) throw new HttpError(409,"该转账流水号已用于其他提现，请核对"); throw error; }
+      if (!result[0].meta.changes) throw new HttpError(409,"提现状态已变更，请刷新后核对");
+      return json({ok:true});
+    }
+    throw new HttpError(404,"接口不存在");
+  }
   if (path === "/api/admin/agents" && request.method === "GET") {
     const agents = await env.DB.prepare("SELECT a.id,a.name,a.referralCode,a.status,a.createdAt,COUNT(o.id) AS orderCount,COALESCE(SUM(CASE WHEN o.status='complete' THEN 1 ELSE 0 END),0) AS completedOrderCount FROM agents a LEFT JOIN agent_order_attribution x ON x.agentId=a.id LEFT JOIN orders o ON o.id=x.orderId GROUP BY a.id ORDER BY a.createdAt DESC LIMIT 200").all();
     const rules = await env.DB.prepare("SELECT productKey,amountCents,updatedAt FROM agent_commission_rules ORDER BY productKey").all();
     return json({agents:agents.results,rules:rules.results,products:agentProducts()});
   }
+  if (["/api/admin/agent-create","/api/admin/agent-status","/api/admin/agent-rule"].includes(path) && request.method === "POST" && !await hasOwnerSession(env,request,adminSession(request))) throw new HttpError(401,"请先完成店主认证");
   if (path === "/api/admin/agent-create" && request.method === "POST") {
     const input=await body(request), name=str(input.name,80), password=typeof input.password === "string" ? input.password : "";
     if (!name || password.length < 12 || password.length > 256) throw new HttpError(400,"请填写代理名称和至少 12 位密码");

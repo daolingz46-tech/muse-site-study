@@ -55,6 +55,26 @@
 .wb-agent-rule-input { display: flex; align-items: center; gap: 8px; }
 .wb-agent-rule-input input { width: 100px; }
 .wb-agent-rule .wb-error { margin: 0 !important; }
+.wb-withdrawals { margin-top: 26px; padding-top: 4px; border-top: 1px solid #e5eaf3; }
+.wb-withdrawal-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 10px; }
+.wb-withdrawal-card, .wb-owner-login { padding: 16px; border: 1px solid #e5eaf3; border-radius: 11px; background: #fbfcff; }
+.wb-withdrawal-card p, .wb-owner-login p { margin: 8px 0 !important; color: #728097; font-size: 12px; }
+.wb-withdrawal-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.wb-withdrawal-pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; }
+.wb-withdrawal-pagination p { margin: 0 !important; }
+.wb-owner-login label { display: block; color: #56647a; font-size: 12px; }
+.wb-owner-login input { display: block; width: min(100%, 320px); margin: 5px 0 10px; padding: 9px 10px; border: 1px solid #dce3ef; border-radius: 8px; background: #fff; }
+.wb-payment-reference { margin-top: 12px; }
+.wb-payment-reference label { display: block; color: #56647a; font-size: 12px; }
+.wb-payment-reference input { display: block; width: 100%; margin: 5px 0 10px; padding: 9px 10px; border: 1px solid #dce3ef; border-radius: 8px; background: #fff; }
+.wb-payment-reference textarea { display: block; width: 100%; min-height: 76px; margin: 5px 0 10px; padding: 9px 10px; border: 1px solid #dce3ef; border-radius: 8px; background: #fff; font: inherit; resize: vertical; }
+.wb-commission-controls { margin: 18px 0; padding: 16px; border: 1px solid #e5eaf3; border-radius: 11px; background: #fbfcff; }
+.wb-commission-controls h3 { margin: 0 0 8px; font-size: 15px; }
+.wb-commission-search { display: flex; align-items: end; gap: 10px; margin-bottom: 12px; }
+.wb-commission-controls label { display: block; color: #56647a; font-size: 12px; }
+.wb-commission-controls input, .wb-commission-controls textarea { display: block; width: 100%; margin: 5px 0 0; padding: 9px 10px; border: 1px solid #dce3ef; border-radius: 8px; background: #fff; font: inherit; }
+.wb-commission-controls textarea { min-height: 76px; margin-bottom: 10px; resize: vertical; }
+.wb-commission-result p { margin: 8px 0 !important; color: #52647e; font-size: 13px; }
 @media(max-width: 700px) { .wb-agent-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .wb-agent-create { grid-template-columns: 1fr; } .wb-agent-rule { align-items: stretch; flex-direction: column; gap: 8px; } .wb-agent-rule-input { flex-wrap: wrap; } }
 .wb-contact-dialog { max-width:520px; }
 .wb-contact-dialog .wb-contact-intro { margin-bottom:16px; }
