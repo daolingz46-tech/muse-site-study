@@ -40,6 +40,9 @@ try {
   const admin = await context.newPage();
   admin.on("dialog", dialog => dialog.accept());
   await admin.goto(`${base}/admin/`);
+  await expect(admin.locator("#agent-management")).toHaveCount(0);
+  await admin.getByRole("link", { name: "代理管理", exact: true }).click();
+  await expect(admin).toHaveURL(/\/admin\/agents\/$/);
   const section = admin.locator("#agent-management");
   await expect(section.getByRole("heading", { name: "代理管理" })).toBeVisible();
   await section.getByLabel("店主审核密码").fill("test-owner-password");
