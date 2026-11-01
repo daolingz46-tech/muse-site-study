@@ -2,7 +2,7 @@ import type { D1Database } from "@cloudflare/workers-types";
 
 /** Caller must enforce trusted Origin and rate-limit login attempts before using these helpers. */
 export type OwnerAuthEnv = { DB: D1Database; OWNER_PASSWORD_HASH?: string };
-const iterationsDefault = 310_000;
+const iterationsDefault = 100_000;
 const maxSessionMs = 15 * 60 * 1000;
 const cookieName = "__Secure-muse_owner";
 const encoder = new TextEncoder();
@@ -25,7 +25,7 @@ function parseCredential(value: string | undefined): { iterations: number; salt:
   const match = /^pbkdf2-sha256\$(\d{6,7})\$([a-f0-9]{32})\$([a-f0-9]{64})$/.exec(value || "");
   if (!match) return null;
   const iterations = Number(match[1]);
-  return iterations >= iterationsDefault && iterations <= 1_000_000 ? { iterations, salt: match[2], digest: match[3] } : null;
+  return iterations === iterationsDefault ? { iterations, salt: match[2], digest: match[3] } : null;
 }
 /** For secure local provisioning only; store the result as a Worker secret, never in source control. */
 export async function makeOwnerPasswordHash(password: string): Promise<string> {

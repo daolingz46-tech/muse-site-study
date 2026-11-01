@@ -281,7 +281,7 @@ async function agentApi(env: Env, request: Request, path: string) {
     const input=await body(request), code=str(input.code,32), password=typeof input.password === "string" ? input.password : "";
     if (!/^[a-f0-9]{32}$/.test(code) || password.length<12 || password.length>256) throw new HttpError(401,"代理账号或密码不正确");
     const agent=await env.DB.prepare("SELECT a.id,c.salt,c.passwordHash,c.iterations FROM agents a JOIN agent_credentials c ON c.agentId=a.id WHERE a.referralCode=? AND a.status='active'").bind(code).first<{id:string;salt:string;passwordHash:string;iterations:number}>();
-    const candidate=await deriveAgentPassword(password,agent?.salt || "0".repeat(32),agent?.iterations || 210000);
+    const candidate=await deriveAgentPassword(password,agent?.salt || "0".repeat(32),agent?.iterations || 100000);
     if (!agent || !same(candidate,agent.passwordHash)) throw new HttpError(401,"代理账号或密码不正确");
     const session=await hash(crypto.randomUUID()+crypto.randomUUID());
     const inserted=await env.DB.prepare("INSERT INTO agent_sessions(hash,agentId,expiresAt) SELECT ?,id,? FROM agents WHERE id=? AND status='active'").bind(await hash(session),Date.now()+8*3600000,agent.id).run();
@@ -401,7 +401,7 @@ async function admin(env: Env, request: Request, path: string) {
     if (!name || password.length < 12 || password.length > 256) throw new HttpError(400,"请填写代理名称和至少 12 位密码");
     const id=crypto.randomUUID(), referralCode=crypto.randomUUID().replaceAll("-", ""), salt=crypto.randomUUID().replaceAll("-", ""), now=Date.now();
     const passwordHash=await deriveAgentPassword(password,salt);
-    await env.DB.batch([env.DB.prepare("INSERT INTO agents(id,name,referralCode,status,createdAt) VALUES(?,?,?,'active',?)").bind(id,name,referralCode,now),env.DB.prepare("INSERT INTO agent_credentials(agentId,salt,passwordHash,iterations,createdAt) VALUES(?,?,?,210000,?)").bind(id,salt,passwordHash,now),env.DB.prepare("INSERT INTO agent_audit(action,agentId,createdAt) VALUES('create',?,?)").bind(id,now)]);
+    await env.DB.batch([env.DB.prepare("INSERT INTO agents(id,name,referralCode,status,createdAt) VALUES(?,?,?,'active',?)").bind(id,name,referralCode,now),env.DB.prepare("INSERT INTO agent_credentials(agentId,salt,passwordHash,iterations,createdAt) VALUES(?,?,?,100000,?)").bind(id,salt,passwordHash,now),env.DB.prepare("INSERT INTO agent_audit(action,agentId,createdAt) VALUES('create',?,?)").bind(id,now)]);
     return json({id,name,referralCode},201);
   }
   if (path === "/api/admin/agent-status" && request.method === "POST") {
