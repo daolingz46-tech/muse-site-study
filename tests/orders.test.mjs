@@ -26,7 +26,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
       const path = new URL(request.url).pathname;
       const params = await request.json();
       if (path.endsWith("/quotePrice")) return Response.json({ code: 1, data: { balance_enough: supplierBalanceEnough, available_quantity: emptyGoods.has(params.goods_no) ? 0 : supplierStock, total_amount: params.goods_no === "G85161614" ? params.quantity * 1.03 : params.goods_no === "G17614190" ? 58.5 : ["G88655555", "G75777360"].includes(params.goods_no) ? 3.10 : ["G37376813", "G43844575"].includes(params.goods_no) ? 4.12 : params.goods_no === "G39595340" ? 11.31 : params.goods_no === "G97316889" ? 60.65 : 110 } });
-      if (path.endsWith("/create")) { supplierGoods = params.goods_no; supplierQuantity = params.quantity; supplierRemark = params.remark; supplierPurchases++; if (supplierTimeout) throw new Error("simulated network failure"); return Response.json({ code: 1, data: { trade_no: "TEST-16688" } }); }
+      if (path.endsWith("/create")) { supplierGoods = params.goods_no; supplierQuantity = params.quantity; supplierRemark = params.remark; supplierPurchases++; if (supplierTimeout) throw new Error("simulated network failure"); return Response.json({ code: 1, data: { trade_no: "TEST-16688", total_amount: params.goods_no === "G75777360" ? 3.27 : 3.10 } }); }
       if (path.endsWith("/query") && params.trade_no === "INVENTORY-ORDER") return Response.json({ code: 1, data: { goods_no: "G37376813", status: 4, cards: [{ code: "stock@example.com—pass--https://example.com/code" }], instruction: "说明" } });
       if (path.endsWith("/query") && params.trade_no === "GPT-STOCK") return Response.json({code:1,data:{goods_no:"G88655555",status:4,cards:[{code:"gpt-stock-card"}],instruction:"供应商原说明"}});
       if (path.endsWith("/query") && params.trade_no === "OTHER-STOCK") return Response.json({code:1,data:{goods_no:"G12345678",status:4,cards:[{code:"other-stock-card"}]}});
@@ -415,6 +415,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal(supplierPurchases,before);
     assert.equal((await call("/api/admin/supplier-deliver",{id:order.id,expectedGoodsNo:second.data.goodsNo,expectedCents:310},session)).status,200);
     assert.equal(supplierGoods,"G75777360"); assert.equal(supplierPurchases,before+1);
+    const booked=await db.prepare("SELECT goodsNo,costCents FROM order_procurement_cost WHERE orderId=?").bind(order.id).first();assert.equal(booked.goodsNo,"G75777360");assert.equal(booked.costCents,327);
     emptyGoods=new Set();
     const primary=await make();assert.equal((await call("/api/admin/supplier-deliver",{id:primary.id,expectedGoodsNo:"G88655555",expectedCents:310},session)).status,200);
     assert.equal(supplierGoods,"G88655555");assert.match(sentMessages.filter(x=>x.to==="fallback@example.com").at(-1).text,/手机端可能不显示优惠/);
@@ -644,6 +645,22 @@ test("订单、收款核实和交付的数据库流程", async t => {
     const blocked=await create();await call("/api/admin/update",{id:blocked.id,action:"confirm"},session);
     await db.prepare("INSERT INTO supplier_fulfillment(orderId,state,updatedAt) VALUES(?,'purchase_unknown',?)").bind(blocked.id,Date.now()).run();
     assert.equal((await call("/api/admin/confirm-external-delivery",{...payload,id:blocked.id},session)).status,409);
+  });
+
+  await t.test("采购成本按订单记录并可人工核实", async () => {
+    await db.prepare("DELETE FROM rate_limits").run();
+    const order=(await call("/api/orders",{product:"gpt",planId:"halfPriceAccountOneMonth",email:"cost-test@example.com",method:"alipay",acceptedTerms:true,requestId:randomUUID()})).data;
+    const body={id:order.id,goodsNo:"G88655555",supplierName:"测试货源",costCents:345};
+    assert.equal((await call("/api/admin/order-cost",body)).status,401);
+    assert.equal((await call("/api/admin/order-cost",body,session)).status,409);
+    await call("/api/admin/update",{id:order.id,action:"confirm"},session);
+    assert.equal((await call("/api/admin/order-cost",{...body,costCents:-1},session)).status,400);
+    assert.equal((await call("/api/admin/order-cost",body,session)).status,200);
+    const orders=(await call(`/api/admin/orders?q=${order.code}`,undefined,session)).data.orders;
+    assert.equal(orders[0].costGoodsNo,"G88655555");assert.equal(orders[0].costCents,345);
+    assert.equal((await call("/api/admin/order-cost",{...body,goodsNo:"G75777360",costCents:425},session)).status,200);
+    const cost=await db.prepare("SELECT * FROM order_procurement_cost WHERE orderId=?").bind(order.id).first();
+    assert.equal(cost.goodsNo,"G75777360");assert.equal(cost.costCents,425);
   });
 
 });

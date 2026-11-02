@@ -504,6 +504,18 @@ async function admin(env: Env, request: Request, path: string) {
     await env.DB.prepare("INSERT INTO audit(orderId,action,createdAt) VALUES(?,'contact_buyer',?)").bind(id, Date.now()).run();
     return json({ ok: true });
   }
+  if (path === "/api/admin/order-cost" && request.method === "POST") {
+    const input = await body(request), id = str(input.id, 64), goodsNo = str(input.goodsNo, 30), supplierName = str(input.supplierName, 100);
+    const cents = input.costCents;
+    if (!/^G[0-9]{4,20}$/.test(goodsNo) || !supplierName || !Number.isSafeInteger(cents) || Number(cents) < 0 || Number(cents) > 100000000) throw new HttpError(400, "请填写货源商、商品编号及正确的实际成本");
+    const order = await env.DB.prepare("SELECT status FROM orders WHERE id=?").bind(id).first<{status:string}>();
+    if (!order || !["processing", "complete"].includes(order.status)) throw new HttpError(409, "请先核实收款");
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO order_procurement_cost(orderId,goodsNo,supplierName,costCents,source,updatedAt) VALUES(?,?,?,?,'manual',?) ON CONFLICT(orderId) DO UPDATE SET goodsNo=excluded.goodsNo,supplierName=excluded.supplierName,costCents=excluded.costCents,source='manual',updatedAt=excluded.updatedAt").bind(id,goodsNo,supplierName,Number(cents),Date.now()),
+      env.DB.prepare("INSERT INTO audit(orderId,action,createdAt) VALUES(?,'order_cost_manual',?)").bind(id,Date.now()),
+    ]);
+    return json({ok:true});
+  }
   if (path === "/api/admin/catalog" && request.method === "GET") {
     const sales = await env.DB.prepare("SELECT product,title,supplierPlan,COUNT(*) AS sales FROM orders WHERE paidAt IS NOT NULL GROUP BY product,title,supplierPlan").all<{product:string;title:string;supplierPlan:string|null;sales:number}>();
     const products = [
@@ -564,7 +576,7 @@ async function admin(env: Env, request: Request, path: string) {
     const url = new URL(request.url); const search = str(url.searchParams.get("q")); const status = str(url.searchParams.get("status"), 20); const page = Math.max(0, Math.min(100000, Number(url.searchParams.get("page")) || 0));
     const where = "WHERE (?='' OR code=? OR id=? OR target LIKE ? ESCAPE '\\') AND (?='' OR status=?)";
     const values = [search, search, search, `%${search.replace(/[\\%_]/g, "\\$&")}%`, status, status];
-    const rows = await env.DB.prepare(`SELECT id,code,product,title,amountCents,target,contactEmail,method,status,createdAt,expiresAt,reportedAt,paidAt,completedAt,reference,updatedAt,(SELECT sentAt FROM delivery_emails WHERE orderId=orders.id) AS emailSentAt,(SELECT sendCount FROM delivery_emails WHERE orderId=orders.id) AS emailSendCount,(SELECT state FROM supplier_fulfillment WHERE orderId=orders.id) AS supplierState,(SELECT tradeNo FROM supplier_fulfillment WHERE orderId=orders.id) AS supplierTradeNo FROM orders ${where} ORDER BY createdAt DESC LIMIT 50 OFFSET ?`).bind(...values, page * 50).all();
+    const rows = await env.DB.prepare(`SELECT id,code,product,title,amountCents,target,contactEmail,method,status,createdAt,expiresAt,reportedAt,paidAt,completedAt,reference,updatedAt,(SELECT sentAt FROM delivery_emails WHERE orderId=orders.id) AS emailSentAt,(SELECT sendCount FROM delivery_emails WHERE orderId=orders.id) AS emailSendCount,(SELECT state FROM supplier_fulfillment WHERE orderId=orders.id) AS supplierState,(SELECT tradeNo FROM supplier_fulfillment WHERE orderId=orders.id) AS supplierTradeNo,(SELECT goodsNo FROM order_procurement_cost WHERE orderId=orders.id) AS costGoodsNo,(SELECT supplierName FROM order_procurement_cost WHERE orderId=orders.id) AS costSupplierName,(SELECT costCents FROM order_procurement_cost WHERE orderId=orders.id) AS costCents,(SELECT source FROM order_procurement_cost WHERE orderId=orders.id) AS costSource FROM orders ${where} ORDER BY createdAt DESC LIMIT 50 OFFSET ?`).bind(...values, page * 50).all();
     const count = await env.DB.prepare(`SELECT COUNT(*) AS total FROM orders ${where}`).bind(...values).first();
     const summary = await env.DB.prepare("SELECT COUNT(*) AS total, COALESCE(SUM(status='reported'),0) AS awaiting, COALESCE(SUM(status='processing'),0) AS processing, COALESCE(SUM(status='complete'),0) AS completed, COALESCE(SUM(CASE WHEN paidAt IS NOT NULL THEN amountCents ELSE 0 END),0) AS revenueCents, COALESCE(SUM(CASE WHEN paidAt>=? THEN amountCents ELSE 0 END),0) AS todayCents FROM orders").bind(Math.floor((Date.now() + 8 * 3600000) / 86400000) * 86400000 - 8 * 3600000).first();
     return json({ orders: rows.results, count, summary, page });
@@ -713,12 +725,18 @@ async function admin(env: Env, request: Request, path: string) {
       try { purchase = await supplierRequest(creds,"purchase","create",{goods_no:"G85161614",quantity,remark:`订单码:${order.code} 平台订单:${id}`}) as Result; }
       catch { await env.DB.prepare("UPDATE supplier_fulfillment SET state='purchase_unknown',updatedAt=? WHERE orderId=?").bind(Date.now(),id).run(); throw new HttpError(502, "采购结果不明，请核查 16688，勿重复采购"); }
       if (purchase.code !== 1 || typeof purchase.data?.trade_no !== "string" || !purchase.data.trade_no.trim()) { await env.DB.prepare("UPDATE supplier_fulfillment SET state='purchase_unknown',updatedAt=? WHERE orderId=?").bind(Date.now(),id).run(); throw new HttpError(502, "采购未确认，请核查 16688，勿重复采购"); }
-      await env.DB.prepare("UPDATE supplier_fulfillment SET state='awaiting',tradeNo=?,updatedAt=? WHERE orderId=?").bind(purchase.data.trade_no,Date.now(),id).run();
+      const actual = Number(purchase.data.total_amount);
+      await env.DB.batch([
+        env.DB.prepare("UPDATE supplier_fulfillment SET state='awaiting',tradeNo=?,updatedAt=? WHERE orderId=?").bind(purchase.data.trade_no,Date.now(),id),
+        env.DB.prepare("INSERT OR IGNORE INTO order_procurement_cost(orderId,goodsNo,supplierName,costCents,source,updatedAt) VALUES(?,'G85161614','16688 货源',?,'supplier',?)").bind(id,Number.isFinite(actual) && actual > 0 ? Math.round(actual*100) : null,Date.now()),
+      ]);
       task = {state:"awaiting",tradeNo:purchase.data.trade_no,card:null};
     }
     if (task.state === "awaiting" && task.tradeNo) {
       let result: Result; try { result = await supplierRequest(creds,"purchase","query",{trade_no:task.tradeNo}) as Result; } catch { throw new HttpError(502,"查询采购结果失败，可稍后重试，不会重复采购"); }
       if (result.code !== 1 || !result.data || ![4,5].includes(Number(result.data.status))) throw new HttpError(409,"货源尚未发货，可稍后重试查询");
+      const actualCost = Number(result.data.total_amount);
+      if (Number.isFinite(actualCost) && actualCost > 0) await env.DB.prepare("UPDATE order_procurement_cost SET costCents=?,updatedAt=? WHERE orderId=? AND source='supplier' AND costCents IS NULL").bind(Math.round(actualCost*100),Date.now(),id).run();
       const cards = Array.isArray(result.data.cards) ? result.data.cards.map(x => x && typeof x === "object" && "code" in x ? String(x.code) : "").filter(Boolean) : [];
       if (cards.length !== quantity || new Set(cards).size !== quantity) throw new HttpError(409, `货源返回 ${cards.length} 件，需 ${quantity} 件且不能重复；请核查采购单`);
       await env.DB.prepare("UPDATE supplier_fulfillment SET state='ready',card=?,instruction=?,updatedAt=? WHERE orderId=? AND state='awaiting'").bind(cards.join("\n"),typeof result.data.instruction === "string" ? result.data.instruction : "",Date.now(),id).run();
@@ -786,7 +804,11 @@ async function admin(env: Env, request: Request, path: string) {
         await env.DB.prepare("UPDATE supplier_fulfillment SET state='purchase_unknown',updatedAt=? WHERE orderId=?").bind(Date.now(), id).run();
         throw new HttpError(502, "采购未确认，请先核查 16688 采购记录");
       }
-      await env.DB.prepare("UPDATE supplier_fulfillment SET state='awaiting',tradeNo=?,updatedAt=? WHERE orderId=?").bind(purchase.data.trade_no, Date.now(), id).run();
+      const actual = Number(purchase.data.total_amount);
+      await env.DB.batch([
+        env.DB.prepare("UPDATE supplier_fulfillment SET state='awaiting',tradeNo=?,updatedAt=? WHERE orderId=?").bind(purchase.data.trade_no,Date.now(),id),
+        env.DB.prepare("INSERT OR IGNORE INTO order_procurement_cost(orderId,goodsNo,supplierName,costCents,source,updatedAt) VALUES(?,?,?,?, 'supplier',?)").bind(id,selected.goodsNo,selected.supplierName,Number.isFinite(actual) && actual > 0 ? Math.round(actual*100) : null,Date.now()),
+      ]);
       task = { state: "awaiting", tradeNo: purchase.data.trade_no, card: null, instruction: `source:${selected.goodsNo}` };
     }
     if (task.state === "awaiting" && task.tradeNo) {
@@ -794,6 +816,8 @@ async function admin(env: Env, request: Request, path: string) {
       try { result = await supplierRequest(creds, "purchase", "query", { trade_no: task.tradeNo }) as SupplierResult; }
       catch { throw new HttpError(502, "采购订单查询失败，请稍后重新点击发货，不会重复采购"); }
       if (result.code !== 1 || !result.data || ![4, 5].includes(Number(result.data.status))) throw new HttpError(409, "货源尚未发货，请稍后重新点击发货");
+      const actualCost = Number(result.data.total_amount);
+      if (Number.isFinite(actualCost) && actualCost > 0) await env.DB.prepare("UPDATE order_procurement_cost SET costCents=?,updatedAt=? WHERE orderId=? AND source='supplier' AND costCents IS NULL").bind(Math.round(actualCost*100),Date.now(),id).run();
       const cards = Array.isArray(result.data.cards) ? result.data.cards : [];
       const card = cards.map(value => typeof value === "object" && value !== null && "code" in value ? String(value.code) : "").filter(Boolean).join("\n");
       if (!card) throw new HttpError(409, "货源未返回卡密，请核查采购订单");
