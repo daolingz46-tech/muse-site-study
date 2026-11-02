@@ -43,7 +43,7 @@ export function AgentAdminPage() {
     {error && <p role="alert" className="wb-error">{error}</p>}<Link href="/admin/">返回订单工作台</Link>
   </form></main>;
   return <main className="workbench"><header className="wb-header"><div><p className="wb-eyebrow">卡密大王 / 管理中心</p><h1>代理管理</h1></div><nav><Link href="/">打开商店</Link><button type="button" disabled={busy} onClick={() => void logout()}><LogOut size={15}/>退出</button></nav></header>
-    <nav className="wb-workspace-nav" aria-label="管理工作台"><Link href="/admin/">订单工作台</Link><Link className="active" aria-current="page" href="/admin/agents/">代理管理</Link></nav>
+    <nav className="wb-workspace-nav" aria-label="管理工作台"><a href="/admin/">订单工作台</a><Link className="active" aria-current="page" href="/admin/agents/">代理管理</Link></nav>
     {error && <p role="alert" className="wb-error">{error}</p>}<AgentManagement api={api}/>
   </main>;
 }
