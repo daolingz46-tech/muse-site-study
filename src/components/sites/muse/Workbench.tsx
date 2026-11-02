@@ -34,7 +34,7 @@ function pushKeyBytes(key: string) {
 }
 class ApiError extends Error { constructor(public status: number, message: string) { super(message); } }
 async function api(path: string, input?: unknown) {
-  const response = await fetch(storeApiUrl(`/api/admin/${path}`), { method: input === undefined ? "GET" : "POST", headers: input === undefined ? {} : { "Content-Type": "application/json" }, body: input === undefined ? undefined : JSON.stringify(input), credentials: "include", cache: "no-store", signal: AbortSignal.timeout(["send-delivery", "supplier-deliver"].includes(path) ? 90000 : 15000) });
+  const response = await fetch(storeApiUrl(`/api/admin/${path}`), { method: input === undefined ? "GET" : "POST", headers: input === undefined ? {} : { "Content-Type": "application/json" }, body: input === undefined ? undefined : JSON.stringify(input), credentials: "include", cache: "no-store", signal: AbortSignal.timeout(["send-delivery", "supplier-deliver", "supplier-preview"].includes(path) ? 90000 : 15000) });
   const data = await response.json().catch(() => null);
   if (!response.ok) throw new ApiError(response.status, data?.message || "工作台连接失败，请稍后重试");
   return data;
@@ -237,10 +237,16 @@ export function Workbench() {
     finally { setEmailTestBusy(false); }
   }
   async function supplierDeliver(order: AdminOrder) {
-    if (supplierBusy || !window.confirm(`确认已核实收款，向 ${order.target} 发货？Muse 成品号会优先使用已导入库存，库存不足时再采购。`)) return;
+    if (supplierBusy) return;
     setSupplierFeedback(null);
     setSupplierBusy(order.id);
-    try { await api("supplier-deliver", { id: order.id }); setSupplierFeedback({ orderId: order.id, kind: "success", message: "卡密邮件已提交发送。" }); await load(); }
+    try {
+      let quote: {goodsNo:string;supplierName:string;total:number;unitPrice?:number;inventory?:boolean}|undefined;
+      if (!order.supplierState) quote=await api("supplier-preview",{id:order.id});
+      const description=quote?.inventory ? `本次优先使用已导入库存；如果库存发生变化，系统将停止并要求重新确认。\n确认向 ${order.target} 发货？` : quote ? `货源商：${quote.supplierName}\n货源商品编号：${quote.goodsNo}\n采购总价：¥${quote.total.toFixed(2)}（含手续费）\n确认已核实收款并向 ${order.target} 发货？` : `该订单已有采购记录，将继续查询或发送已采购卡密。确认向 ${order.target} 发货？`;
+      if (!window.confirm(description)) return;
+      await api("supplier-deliver", { id: order.id, ...(quote?.inventory ? {expectedInventory:true} : quote ? {expectedGoodsNo:quote.goodsNo,expectedCents:Math.round(quote.total*100)} : {}) }); setSupplierFeedback({ orderId: order.id, kind: "success", message: "卡密邮件已提交发送。" }); await load();
+    }
     catch (cause) { setSupplierFeedback({ orderId: order.id, kind: "error", message: cause instanceof ApiError ? cause.message : "连接中断，发货结果不明。请先刷新订单并核查采购记录，不要重复采购。" }); await load(); }
     finally { setSupplierBusy(""); }
   }
