@@ -22,9 +22,9 @@ try {
     else if (path === "catalog") data = { products: [] };
     else if (path === "inventory") data = { groups: [] };
     else if (path === "delivery-files") data = { files: [], sources: [{ goodsNo: "G88655555", instructions: "请使用电脑登录 ChatGPT 并检查半价优惠。" }, { goodsNo: "G75777360", instructions: "" }] };
-    else if (["send-delivery", "confirm-external-delivery", "contact-buyer"].includes(path)) {
+    else if (["send-delivery", "confirm-external-delivery", "contact-buyer", "order-cost"].includes(path)) {
       writes.push({ path, ...route.request().postDataJSON() });
-      if (path !== "contact-buyer") completed = true;
+      if (["send-delivery", "confirm-external-delivery"].includes(path)) completed = true;
       data = { ok: true };
     } else throw new Error(`Unexpected API: ${path}`);
     await route.fulfill({ json: data });
@@ -48,6 +48,8 @@ try {
   await page.getByLabel("该货源使用说明").fill("这是当前货源的专属教程");
   await page.getByRole("button", { name: "发送邮件并标记已交付" }).click();
   await expect(row.getByText("已完成", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "补录采购成本 · 订单 0123" })).toBeVisible();
+  await page.getByRole("dialog").getByRole("button", { name: "关闭" }).click();
   expect(writes.at(-1)).toMatchObject({ path: "send-delivery", goodsNo: "G75777360", instructions: "这是当前货源的专属教程" });
   completed = false;
   await page.reload();
@@ -58,7 +60,13 @@ try {
   await page.getByRole("checkbox", { name: "我已核查，确认商品已交付给此客户" }).check();
   await page.getByRole("button", { name: "确认完成，不重复发货" }).click();
   await expect(row.getByText("已完成", { exact: true })).toBeVisible();
-  expect(writes.map(write => write.path)).toEqual(["contact-buyer", "send-delivery", "confirm-external-delivery"]);
+  await expect(page.getByRole("heading", { name: "补录采购成本 · 订单 0123" })).toBeVisible();
+  await page.getByLabel("货源商").fill("示例货源");
+  await page.getByLabel("商品编号").fill("G88655555");
+  await page.getByLabel("实际采购总成本（元）").fill("3.25");
+  await page.getByRole("button", { name: "保存采购信息" }).click();
+  expect(writes.at(-1)).toMatchObject({path:"order-cost",costCents:325});
+  expect(writes.map(write => write.path)).toEqual(["contact-buyer", "send-delivery", "confirm-external-delivery", "order-cost"]);
   expect(errors).toEqual([]);
   console.log("PASS: GPT contact/manual delivery/external confirmation, source-specific guide and mobile controls");
 } finally { await browser.close(); }
