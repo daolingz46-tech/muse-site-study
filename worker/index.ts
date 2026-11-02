@@ -1,7 +1,7 @@
 import type { D1Database } from "@cloudflare/workers-types";
 import { buildPushPayload, type PushSubscription } from "@block65/webcrypto-web-push";
 import { tokenPlans, accountPriceCents, accountTitle } from "../src/lib/products";
-import { GPT_SUPPLIER_PRODUCTS, MUSE_ACCOUNT_SUPPLIER, supplierRequest } from "./supplier16688";
+import { GPT_SUPPLIER_PRODUCTS, MUSE_ACCOUNT_SUPPLIER, MUSE_BASIC_SUPPLIER, supplierRequest } from "./supplier16688";
 import { deliveryEmail } from "./delivery-email";
 import { deriveAgentPassword, payoutDueAt } from "./agent-ledger";
 import { agentBalance, commissionReconciliation, withdrawalReservation } from "./agent-finance";
@@ -222,7 +222,7 @@ async function createOrder(env: Env, request: Request, input: Record<string, unk
   if (input.acceptedTerms !== true) throw new HttpError(400, "请先同意购买须知");
   if (input.method !== "wechat" && input.method !== "alipay") throw new HttpError(400, "请选择支付方式");
   let title: string, amount: number, target: string;
-  if (input.product === "muse") { title = accountTitle; amount = accountPriceCents; target = str(input.email, 254); if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(target)) throw new HttpError(400, "请填写有效邮箱"); }
+  if (input.product === "muse") { if (input.planId !== undefined && !["basic", "warranty"].includes(String(input.planId))) throw new HttpError(400, "商品规格无效"); const basic = input.planId === "basic"; title = basic ? `${accountTitle} · 无七天质保` : input.planId === "warranty" ? `${accountTitle} · 7 天质保` : accountTitle; amount = basic ? 1400 : accountPriceCents; target = str(input.email, 254); if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(target)) throw new HttpError(400, "请填写有效邮箱"); }
   else if (input.product === "gpt") { if (typeof input.planId !== "string" || !Object.hasOwn(GPT_SUPPLIER_PRODUCTS, input.planId)) throw new HttpError(400, "商品不存在"); const plan = GPT_SUPPLIER_PRODUCTS[input.planId as keyof typeof GPT_SUPPLIER_PRODUCTS]; title = plan.title; amount = plan.priceCents; target = str(input.email, 254); if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(target)) throw new HttpError(400, "请填写有效邮箱"); if (input.planId === "halfPriceTopup" && input.eligibleConfirmed !== true) throw new HttpError(400, "请确认账号具有半价资格"); }
   else if (input.product === "muse-token") { const plan = tokenPlans.find(p => p.id === input.planId); if (!plan) throw new HttpError(400, "充值档次无效"); amount = plan.amountCents; title = `Muse Token · ${plan.label}`; target = str(input.inviteCode); if (!target) throw new HttpError(400, "账号邀请码为必填项"); }
   else throw new HttpError(400, "商品不存在");
@@ -251,9 +251,9 @@ async function createOrder(env: Env, request: Request, input: Record<string, unk
     }
     const referralCode = str(input.referralCode,32);
     if (referralCode && !/^[a-f0-9]{32}$/.test(referralCode)) throw new HttpError(400,"推广码格式无效");
-    const productKey = input.product === "muse" ? "museAccount" : `${input.product}:${input.planId}`;
+    const productKey = input.product === "muse" ? (input.planId === "basic" ? "museAccountBasic" : "museAccount") : `${input.product}:${input.planId}`;
     const [result] = await env.DB.batch([
-      env.DB.prepare("INSERT OR IGNORE INTO orders(id,requestHash,inputHash,tokenHash,code,product,title,amountCents,target,method,createdAt,expiresAt,updatedAt,supplierPlan,contactEmail) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(id, requestHash, inputHash, await hash(token), code, input.product, title, amount, target, input.method, now, now + 15 * 60000, now, input.product === "gpt" ? String(input.planId) : null, contactEmail || null),
+      env.DB.prepare("INSERT OR IGNORE INTO orders(id,requestHash,inputHash,tokenHash,code,product,title,amountCents,target,method,createdAt,expiresAt,updatedAt,supplierPlan,contactEmail) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(id, requestHash, inputHash, await hash(token), code, input.product, title, amount, target, input.method, now, now + 15 * 60000, now, input.product === "gpt" ? String(input.planId) : input.product === "muse" ? (input.planId === "basic" ? "museBasic" : "museWarranty") : null, contactEmail || null),
       env.DB.prepare("INSERT INTO agent_order_attribution(orderId,agentId,productKey,commissionCents,ruleVersion,createdAt) SELECT ?,a.id,?,COALESCE(r.amountCents,0),COALESCE(r.updatedAt,0),? FROM agents a LEFT JOIN agent_commission_rules r ON r.productKey=? WHERE a.referralCode=? AND a.status='active' AND changes()=1").bind(id,productKey,now,productKey,referralCode),
     ]);
     const row = await env.DB.prepare("SELECT * FROM orders WHERE requestHash=?").bind(requestHash).first<Row>();
@@ -270,7 +270,8 @@ async function requireAdmin(env: Env, request: Request) {
 }
 function agentProducts() {
   return [
-    { productKey: "museAccount", name: accountTitle, priceCents: accountPriceCents, category: "Muse" },
+    { productKey: "museAccount", name: `${accountTitle} · 7 天质保`, priceCents: accountPriceCents, category: "Muse" },
+    { productKey: "museAccountBasic", name: `${accountTitle} · 基础款`, priceCents: 1400, category: "Muse" },
     ...tokenPlans.map(plan => ({ productKey: `muse-token:${plan.id}`, name: `Muse Token · ${plan.label}`, priceCents: plan.amountCents, category: "Muse Token" })),
     ...Object.entries(GPT_SUPPLIER_PRODUCTS).filter(([key]) => key !== "halfPriceAccount").map(([key,plan]) => ({ productKey: `gpt:${key}`, name: plan.title, priceCents: plan.priceCents, category: "GPT" })),
   ];
@@ -470,7 +471,8 @@ async function admin(env: Env, request: Request, path: string) {
   if (path === "/api/admin/catalog" && request.method === "GET") {
     const sales = await env.DB.prepare("SELECT product,title,supplierPlan,COUNT(*) AS sales FROM orders WHERE paidAt IS NOT NULL GROUP BY product,title,supplierPlan").all<{product:string;title:string;supplierPlan:string|null;sales:number}>();
     const products = [
-      { category: "Muse", title: accountTitle, supplier: MUSE_ACCOUNT_SUPPLIER.goodsNo, sales: sales.results.filter(x => x.product === "muse").reduce((n,x) => n + x.sales,0) },
+      { category: "Muse", title: `${accountTitle} · 7 天质保`, supplier: MUSE_ACCOUNT_SUPPLIER.goodsNo, sales: sales.results.filter(x => x.product === "muse" && x.supplierPlan === "museWarranty").reduce((n,x) => n + x.sales,0) },
+      { category: "Muse", title: `${accountTitle} · 基础款`, supplier: MUSE_BASIC_SUPPLIER.goodsNo, sales: sales.results.filter(x => x.product === "muse" && x.supplierPlan !== "museWarranty").reduce((n,x) => n + x.sales,0) },
       ...tokenPlans.map(p => ({ category: "Muse Token", title: `Muse Token · ${p.label}`, supplier: "G85161614", sales: sales.results.filter(x => x.product === "muse-token" && x.title === `Muse Token · ${p.label}`).reduce((n,x) => n + x.sales,0) })),
       ...Object.entries(GPT_SUPPLIER_PRODUCTS).filter(([key]) => key !== "halfPriceAccount").map(([key,p]) => ({ category: "GPT", title: p.title, supplier: p.goodsNo, sales: sales.results.filter(x => x.product === "gpt" && x.supplierPlan === key).reduce((n,x) => n + x.sales,0) })),
     ];
@@ -605,8 +607,9 @@ async function admin(env: Env, request: Request, path: string) {
     return json({ ok: true });
   }
   if (path === "/api/admin/inventory" && request.method === "GET") {
-    const count = await env.DB.prepare("SELECT COUNT(*) AS available FROM inventory_cards WHERE product='muse' AND orderId IS NULL").first<{ available: number }>();
-    return json({ available: count?.available || 0 });
+    const count = await env.DB.prepare("SELECT COUNT(*) AS available FROM inventory_cards WHERE product='muse-7day' AND orderId IS NULL").first<{ available: number }>();
+    const basic = await env.DB.prepare("SELECT COUNT(*) AS available FROM inventory_cards WHERE product='muse-basic-43844575' AND orderId IS NULL").first<{ available: number }>();
+    return json({ available: count?.available || 0, basicAvailable: basic?.available || 0 });
   }
   if (path === "/api/admin/inventory-import" && request.method === "POST") {
     const tradeNo = str((await body(request)).tradeNo, 128);
@@ -619,7 +622,7 @@ async function admin(env: Env, request: Request, path: string) {
     catch { throw new HttpError(502, "查询采购订单失败，请稍后重试"); }
     const data = result.data;
     if (result.code !== 1 || !data || ![4, 5].includes(Number(data.status))) throw new HttpError(409, "采购订单尚未发货或无法查询");
-    if (!["G43844575", "G72563978"].includes(String(data.goods_no))) throw new HttpError(400, "该采购单不是支持导入的 Muse 10 亿成品账号货源");
+    if (![MUSE_ACCOUNT_SUPPLIER.goodsNo, MUSE_BASIC_SUPPLIER.goodsNo].includes(String(data.goods_no) as typeof MUSE_ACCOUNT_SUPPLIER.goodsNo | typeof MUSE_BASIC_SUPPLIER.goodsNo)) throw new HttpError(400, "该采购单不是支持导入的 Muse 10 亿成品账号货源");
     const cards = Array.isArray(data.cards) ? data.cards : [];
     const unique = [...new Set(cards.map(value => typeof value === "object" && value !== null && "code" in value ? str(value.code, 4000) : "").filter(Boolean))];
     if (!unique.length) throw new HttpError(409, "采购订单未返回卡密");
@@ -627,7 +630,7 @@ async function admin(env: Env, request: Request, path: string) {
     for (const card of unique) {
       const used = await env.DB.prepare("SELECT orderId FROM supplier_fulfillment WHERE card=? LIMIT 1").bind(card).first();
       if (used) continue;
-      const saved = await env.DB.prepare("INSERT OR IGNORE INTO inventory_cards(id,product,card,cardHash,tradeNo,instruction,createdAt) VALUES(?,?,?,?,?,?,?)").bind(crypto.randomUUID(), "muse", card, await hash(card), tradeNo, typeof data.instruction === "string" ? data.instruction : "", Date.now()).run();
+      const saved = await env.DB.prepare("INSERT OR IGNORE INTO inventory_cards(id,product,card,cardHash,tradeNo,instruction,createdAt) VALUES(?,?,?,?,?,?,?)").bind(crypto.randomUUID(), data.goods_no === MUSE_ACCOUNT_SUPPLIER.goodsNo ? "muse-7day" : "muse-basic-43844575", card, await hash(card), tradeNo, typeof data.instruction === "string" ? data.instruction : "", Date.now()).run();
       added += saved.meta.changes;
     }
     return json({ added, skipped: unique.length - added });
@@ -697,7 +700,7 @@ async function admin(env: Env, request: Request, path: string) {
     const order = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).first<Row>();
     if (!order || !["gpt", "muse"].includes(order.product)) throw new HttpError(404, "未找到可采购的订单");
     if (order.status !== "processing") throw new HttpError(409, "请先核实收款，且订单须为待交付状态");
-    const plan = order.product === "muse" ? MUSE_ACCOUNT_SUPPLIER : GPT_SUPPLIER_PRODUCTS[order.supplierPlan as keyof typeof GPT_SUPPLIER_PRODUCTS];
+    const plan = order.product === "muse" ? (order.supplierPlan === "museWarranty" ? MUSE_ACCOUNT_SUPPLIER : MUSE_BASIC_SUPPLIER) : GPT_SUPPLIER_PRODUCTS[order.supplierPlan as keyof typeof GPT_SUPPLIER_PRODUCTS];
     if (!plan) throw new HttpError(400, "商品货源尚未配置");
     if (!env.SUPPLIER_APP_ID || !env.SUPPLIER_SECRET) throw new HttpError(503, "16688 接口凭证尚未配置");
     if (!hasEmailConfig(env) || !await hasBuyerDelivery(env)) throw new HttpError(503, "买家邮件服务尚未启用");
@@ -706,7 +709,7 @@ async function admin(env: Env, request: Request, path: string) {
     let task = await env.DB.prepare("SELECT state,tradeNo,card,instruction FROM supplier_fulfillment WHERE orderId=?").bind(id).first<{ state: string; tradeNo: string | null; card: string | null; instruction: string | null }>();
     if (!task && order.product === "muse") {
       await env.DB.batch([
-        env.DB.prepare("INSERT OR IGNORE INTO supplier_fulfillment(orderId,state,tradeNo,card,instruction,inventoryId,updatedAt) SELECT ?,'ready',tradeNo,card,instruction,id,? FROM inventory_cards WHERE product='muse' AND orderId IS NULL AND NOT EXISTS (SELECT 1 FROM delivery_emails WHERE orderId=?) ORDER BY createdAt,id LIMIT 1").bind(id, Date.now(), id),
+        env.DB.prepare("INSERT OR IGNORE INTO supplier_fulfillment(orderId,state,tradeNo,card,instruction,inventoryId,updatedAt) SELECT ?,'ready',tradeNo,card,instruction,id,? FROM inventory_cards WHERE product=? AND orderId IS NULL AND NOT EXISTS (SELECT 1 FROM delivery_emails WHERE orderId=?) ORDER BY createdAt,id LIMIT 1").bind(id, Date.now(), order.supplierPlan === "museWarranty" ? "muse-7day" : order.supplierPlan === "museBasic" ? "muse-basic-43844575" : "muse", id),
         env.DB.prepare("UPDATE inventory_cards SET orderId=? WHERE id=(SELECT inventoryId FROM supplier_fulfillment WHERE orderId=?) AND orderId IS NULL").bind(id, id),
       ]);
       task = await env.DB.prepare("SELECT state,tradeNo,card,instruction FROM supplier_fulfillment WHERE orderId=?").bind(id).first<{ state: string; tradeNo: string | null; card: string | null; instruction: string | null }>();
@@ -741,7 +744,7 @@ async function admin(env: Env, request: Request, path: string) {
       const cards = Array.isArray(result.data.cards) ? result.data.cards : [];
       const card = cards.map(value => typeof value === "object" && value !== null && "code" in value ? String(value.code) : "").filter(Boolean).join("\n");
       if (!card) throw new HttpError(409, "货源未返回卡密，请核查采购订单");
-      const fallback = order.product === "muse" ? "请使用美国 IP 登录 Muse，通过验证码获取地址查看验证码；账号自带 10 亿 Token。请在 24 小时内检查首次登录，首次登录成功后质保失效，并请立即换绑自己的邮箱。" : order.supplierPlan === "plus15Day" ? "请输入账号及密码登录，将 2FA 密钥输入 https://2fa.fun/ 或 https://2fa.live/ 获取验证码。供货商提供 15 天质保，请勿换绑、修改密码或 2FA，否则不再提供质保。" : order.supplierPlan === "plusAccount" ? "请在购买后 20 分钟内完成兑换并检查首次登录。验证码获取地址：https://2fa.vip/。售后规则请联系货源商确认。" : order.supplierPlan === "halfPriceAccount" || order.supplierPlan === "halfPriceAccountOneMonth" ? `账号资料格式：账号、密码和 2FA。验证码获取地址：https://2fa.run/（备用：https://2fa.fun/）。该账号包含${order.supplierPlan === "halfPriceAccount" ? "两个月" : "一个月"}半价资格，不包含 Plus 订阅。` : "请访问 https://shuwang.space/ ，使用收到的卡密按网站说明自行充值；发货并不代表充值已经完成。";
+      const fallback = order.product === "muse" ? "请使用美国 IP 登录 Muse，通过验证码获取地址查看验证码；账号自带 10 亿 Token。请检查首次登录并换绑自己的邮箱。" : order.supplierPlan === "plus15Day" ? "请输入账号及密码登录，将 2FA 密钥输入 https://2fa.fun/ 或 https://2fa.live/ 获取验证码。供货商提供 15 天质保，请勿换绑、修改密码或 2FA，否则不再提供质保。" : order.supplierPlan === "plusAccount" ? "请在购买后 20 分钟内完成兑换并检查首次登录。验证码获取地址：https://2fa.vip/。售后规则请联系货源商确认。" : order.supplierPlan === "halfPriceAccount" || order.supplierPlan === "halfPriceAccountOneMonth" ? `账号资料格式：账号、密码和 2FA。验证码获取地址：https://2fa.run/（备用：https://2fa.fun/）。该账号包含${order.supplierPlan === "halfPriceAccount" ? "两个月" : "一个月"}半价资格，不包含 Plus 订阅。` : "请访问 https://shuwang.space/ ，使用收到的卡密按网站说明自行充值；发货并不代表充值已经完成。";
       const instruction = typeof result.data.instruction === "string" && result.data.instruction.trim() ? result.data.instruction : fallback;
       const saved = await env.DB.prepare("UPDATE supplier_fulfillment SET state='ready',card=?,instruction=?,updatedAt=? WHERE orderId=? AND state='awaiting'").bind(card, instruction, Date.now(), id).run();
       if (!saved.meta.changes) throw new HttpError(409, "订单正在处理，请刷新");
@@ -753,7 +756,7 @@ async function admin(env: Env, request: Request, path: string) {
     const claim = await env.DB.prepare("UPDATE supplier_fulfillment SET state='sending',updatedAt=? WHERE orderId=? AND state='ready'").bind(Date.now(), id).run();
     if (!claim.meta.changes) throw new HttpError(409, "邮件正在发送，请刷新订单");
     const loginGuide = order.supplierPlan === "plus15Day" ? "登录步骤：\n1. 打开 ChatGPT 登录页面，输入邮件中的账号和密码。\n2. 将邮件中的 2FA 密钥输入 https://2fa.fun/ 或 https://2fa.live/，获取一次性验证码。\n3. 在登录页面输入验证码。请勿换绑、修改密码或 2FA，否则供货商不再提供质保。" : "";
-    const { html, text } = deliveryEmail({ title: order.title, code: order.code, card: task.card, instructions: [loginGuide, task.instruction || ""].filter(Boolean).join("\n\n"), supplierOrderNo: needsSupplierSupport ? task.tradeNo! : undefined });
+    const { html, text } = deliveryEmail({ title: order.title, code: order.code, card: task.card, instructions: [loginGuide, task.instruction || "", order.product === "muse" ? (order.supplierPlan === "museWarranty" ? "7 天内封号，可以免费换号；请在 8 小时内首次登录验证。" : "本商品不含 7 天质保；首次登录保障期限请联系支持确认。") : ""].filter(Boolean).join("\n\n"), supplierOrderNo: needsSupplierSupport ? task.tradeNo! : undefined });
     const historyId = crypto.randomUUID();
     await env.DB.prepare("INSERT INTO delivery_history(id,orderId,text,state,createdAt) VALUES(?,?,?,'sending',?)").bind(historyId, id, text, Date.now()).run();
     try { await sendEmail(env, `supplier-delivery:${id}`, `${order.title} · 订单 ${order.code}`, html, text, order.target, [], "buyer_delivery"); }
