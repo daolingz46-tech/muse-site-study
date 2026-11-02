@@ -14,3 +14,8 @@
 .agent-balances div { background:#edf3fb; border-color:#c4d1e1; }
 .agent-orders, .agent-order { border-color:#d8e0ec; }
 .agent-empty { background:#edf3fb; }
+.agent-password-field { position:relative; }
+.agent-password-field input { padding-right:52px; }
+.agent-password-field button { position:absolute; top:50%; right:5px; transform:translateY(-50%); display:grid; place-items:center; width:42px; height:40px; border:0; border-radius:8px; background:transparent; color:#39547a; }
+.agent-password-field button:hover { background:#e3ebf8; }
+.agent-password-field button:focus-visible { outline:3px solid #91adff; outline-offset:2px; }
