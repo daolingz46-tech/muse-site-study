@@ -16,6 +16,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
   const sentMessages = [];
   let supplierPurchases = 0;
   let supplierTimeout = false;
+  let deliveryFailure = false;
   let supplierBalanceEnough = true;
   let supplierStock = null;
   let emptyGoods = new Set();
@@ -38,6 +39,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
     if (input.purpose === "capability_probe") return Response.json({ ok: true, buyerDelivery: true, attachments: true });
     if (input.purpose === "customer_threads") return Response.json({ok:true,messages:[{id:"mail1",direction:"received",subject:"订单 1234",text:"hello",date:100,canReply:true},{id:"mail2",direction:"received",subject:"其他问题",text:"help",date:101,canReply:true}]});
     if (input.purpose === "customer_reply") { sentMessages.push(input); return Response.json({ok:true}); }
+    if (deliveryFailure && input.purpose === "buyer_delivery") throw new Error("simulated mail timeout");
     sentMessages.push(input);
     return Response.json({ ok: true });
   } }] }));
@@ -578,6 +580,70 @@ test("订单、收款核实和交付的数据库流程", async t => {
       const email = sentMessages.find(item => item.to === `${planId}@example.com` && item.purpose === "buyer_delivery");
       assert.ok(email); assert.match(email.text, planId === "basic" ? /不含 7 天质保/ : /7 天内封号/);
     }
+  });
+
+  await t.test("GPT 手动交付：沟通不完单，教程隔离，发货成功完单，采购与发货互斥", async () => {
+    await db.prepare("DELETE FROM rate_limits").run();
+    const create = async () => (await call("/api/orders", {product:"gpt",planId:"halfPriceAccountOneMonth",email:"manual-gpt@example.com",method:"alipay",acceptedTerms:true,requestId:randomUUID()})).data;
+    const gpt = await create();
+    const payload = {id:gpt.id,card:"EXAMPLE-ACCOUNT",goodsNo:"G88655555"};
+    const before = supplierPurchases;
+    assert.equal((await call("/api/admin/send-delivery",payload)).status,401);
+    assert.equal((await call("/api/admin/send-delivery",payload,session)).status,409);
+    await call("/api/admin/update",{id:gpt.id,action:"confirm"},session);
+    await call("/api/admin/contact-buyer",{id:gpt.id,message:"这是沟通内容"},session);
+    assert.equal((await call("/api/orders/lookup",gpt)).data.status,"processing");
+    const options=await call(`/api/admin/delivery-files?orderId=${gpt.id}`,undefined,session);
+    assert.deepEqual(options.data.sources.map(s=>s.goodsNo),["G88655555","G75777360"]);
+    assert.equal((await call("/api/admin/send-delivery",{...payload,goodsNo:"G37376813"},session)).status,400);
+    assert.equal((await call("/api/admin/send-delivery",{...payload,goodsNo:"G75777360"},session)).status,400);
+    assert.equal((await call("/api/admin/send-delivery",payload,session)).status,200);
+    assert.equal((await call("/api/orders/lookup",gpt)).data.status,"complete");
+    const mail=sentMessages.findLast(m=>m.to==="manual-gpt@example.com");
+    assert.match(mail.subject,/GPT/);assert.match(mail.text,/请使用电脑登录/);assert.doesNotMatch(mail.text,/Muse 成品账号使用教程/);
+    assert.equal((await call("/api/admin/supplier-deliver",{id:gpt.id},session)).status,409);
+    assert.equal(supplierPurchases,before);
+    const failed=await create();
+    await call("/api/admin/update",{id:failed.id,action:"confirm"},session);
+    deliveryFailure=true;
+    assert.equal((await call("/api/admin/send-delivery",{...payload,id:failed.id},session)).status,502);
+    deliveryFailure=false;
+    assert.equal((await call("/api/orders/lookup",failed)).data.status,"processing");
+    assert.equal((await call("/api/admin/send-delivery",{...payload,id:failed.id},session)).status,409);
+    assert.equal((await call("/api/admin/supplier-deliver",{id:failed.id},session)).status,409);
+    assert.equal((await call("/api/admin/confirm-external-delivery",{id:failed.id,checked:true,note:"人工核查邮件完成"},session)).status,409);
+    assert.equal(supplierPurchases,before);
+    const conflict=await create();await call("/api/admin/update",{id:conflict.id,action:"confirm"},session);
+    await db.prepare("INSERT INTO supplier_fulfillment(orderId,state,updatedAt) VALUES(?,'purchase_unknown',?)").bind(conflict.id,Date.now()).run();
+    assert.equal((await call("/api/admin/send-delivery",{...payload,id:conflict.id},session)).status,409);
+  });
+
+  await t.test("GPT 已在外部交付：核款及确认门槛、并发只完单一次、不采购不发信、启动 T+1", async () => {
+    await db.prepare("DELETE FROM rate_limits").run();
+    const create=async ()=>(await call("/api/orders",{product:"gpt",planId:"halfPriceAccountOneMonth",email:"external@example.com",method:"alipay",acceptedTerms:true,requestId:randomUUID()})).data;
+    const gpt=await create();
+    const agentId=randomUUID();
+    await db.prepare("INSERT INTO agents(id,name,referralCode,status,createdAt) VALUES(?,'测试代理',?,'active',?)").bind(agentId,randomUUID(),Date.now()).run();
+    await db.prepare("INSERT INTO agent_order_attribution(orderId,agentId,productKey,commissionCents,ruleVersion,createdAt) VALUES(?,?,'gpt:halfPriceAccountOneMonth',200,1,?)").bind(gpt.id,agentId,Date.now()).run();
+    const payload={id:gpt.id,checked:true,note:"已在发件箱核对且客户已确认收到"};
+    assert.equal((await call("/api/admin/confirm-external-delivery",payload)).status,401);
+    assert.equal((await call("/api/admin/confirm-external-delivery",payload,session)).status,409);
+    await call("/api/admin/update",{id:gpt.id,action:"confirm"},session);
+    assert.equal((await call("/api/admin/confirm-external-delivery",{...payload,checked:false},session)).status,400);
+    assert.equal((await call("/api/admin/confirm-external-delivery",{...payload,note:""},session)).status,400);
+    const purchases=supplierPurchases,mails=sentMessages.length;
+    const results=await Promise.all([call("/api/admin/confirm-external-delivery",payload,session),call("/api/admin/confirm-external-delivery",payload,session)]);
+    assert.deepEqual(results.map(r=>r.status).sort(),[200,409]);
+    const order=(await call("/api/orders/lookup",gpt)).data;assert.equal(order.status,"complete");assert.equal(order.delivery.method,"manual");
+    assert.equal(supplierPurchases,purchases);assert.equal(sentMessages.length,mails);
+    assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM audit WHERE orderId=? AND action='external_delivery_confirmed'").bind(gpt.id).first()).n,1);
+    assert.equal((await call("/api/admin/supplier-deliver",{id:gpt.id},session)).status,409);
+    assert.equal((await call("/api/admin/send-delivery",{id:gpt.id,card:"EXAMPLE",goodsNo:"G88655555"},session)).status,409);
+    const detail=(await call(`/api/admin/agent-orders?agentId=${agentId}`,undefined,session)).data.orders[0];
+    assert.equal(detail.settlement,"pending");assert.ok(detail.availableAt>Date.now());
+    const blocked=await create();await call("/api/admin/update",{id:blocked.id,action:"confirm"},session);
+    await db.prepare("INSERT INTO supplier_fulfillment(orderId,state,updatedAt) VALUES(?,'purchase_unknown',?)").bind(blocked.id,Date.now()).run();
+    assert.equal((await call("/api/admin/confirm-external-delivery",{...payload,id:blocked.id},session)).status,409);
   });
 
 });

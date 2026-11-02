@@ -10,7 +10,7 @@ export type StoreOrder = OrderDetails & {
   method: "alipay" | "wechat"; expiresAt: number; status: OrderStatus;
   reportedAt?: number | null; qrImageUrl?: string;
   stockIssue?: boolean;
-  delivery?: { email: string; password: string; codeUrl: string } | { method: "email"; sentAt: number };
+  delivery?: { email: string; password: string; codeUrl: string } | { method: "email"; sentAt: number } | { method: "manual"; confirmedAt: number };
 };
 export type OrderStatus = "pending" | "reported" | "processing" | "complete" | "expired";
 export function orderLink(order: Pick<StoreOrder, "id" | "token">) {

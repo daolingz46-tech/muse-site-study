@@ -604,17 +604,18 @@ async function admin(env: Env, request: Request, path: string) {
   }
   if (path === "/api/admin/delivery-files" && request.method === "GET") {
     const orderId = str(new URL(request.url).searchParams.get("orderId"), 64);
-    const order = await env.DB.prepare("SELECT id,product FROM orders WHERE id=?").bind(orderId).first<{ id: string; product: string }>();
-    if (!order || order.product !== "muse") throw new HttpError(404, "订单不存在");
+    const order = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(orderId).first<Row>();
+    if (!order || !["muse", "gpt"].includes(order.product)) throw new HttpError(404, "订单不存在");
     const rows = await env.DB.prepare("SELECT id,name,mime,size,uploadedBytes FROM delivery_files WHERE orderId=? AND uploadedBytes=size ORDER BY createdAt").bind(orderId).all();
-    return json({ files: rows.results });
+    const goods = order.product === "gpt" ? inventoryProducts(order).map(value => value.slice(4)) : [];
+    return json({ files: rows.results, sources: goods.map(goodsNo => ({ goodsNo, instructions: goodsNo === "G88655555" ? qualificationGuide : "" })) });
   }
   if (path === "/api/admin/delivery-file/start" && request.method === "POST") {
     const input = await body(request), orderId = str(input.orderId, 64), name = str(input.name, 120).replace(/[\\/\x00-\x1f]/g, "_");
     const mime = str(input.mime, 50), size = Number(input.size);
     if (!name || !fileTypes.has(mime) || !Number.isInteger(size) || size < 1 || size > maxFileBytes) throw new HttpError(400, "请选择 15 MB 以内的图片或视频");
     const order = await env.DB.prepare("SELECT product,status FROM orders WHERE id=?").bind(orderId).first<{ product: string; status: string }>();
-    if (!order || order.product !== "muse" || !["processing", "complete"].includes(order.status)) throw new HttpError(409, "请先核实收款");
+    if (!order || !["muse", "gpt"].includes(order.product) || !["processing", "complete"].includes(order.status)) throw new HttpError(409, "请先核实收款");
     const quota = await env.DB.prepare("SELECT COUNT(*) AS count,COALESCE(SUM(size),0) AS bytes FROM delivery_files WHERE orderId=?").bind(orderId).first<{ count: number; bytes: number }>();
     if ((quota?.count || 0) >= 4 || (quota?.bytes || 0) + size > maxMailBytes) throw new HttpError(413, "这笔订单的附件储存已满，请删除不用的附件");
     const id = crypto.randomUUID();
@@ -834,8 +835,15 @@ async function admin(env: Env, request: Request, path: string) {
     const input = await body(request), id = str(input.id, 64), card = str(input.card, 4000);
     if (!card) throw new HttpError(400, "请粘贴卡密内容");
     const order = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).first<Row>();
-    if (!order || order.product !== "muse") throw new HttpError(404, "未找到成品账号订单");
+    if (!order || !["muse", "gpt"].includes(order.product)) throw new HttpError(404, "未找到可邮件交付的订单");
     if (!["processing", "complete"].includes(order.status)) throw new HttpError(409, "请先核实收款");
+    let instructions = "";
+    if (order.product === "gpt") {
+      const goodsNo = str(input.goodsNo, 30);
+      if (!inventoryProducts(order).includes(`gpt:${goodsNo}`)) throw new HttpError(400, "请选择此商品对应的实际采购货源");
+      instructions = goodsNo === "G88655555" ? qualificationGuide : str(input.instructions, 2000);
+      if (!instructions) throw new HttpError(400, "请填写该货源的使用或兑换说明，不能使用其他商品的教程");
+    }
     if (!hasEmailConfig(env)) throw new HttpError(503, "邮件服务尚未配置");
     const ids = input.fileIds ?? [];
     if (!Array.isArray(ids) || ids.length > 4 || ids.some(value => typeof value !== "string" || !/^[a-f0-9-]{36}$/.test(value)) || new Set(ids).size !== ids.length) throw new HttpError(400, "附件选择无效");
@@ -847,26 +855,25 @@ async function admin(env: Env, request: Request, path: string) {
     }
     if (files.reduce((sum, file) => sum + file.size, 0) > maxMailBytes) throw new HttpError(413, "单封邮件附件合计不能超过 20 MB");
     if (files.length && !await hasAttachmentDelivery(env)) throw new HttpError(503, "请先更新 Google 邮件脚本，才能发送附件");
-    const tutorial = input.includeTutorial === false ? null : await env.DB.prepare("SELECT title,blocks FROM tutorials WHERE id='muse-account'").first<{ title: string; blocks: string }>();
+    const tutorial = order.product !== "muse" || input.includeTutorial === false ? null : await env.DB.prepare("SELECT title,blocks FROM tutorials WHERE id='muse-account'").first<{ title: string; blocks: string }>();
     const blocks = tutorial ? validateTutorial(JSON.parse(tutorial.blocks)) : [];
     const tutorialHtml = blocks.map(block => block.type === "text"
       ? `<p style="white-space:pre-wrap">${escapeHtml(block.content)}</p>`
       : `<figure style="margin:18px 0"><img src="${block.url}" alt="${escapeHtml(block.caption || "教程图片")}" style="max-width:100%;height:auto;border-radius:8px"><figcaption>${escapeHtml(block.caption)}</figcaption></figure>`).join("");
     const tutorialText = blocks.map(block => block.type === "text" ? block.content : `${block.caption || "教程图片"}：${block.url}`).join("\n\n");
-    const { html, text } = deliveryEmail({ title: order.title, code: order.code, card, extraHtml: tutorial && blocks.length ? `<h3>${escapeHtml(tutorial.title)}</h3>${tutorialHtml}` : "", extraText: tutorial && blocks.length ? `${tutorial.title}\n${tutorialText}` : "" });
+    const { html, text } = deliveryEmail({ title: order.title, code: order.code, card, instructions, extraHtml: tutorial && blocks.length ? `<h3>${escapeHtml(tutorial.title)}</h3>${tutorialHtml}` : "", extraText: tutorial && blocks.length ? `${tutorial.title}\n${tutorialText}` : "" });
     const previous = await env.DB.prepare("SELECT status FROM delivery_emails WHERE orderId=?").bind(order.id).first<{ status: string }>();
     const claimed = previous
       ? await env.DB.prepare("UPDATE delivery_emails SET status='sending' WHERE orderId=? AND status='sent'").bind(order.id).run()
       : await env.DB.prepare("INSERT OR IGNORE INTO delivery_emails(orderId,status,createdAt) SELECT ?,'sending',? WHERE NOT EXISTS (SELECT 1 FROM supplier_fulfillment WHERE orderId=?)").bind(order.id, Date.now(), order.id).run();
-    if (!claimed.meta.changes) throw new HttpError(409, "这笔订单的邮件正在发送，请稍后重试");
+    if (!claimed.meta.changes) throw new HttpError(409, "已有采购、发货或待核查记录，请先核查订单和发件箱，勿重复发货");
     const historyId = crypto.randomUUID();
     await env.DB.prepare("INSERT INTO delivery_history(id,orderId,text,state,createdAt) VALUES(?,?,?,'sending',?)").bind(historyId, order.id, text, Date.now()).run();
-    try { await sendEmail(env, `delivery:${order.id}:${crypto.randomUUID()}`, `Muse 成品账号卡密 · 订单 ${order.code}`, html, text, order.target, files, "buyer_delivery"); }
+    try { await sendEmail(env, `delivery:${order.id}:${crypto.randomUUID()}`, `${order.title} · 订单 ${order.code}`, html, text, order.target, files, "buyer_delivery"); }
     catch {
       await env.DB.prepare("UPDATE delivery_history SET state='unknown' WHERE id=?").bind(historyId).run();
-      if (previous) await env.DB.prepare("UPDATE delivery_emails SET status='sent' WHERE orderId=? AND status='sending'").bind(order.id).run();
-      else await env.DB.prepare("DELETE FROM delivery_emails WHERE orderId=? AND status='sending'").bind(order.id).run();
-      throw new HttpError(502, "发信失败，请检查发件箱；确认未送达后再试");
+      await env.DB.prepare("UPDATE delivery_emails SET status='unknown' WHERE orderId=? AND status='sending'").bind(order.id).run();
+      throw new HttpError(502, "发送结果未确认，已暂停重复发货。请先核查发件箱和客户收件情况");
     }
     const now = Date.now();
     await env.DB.batch([
@@ -876,6 +883,20 @@ async function admin(env: Env, request: Request, path: string) {
       env.DB.prepare("INSERT INTO audit(orderId,action,createdAt) VALUES(?,?,?)").bind(order.id, previous ? "email_redelivery" : "email_delivery", now),
     ]);
     return json({ ok: true, sentAt: now, to: order.target, resent: Boolean(previous) });
+  }
+  if (path === "/api/admin/confirm-external-delivery" && request.method === "POST") {
+    const input = await body(request), id = str(input.id, 64), note = str(input.note, 500);
+    if (input.checked !== true || note.length < 6) throw new HttpError(400, "请确认客户已收到交付内容，并填写至少 6 字的核查备注");
+    const now = Date.now();
+    // Share the same order-level lock as manual mail and supplier purchasing.
+    const result = await env.DB.batch([
+      env.DB.prepare("INSERT OR IGNORE INTO delivery_emails(orderId,status,createdAt) SELECT id,'external',? FROM orders WHERE id=? AND product='gpt' AND status='processing' AND paidAt IS NOT NULL AND NOT EXISTS (SELECT 1 FROM supplier_fulfillment WHERE orderId=orders.id) AND NOT EXISTS (SELECT 1 FROM delivery_history WHERE orderId=orders.id AND state IN ('sending','unknown'))").bind(now, id),
+      env.DB.prepare("UPDATE orders SET status='complete',completedAt=?,delivery=?,stockIssue=0,updatedAt=? WHERE id=? AND status='processing' AND changes()=1").bind(now, JSON.stringify({ method: "manual", confirmedAt: now }), now, id),
+      env.DB.prepare("INSERT INTO audit(orderId,action,createdAt) SELECT ?,'external_delivery_confirmed',? WHERE changes()=1").bind(id, now),
+      env.DB.prepare("INSERT INTO delivery_history(id,orderId,text,state,createdAt) SELECT ?,?,?,'confirmed',? WHERE changes()=1").bind(crypto.randomUUID(), id, `店主确认已通过邮件交付。核查备注：${note}`, now),
+    ]);
+    if (!result[1].meta.changes) throw new HttpError(409, "订单须已核实收款且待交付；已有采购或发货记录时请先核查，不能重复确认");
+    return json({ ok: true });
   }
   if (path === "/api/admin/update" && request.method === "POST") {
     const input = await body(request); const row = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(str(input.id, 64)).first<Row>();

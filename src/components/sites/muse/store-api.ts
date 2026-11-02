@@ -40,6 +40,7 @@ function readOrder(value: unknown): StoreOrder {
   if (value.delivery !== undefined && (!isRecord(value.delivery)
     || (value.delivery.method === "email"
       ? typeof value.delivery.sentAt !== "number"
+      : value.delivery.method === "manual" ? typeof value.delivery.confirmedAt !== "number"
       : typeof value.delivery.email !== "string" || typeof value.delivery.password !== "string"
         || typeof value.delivery.codeUrl !== "string"))) {
     throw new Error("交付资料返回异常，请联系支持。");
