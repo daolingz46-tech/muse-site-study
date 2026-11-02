@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { Eye, EyeOff } from "lucide-react";
 import { storeApiUrl } from "./store-api";
 import "./agent-workbench.css";
 
@@ -15,7 +16,7 @@ class AgentRequestError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
 }
 function errorMessage(cause: unknown): string {
-  return cause instanceof TypeError ? "无法连接工作台，请检查网络后重试。" : cause instanceof Error ? cause.message : "操作失败，请稍后重试";
+  return cause instanceof AgentRequestError && cause.status === 429 ? "暂时无法处理，请稍后再试。" : cause instanceof TypeError ? "无法连接工作台，请检查网络后重试。" : cause instanceof Error ? cause.message : "操作失败，请稍后重试";
 }
 async function agentRequest(path: string, body?: object): Promise<unknown> {
   const response = await fetch(storeApiUrl(path), {
@@ -67,6 +68,7 @@ export function AgentWorkbench() {
   const [orders, setOrders] = useState<AgentOrder[]>([]);
   const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -109,6 +111,7 @@ export function AgentWorkbench() {
     try {
       await agentRequest("/api/agent/login", { code: code.trim(), password });
       setPassword("");
+      setShowPassword(false);
       await refresh();
     } catch (cause) { setError(errorMessage(cause)); }
     finally { setBusy(false); }
@@ -172,7 +175,7 @@ export function AgentWorkbench() {
       {loading ? <section className="agent-card"><p className="agent-muted">正在加载…</p></section> : !agent ? <section className="agent-card agent-login">
         <h2>登录代理工作台</h2><p className="agent-muted">请输入店主提供的代理编号和密码。</p>
         <form onSubmit={login}><label htmlFor="agent-code">代理编号</label><input id="agent-code" autoComplete="username" required value={code} onChange={event => setCode(event.target.value)} placeholder="输入代理编号" maxLength={32} />
-          <label htmlFor="agent-password">登录密码</label><input id="agent-password" type="password" autoComplete="current-password" required value={password} onChange={event => setPassword(event.target.value)} placeholder="输入登录密码" maxLength={256} />
+          <label htmlFor="agent-password">登录密码</label><div className="agent-password-field"><input id="agent-password" type={showPassword ? "text" : "password"} autoComplete="current-password" required value={password} onChange={event => setPassword(event.target.value)} placeholder="输入登录密码" maxLength={256} /><button type="button" aria-label={showPassword ? "隐藏密码" : "显示密码"} aria-pressed={showPassword} onClick={() => setShowPassword(value => !value)}>{showPassword ? <EyeOff size={20}/> : <Eye size={20}/>}</button></div>
           {error && <p className="agent-error" role="alert">{error}</p>}<button type="submit" className="agent-primary" disabled={busy}>{busy ? "正在登录…" : "登录"}</button>
         </form>
       </section> : <>
