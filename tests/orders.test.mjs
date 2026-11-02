@@ -26,8 +26,10 @@ test("订单、收款核实和交付的数据库流程", async t => {
       const params = await request.json();
       if (path.endsWith("/quotePrice")) return Response.json({ code: 1, data: { balance_enough: supplierBalanceEnough, available_quantity: emptyGoods.has(params.goods_no) ? 0 : supplierStock, total_amount: params.goods_no === "G85161614" ? params.quantity * 1.03 : ["G88655555", "G75777360"].includes(params.goods_no) ? 3.10 : ["G37376813", "G43844575"].includes(params.goods_no) ? 4.12 : params.goods_no === "G39595340" ? 11.31 : params.goods_no === "G97316889" ? 60.65 : 110 } });
       if (path.endsWith("/create")) { supplierGoods = params.goods_no; supplierQuantity = params.quantity; supplierRemark = params.remark; supplierPurchases++; if (supplierTimeout) throw new Error("simulated network failure"); return Response.json({ code: 1, data: { trade_no: "TEST-16688" } }); }
-      if (path.endsWith("/query") && supplierGoods === "G85161614") return Response.json({code:1,data:{status:4,cards:Array.from({length:supplierQuantity},(_,i)=>({code:`TEST-${i}`}))}});
       if (path.endsWith("/query") && params.trade_no === "INVENTORY-ORDER") return Response.json({ code: 1, data: { goods_no: "G37376813", status: 4, cards: [{ code: "stock@example.com—pass--https://example.com/code" }], instruction: "说明" } });
+      if (path.endsWith("/query") && params.trade_no === "GPT-STOCK") return Response.json({code:1,data:{goods_no:"G88655555",status:4,cards:[{code:"gpt-stock-card"}],instruction:"供应商原说明"}});
+      if (path.endsWith("/query") && params.trade_no === "OTHER-STOCK") return Response.json({code:1,data:{goods_no:"G12345678",status:4,cards:[{code:"other-stock-card"}]}});
+      if (path.endsWith("/query") && supplierGoods === "G85161614") return Response.json({code:1,data:{status:4,cards:Array.from({length:supplierQuantity},(_,i)=>({code:`TEST-${i}`}))}});
       if (path.endsWith("/query")) return Response.json({ code: 1, data: { status: 4, cards: [{ code: supplierGoods === "G37376813" ? "muse@example.com—mailpass--https://example.com/code" : "TEST-CARD" }], instruction: "<h3>使用说明</h3><p>打开 <a href=\"https://example.com/redeem\">兑换地址</a></p>" } });
       throw new Error("unexpected supplier request");
     }
@@ -383,6 +385,16 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.notEqual(first.id,second.id);
   });
 
+  await t.test("统一库存按货源编号保存并对对应商品优先发货", async () => {
+    const imported=await call("/api/admin/inventory-import",{tradeNo:"GPT-STOCK"},session);assert.equal(imported.status,200);assert.equal(imported.data.linked,true);
+    const unknown=await call("/api/admin/inventory-import",{tradeNo:"OTHER-STOCK"},session);assert.equal(unknown.status,200);assert.equal(unknown.data.linked,false);
+    const o=(await call("/api/orders",{product:"gpt",planId:"halfPriceAccountOneMonth",email:"stockbuyer@example.com",method:"wechat",acceptedTerms:true,requestId:randomUUID()})).data;
+    await call("/api/admin/update",{id:o.id,action:"confirm"},session);
+    assert.equal((await call("/api/admin/supplier-preview",{id:o.id},session)).data.inventory,true);
+    const before=supplierPurchases;assert.equal((await call("/api/admin/supplier-deliver",{id:o.id,expectedInventory:true},session)).status,200);assert.equal(supplierPurchases,before);
+    const mail=sentMessages.find(x=>x.to==="stockbuyer@example.com");assert.match(mail.text,/手机端可能不显示优惠/);assert.match(mail.text,/尽快使用优惠/);
+    assert.equal((await db.prepare("SELECT orderId FROM inventory_cards WHERE card=?").bind("other-stock-card").first()).orderId,null);
+  });
   await t.test("资格账号按库存切换货源且报价变化不采购", async () => {
     const make = async () => { const o=(await call("/api/orders",{product:"gpt",planId:"halfPriceAccountOneMonth",email:"fallback@example.com",method:"wechat",acceptedTerms:true,requestId:randomUUID()})).data; assert.equal((await call("/api/admin/update",{id:o.id,action:"confirm"},session)).status,200); return o; };
     const order=await make(); supplierStock=1; emptyGoods=new Set();
@@ -394,7 +406,10 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal(supplierPurchases,before);
     assert.equal((await call("/api/admin/supplier-deliver",{id:order.id,expectedGoodsNo:second.data.goodsNo,expectedCents:310},session)).status,200);
     assert.equal(supplierGoods,"G75777360"); assert.equal(supplierPurchases,before+1);
-    emptyGoods=new Set(); supplierStock=null;
+    emptyGoods=new Set();
+    const primary=await make();assert.equal((await call("/api/admin/supplier-deliver",{id:primary.id,expectedGoodsNo:"G88655555",expectedCents:310},session)).status,200);
+    assert.equal(supplierGoods,"G88655555");assert.match(sentMessages.filter(x=>x.to==="fallback@example.com").at(-1).text,/手机端可能不显示优惠/);
+    supplierStock=null;
   });
 
   await t.test("代理仅管理员可创建，凭据不出现在管理列表中", async () => {

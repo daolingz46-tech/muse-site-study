@@ -336,6 +336,13 @@ async function chooseSupplier(env: Env, order: Row, primary: string) {
   throw new HttpError(409,"已配置货源均缺货，未执行采购。");
 }
 
+const qualificationGuide = `请使用电脑登录，手机端可能不显示优惠。\n1. 使用收到的账号、密码登录 ChatGPT 官方网页；如需 2FA 验证，可使用验证器或 https://2fa.fun/ 获取验证码。\n2. 点击 Upgrade to Plus（升级 Plus），在支付页面查看是否显示半价优惠。\n3. 准备官方支持的支付卡，并确保余额充足；也可自行选购有额度的虚拟卡。\n4. 仅在官方支付页面填写卡号、有效期及 CVV，确认订阅。\n5. 请尽快使用优惠，一个月半价资格未使用可能失效；如需更长优惠，可考虑两个月或三个月资格。首登如需邮箱验证码，请联系商家协助更换账号。`;
+function inventoryProducts(order: Row): string[] {
+  if (order.product === "muse") return [order.supplierPlan === "museWarranty" ? "muse-7day" : order.supplierPlan === "museBasic" ? "muse-basic-43844575" : "muse"];
+  const plan=GPT_SUPPLIER_PRODUCTS[order.supplierPlan as keyof typeof GPT_SUPPLIER_PRODUCTS];
+  return plan ? [plan.goodsNo,...(order.supplierPlan ? SUPPLIER_BACKUPS[order.supplierPlan] || [] : [])].map(no=>`gpt:${no}`) : [];
+}
+
 async function admin(env: Env, request: Request, path: string) {
   if ((path === "/api/admin/login" || path === "/api/admin/mini-login") && request.method === "POST") {
     const miniLogin = path.endsWith("/mini-login");
@@ -637,7 +644,8 @@ async function admin(env: Env, request: Request, path: string) {
   if (path === "/api/admin/inventory" && request.method === "GET") {
     const count = await env.DB.prepare("SELECT COUNT(*) AS available FROM inventory_cards WHERE product='muse-7day' AND orderId IS NULL").first<{ available: number }>();
     const basic = await env.DB.prepare("SELECT COUNT(*) AS available FROM inventory_cards WHERE product='muse-basic-43844575' AND orderId IS NULL").first<{ available: number }>();
-    return json({ available: count?.available || 0, basicAvailable: basic?.available || 0 });
+    const groups=await env.DB.prepare("SELECT product,COUNT(*) AS available FROM inventory_cards WHERE orderId IS NULL AND (product LIKE 'gpt:G%' OR product LIKE 'unlinked:G%') GROUP BY product ORDER BY product").all();
+    return json({ available: count?.available || 0, basicAvailable: basic?.available || 0, gpt:groups.results });
   }
   if (path === "/api/admin/inventory-import" && request.method === "POST") {
     const tradeNo = str((await body(request)).tradeNo, 128);
@@ -650,7 +658,10 @@ async function admin(env: Env, request: Request, path: string) {
     catch { throw new HttpError(502, "查询采购订单失败，请稍后重试"); }
     const data = result.data;
     if (result.code !== 1 || !data || ![4, 5].includes(Number(data.status))) throw new HttpError(409, "采购订单尚未发货或无法查询");
-    if (![MUSE_ACCOUNT_SUPPLIER.goodsNo, MUSE_BASIC_SUPPLIER.goodsNo].includes(String(data.goods_no) as typeof MUSE_ACCOUNT_SUPPLIER.goodsNo | typeof MUSE_BASIC_SUPPLIER.goodsNo)) throw new HttpError(400, "该采购单不是支持导入的 Muse 10 亿成品账号货源");
+    const goodsNo=String(data.goods_no || "");
+    const gptGoods=new Set<string>([...Object.values(GPT_SUPPLIER_PRODUCTS).map(p=>p.goodsNo),...Object.values(SUPPLIER_BACKUPS).flat()]);
+    if (!/^G\d+$/.test(goodsNo)) throw new HttpError(400,"采购单未返回有效商品编号，请核查。");
+    const product=goodsNo===MUSE_ACCOUNT_SUPPLIER.goodsNo ? "muse-7day" : goodsNo===MUSE_BASIC_SUPPLIER.goodsNo ? "muse-basic-43844575" : gptGoods.has(goodsNo) ? `gpt:${goodsNo}` : `unlinked:${goodsNo}`;
     const cards = Array.isArray(data.cards) ? data.cards : [];
     const unique = [...new Set(cards.map(value => typeof value === "object" && value !== null && "code" in value ? str(value.code, 4000) : "").filter(Boolean))];
     if (!unique.length) throw new HttpError(409, "采购订单未返回卡密");
@@ -658,10 +669,11 @@ async function admin(env: Env, request: Request, path: string) {
     for (const card of unique) {
       const used = await env.DB.prepare("SELECT orderId FROM supplier_fulfillment WHERE card=? LIMIT 1").bind(card).first();
       if (used) continue;
-      const saved = await env.DB.prepare("INSERT OR IGNORE INTO inventory_cards(id,product,card,cardHash,tradeNo,instruction,createdAt) VALUES(?,?,?,?,?,?,?)").bind(crypto.randomUUID(), data.goods_no === MUSE_ACCOUNT_SUPPLIER.goodsNo ? "muse-7day" : "muse-basic-43844575", card, await hash(card), tradeNo, typeof data.instruction === "string" ? data.instruction : "", Date.now()).run();
+      const instructions=goodsNo === "G88655555" ? qualificationGuide : typeof data.instruction === "string" ? data.instruction : "";
+      const saved = await env.DB.prepare("INSERT OR IGNORE INTO inventory_cards(id,product,card,cardHash,tradeNo,instruction,createdAt) VALUES(?,?,?,?,?,?,?)").bind(crypto.randomUUID(), product, card, await hash(card), tradeNo, instructions, Date.now()).run();
       added += saved.meta.changes;
     }
-    return json({ added, skipped: unique.length - added });
+    return json({ added, skipped: unique.length - added, goodsNo, linked:!product.startsWith("unlinked:") });
   }
   if (path === "/api/admin/delivery-history" && request.method === "GET") {
     const id = str(new URL(request.url).searchParams.get("orderId"), 64);
@@ -728,7 +740,8 @@ async function admin(env: Env, request: Request, path: string) {
     if (!order || !["gpt","muse"].includes(order.product) || order.status !== "processing") throw new HttpError(409,"请先核实收款并选择订单。");
     if (!env.SUPPLIER_APP_ID || !env.SUPPLIER_SECRET) throw new HttpError(503,"货源接口凭证尚未配置");
     if (await env.DB.prepare("SELECT orderId FROM supplier_fulfillment WHERE orderId=?").bind(order.id).first()) throw new HttpError(409,"已有采购记录，请刷新订单后继续查询。");
-    if (order.product === "muse") { const inventory=order.supplierPlan === "museWarranty" ? "muse-7day" : order.supplierPlan === "museBasic" ? "muse-basic-43844575" : "muse"; if (await env.DB.prepare("SELECT id FROM inventory_cards WHERE product=? AND orderId IS NULL LIMIT 1").bind(inventory).first()) return json({inventory:true},200,{"Cache-Control":"no-store"}); }
+    const products=inventoryProducts(order);
+    for (const product of products) { const item=await env.DB.prepare("SELECT id,product FROM inventory_cards WHERE product=? AND orderId IS NULL LIMIT 1").bind(product).first<{product:string}>(); if (item) return json({inventory:true,goodsNo:item.product.startsWith("gpt:") ? item.product.slice(4) : ""},200,{"Cache-Control":"no-store"}); }
     const plan=order.product === "muse" ? (order.supplierPlan === "museWarranty" ? MUSE_ACCOUNT_SUPPLIER : MUSE_BASIC_SUPPLIER) : GPT_SUPPLIER_PRODUCTS[order.supplierPlan as keyof typeof GPT_SUPPLIER_PRODUCTS]; if (!plan) throw new HttpError(400,"商品货源尚未配置");
     return json(await chooseSupplier(env,order,plan.goodsNo),200,{"Cache-Control":"no-store"});
   }
@@ -744,12 +757,15 @@ async function admin(env: Env, request: Request, path: string) {
     const creds = { appId: env.SUPPLIER_APP_ID, secret: env.SUPPLIER_SECRET };
     type SupplierResult = { code: number; msg?: string; data?: Record<string, unknown> };
     let task = await env.DB.prepare("SELECT state,tradeNo,card,instruction FROM supplier_fulfillment WHERE orderId=?").bind(id).first<{ state: string; tradeNo: string | null; card: string | null; instruction: string | null }>();
-    if (!task && order.product === "muse") {
-      await env.DB.batch([
-        env.DB.prepare("INSERT OR IGNORE INTO supplier_fulfillment(orderId,state,tradeNo,card,instruction,inventoryId,updatedAt) SELECT ?,'ready',tradeNo,card,instruction,id,? FROM inventory_cards WHERE product=? AND orderId IS NULL AND NOT EXISTS (SELECT 1 FROM delivery_emails WHERE orderId=?) ORDER BY createdAt,id LIMIT 1").bind(id, Date.now(), order.supplierPlan === "museWarranty" ? "muse-7day" : order.supplierPlan === "museBasic" ? "muse-basic-43844575" : "muse", id),
+    if (!task) {
+      for (const product of inventoryProducts(order)) {
+        await env.DB.batch([
+        env.DB.prepare("INSERT OR IGNORE INTO supplier_fulfillment(orderId,state,tradeNo,card,instruction,inventoryId,updatedAt) SELECT ?,'ready',tradeNo,card,instruction,id,? FROM inventory_cards WHERE product=? AND orderId IS NULL AND NOT EXISTS (SELECT 1 FROM delivery_emails WHERE orderId=?) ORDER BY createdAt,id LIMIT 1").bind(id, Date.now(), product, id),
         env.DB.prepare("UPDATE inventory_cards SET orderId=? WHERE id=(SELECT inventoryId FROM supplier_fulfillment WHERE orderId=?) AND orderId IS NULL").bind(id, id),
       ]);
       task = await env.DB.prepare("SELECT state,tradeNo,card,instruction FROM supplier_fulfillment WHERE orderId=?").bind(id).first<{ state: string; tradeNo: string | null; card: string | null; instruction: string | null }>();
+      if (task) break;
+      }
     }
     if (!task) {
       if (input.expectedInventory === true) throw new HttpError(409,"库存已变化，请重新确认后再发货；未执行采购。");
@@ -757,7 +773,7 @@ async function admin(env: Env, request: Request, path: string) {
       try { selected=await chooseSupplier(env,order,plan.goodsNo); }
       catch(error) { if (error instanceof HttpError && error.message.includes("均缺货")) await env.DB.prepare("UPDATE orders SET stockIssue=1,updatedAt=? WHERE id=? AND status='processing'").bind(Date.now(),id).run(); throw error; }
       if (input.expectedGoodsNo !== undefined && (input.expectedGoodsNo !== selected.goodsNo || input.expectedCents !== Math.round(selected.total*100))) throw new HttpError(409,"货源或价格已变化，请重新询价确认，未执行采购。");
-      const claimed = await env.DB.prepare("INSERT OR IGNORE INTO supplier_fulfillment(orderId,state,updatedAt) SELECT ?,'purchasing',? WHERE NOT EXISTS (SELECT 1 FROM delivery_emails WHERE orderId=?)").bind(id, Date.now(), id).run();
+      const claimed = await env.DB.prepare("INSERT OR IGNORE INTO supplier_fulfillment(orderId,state,instruction,updatedAt) SELECT ?,'purchasing',?,? WHERE NOT EXISTS (SELECT 1 FROM delivery_emails WHERE orderId=?)").bind(id, `source:${selected.goodsNo}`, Date.now(), id).run();
       if (!claimed.meta.changes) throw new HttpError(409, "该订单已有发货操作，请先核查订单和邮件");
       await env.DB.prepare("UPDATE orders SET stockIssue=0 WHERE id=?").bind(id).run();
       let purchase: SupplierResult;
@@ -768,7 +784,7 @@ async function admin(env: Env, request: Request, path: string) {
         throw new HttpError(502, "采购未确认，请先核查 16688 采购记录");
       }
       await env.DB.prepare("UPDATE supplier_fulfillment SET state='awaiting',tradeNo=?,updatedAt=? WHERE orderId=?").bind(purchase.data.trade_no, Date.now(), id).run();
-      task = { state: "awaiting", tradeNo: purchase.data.trade_no, card: null, instruction: null };
+      task = { state: "awaiting", tradeNo: purchase.data.trade_no, card: null, instruction: `source:${selected.goodsNo}` };
     }
     if (task.state === "awaiting" && task.tradeNo) {
       let result: SupplierResult;
@@ -779,7 +795,12 @@ async function admin(env: Env, request: Request, path: string) {
       const card = cards.map(value => typeof value === "object" && value !== null && "code" in value ? String(value.code) : "").filter(Boolean).join("\n");
       if (!card) throw new HttpError(409, "货源未返回卡密，请核查采购订单");
       const fallback = order.product === "muse" ? "请使用美国 IP 登录 Muse，通过验证码获取地址查看验证码；账号自带 10 亿 Token。请检查首次登录并换绑自己的邮箱。" : order.supplierPlan === "plus15Day" ? "请输入账号及密码登录，将 2FA 密钥输入 https://2fa.fun/ 或 https://2fa.live/ 获取验证码。供货商提供 15 天质保，请勿换绑、修改密码或 2FA，否则不再提供质保。" : order.supplierPlan === "plusAccount" ? "请在购买后 20 分钟内完成兑换并检查首次登录。验证码获取地址：https://2fa.vip/。售后规则请联系货源商确认。" : order.supplierPlan === "halfPriceAccount" || order.supplierPlan === "halfPriceAccountOneMonth" ? `账号资料格式：账号、密码和 2FA。验证码获取地址：https://2fa.run/（备用：https://2fa.fun/）。该账号包含${order.supplierPlan === "halfPriceAccount" ? "两个月" : "一个月"}半价资格，不包含 Plus 订阅。` : "请访问 https://shuwang.space/ ，使用收到的卡密按网站说明自行充值；发货并不代表充值已经完成。";
-      const instruction = typeof result.data.instruction === "string" && result.data.instruction.trim() ? result.data.instruction : fallback;
+      const recordedSource=task.instruction?.match(/^source:(G\d+)$/)?.[1] || "";
+      const queriedSource=typeof result.data.goods_no === "string" ? result.data.goods_no : "";
+      if (recordedSource && queriedSource && recordedSource !== queriedSource) throw new HttpError(409,"货源编号与采购记录不一致，请核查后再发货。");
+      const goodsNo=queriedSource || recordedSource;
+      if (order.supplierPlan === "halfPriceAccountOneMonth" && !goodsNo) throw new HttpError(409,"无法确认这笔采购的货源编号，请核查后再发货。");
+      const instruction = goodsNo === "G88655555" ? qualificationGuide : typeof result.data.instruction === "string" && result.data.instruction.trim() ? result.data.instruction : fallback;
       const saved = await env.DB.prepare("UPDATE supplier_fulfillment SET state='ready',card=?,instruction=?,updatedAt=? WHERE orderId=? AND state='awaiting'").bind(card, instruction, Date.now(), id).run();
       if (!saved.meta.changes) throw new HttpError(409, "订单正在处理，请刷新");
       task = { ...task, state: "ready", card, instruction };

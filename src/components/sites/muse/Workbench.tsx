@@ -450,14 +450,15 @@ function TutorialEditor({ tutorial, onSaved }: { tutorial: Tutorial; onSaved: (v
 
 function InventoryManager({ version, onChange }: { version: number; onChange: () => void }) {
   const [available, setAvailable] = useState<number | null>(null), [basicAvailable, setBasicAvailable] = useState<number | null>(null), [tradeNo, setTradeNo] = useState(""), [message, setMessage] = useState(""), [busy, setBusy] = useState(false);
-  useEffect(() => { void api("inventory").then((value: { available: number; basicAvailable: number }) => { setAvailable(value.available); setBasicAvailable(value.basicAvailable); }).catch(() => { setAvailable(null); setBasicAvailable(null); }); }, [version]);
+  const [gptStock,setGptStock]=useState<{product:string;available:number}[]>([]);
+  useEffect(() => { void api("inventory").then((value: { available: number; basicAvailable: number; gpt: {product:string;available:number}[] }) => { setAvailable(value.available); setBasicAvailable(value.basicAvailable); setGptStock(value.gpt || []); }).catch(() => { setAvailable(null); setBasicAvailable(null); }); }, [version]);
   async function submit(event: FormEvent) {
     event.preventDefault(); if (!window.confirm("请确认此采购订单中的卡密全部尚未发给任何客户。确认后导入库存？")) return;
     setBusy(true); setMessage("");
-    try { const result = await api("inventory-import", { tradeNo }); setMessage(`导入 ${result.added} 份，跳过 ${result.skipped} 份已导入或已关联的卡密。`); setTradeNo(""); onChange(); }
+    try { const result = await api("inventory-import", { tradeNo }); setMessage(`商品 ${result.goodsNo}：导入 ${result.added} 份，跳过 ${result.skipped} 份。${result.linked === false ? "该商品尚未关联店铺，库存暂不会自动发货。" : ""}`); setTradeNo(""); onChange(); }
     catch (e) { setMessage(e instanceof Error ? e.message : "导入失败"); } finally { setBusy(false); }
   }
-  return <section className="wb-visitors"><div className="wb-visitor-heading"><div><h2>Muse 成品账号库存</h2><p>7 天质保：{available === null ? "读取中" : `${available} 份`}；无 7 天质保：{basicAvailable === null ? "读取中" : `${basicAvailable} 份`}。发货时优先使用对应规格的库存。</p><p>在 16688 采购订单中复制订单编号，只导入从未发给客户的卡密。支持两款对应的 Muse 货源。</p></div></div><form onSubmit={submit} style={{display:"flex",gap:8,flexWrap:"wrap"}}><input aria-label="16688 采购订单编号" value={tradeNo} onChange={e => setTradeNo(e.target.value)} placeholder="输入 16688 采购订单编号" maxLength={128} required/><button className="wb-primary" disabled={busy}>{busy ? "导入中…" : "导入未使用的采购单"}</button></form>{message && <p role="status">{message}</p>}</section>;
+  return <section className="wb-visitors"><div className="wb-visitor-heading"><div><h2>商品库存</h2><p>Muse 7 天质保：{available === null ? "读取中" : `${available} 份`}；基础款：{basicAvailable === null ? "读取中" : `${basicAvailable} 份`}。{gptStock.map(item=>` ${item.product.startsWith("unlinked:") ? "待关联" : "GPT"} ${item.product.split(":")[1]}：${item.available} 份；`)}</p><p>输入 16688 采购订单编号，只导入从未发给客户的卡密；已关联商品优先使用对应库存；未关联商品先保存，关联前不会自动发货。</p></div></div><form onSubmit={submit} style={{display:"flex",gap:8,flexWrap:"wrap"}}><input aria-label="16688 采购订单编号" value={tradeNo} onChange={e => setTradeNo(e.target.value)} placeholder="输入 16688 采购订单编号" maxLength={128} required/><button className="wb-primary" disabled={busy}>{busy ? "导入中…" : "导入未使用的采购单"}</button></form>{message && <p role="status">{message}</p>}</section>;
 }
 function DeliveryHistory({ order, onClose }: { order: AdminOrder; onClose: () => void }) {
   const ref = useRef<HTMLDialogElement>(null);
