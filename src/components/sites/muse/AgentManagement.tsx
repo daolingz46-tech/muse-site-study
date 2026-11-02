@@ -11,6 +11,7 @@ type AgentData = { agents: Agent[]; rules: Rule[]; products: Product[] };
 type Api = (path: string, input?: unknown) => Promise<unknown>;
 type Withdrawal = { id: string; agentId: string; agentName: string; amountCents: number; status: string; requestedAt: number; approvedAt: number | null; dueAt: number | null; paidAt: number | null };
 type Commission = { orderId: string; code: string; agentName: string; amountCents: number; payoutInFlight: boolean; state: "active" | "held" | "refunded" | "unconfigured" };
+type AgentOrderDetail = { code:string; title:string; status:string; amountCents:number; target:string; contactEmail:string|null; createdAt:number; paidAt:number|null; completedAt:number|null; commissionCents:number; settlement:string; availableAt:number|null };
 function agentActionError(cause: unknown, fallback: string) {
   return cause instanceof Error && "status" in cause && cause.status === 401 ? "请先完成下方店主认证，再操作代理或佣金设置。" : fallback;
 }
@@ -24,6 +25,18 @@ async function ownerApi(path: string, input?: unknown): Promise<unknown> {
 }
 function ownerDate(value: number | null) { return value ? new Intl.DateTimeFormat("zh-CN", { dateStyle: "short", timeStyle: "short", timeZone: "Asia/Shanghai" }).format(value) : "—"; }
 const withdrawalStatus: Record<string, string> = { pending: "待审核", approved: "已批准，待人工打款", paying: "打款处理中", paid: "已标记打款", rejected: "已拒绝", unknown: "结果待核查" };
+
+function AgentOrders({ agent, api }: { agent:Agent; api:Api }) {
+  const [rows,setRows]=useState<AgentOrderDetail[]|null>(null), [page,setPage]=useState(0), [more,setMore]=useState(false), [error,setError]=useState(""), [busy,setBusy]=useState(false);
+  async function load(next:number) { setBusy(true); setError(""); try { const result=await api(`agent-orders?agentId=${encodeURIComponent(agent.id)}&page=${next}`) as {orders:AgentOrderDetail[];hasMore:boolean}; setRows(result.orders);setMore(result.hasMore);setPage(next); } catch(e) { setError(e instanceof Error?e.message:"读取订单失败"); } finally { setBusy(false); } }
+  const states:Record<string,string>={pending:"待付款",reported:"待核款",processing:"待交付",complete:"已完成",expired:"已过期"};
+  const settlement:Record<string,string>={unconfigured:"下单时未设置佣金，需店主核查",review:"佣金需核查",awaiting:"等待核款及交付",pending:"待结算（T+1）",matured:"已到结算日",hold:"佣金已冻结",refunded:"佣金已冲正"};
+  return <details className="wb-agent-orders" onToggle={e=>{if(e.currentTarget.open && rows===null && !busy) void load(0);}}><summary>查看该代理的订单</summary>
+    {error && <p className="wb-error" role="alert">{error}</p>}{busy && <p>正在读取订单…</p>}{rows && !rows.length && <p>暂无订单</p>}
+    {rows?.map(row=><article className="wb-agent-order-detail" key={row.code}><strong>订单 {row.code} · {row.title}</strong><p>订单金额 ¥{formatMoney(row.amountCents)} · {states[row.status] || row.status}</p><p>客户：{row.contactEmail || row.target}</p><p>下单：{ownerDate(row.createdAt)} · 核款：{ownerDate(row.paidAt)} · 交付：{ownerDate(row.completedAt)}</p><p>佣金 ¥{formatMoney(row.commissionCents)} · {settlement[row.settlement] || "待核查"}{row.settlement === "pending" && row.availableAt ? ` · 预计 ${ownerDate(row.availableAt)} 可结算` : ""}</p></article>)}
+    {rows && <div className="wb-withdrawal-actions"><button type="button" className="wb-action" disabled={busy||page===0} onClick={()=>void load(page-1)}>上一页</button><span>第 {page+1} 页</span><button type="button" className="wb-action" disabled={busy||!more} onClick={()=>void load(page+1)}>下一页</button><button type="button" className="wb-action" disabled={busy} onClick={()=>void load(page)}>刷新订单</button></div>}
+  </details>;
+}
 
 function CommissionControls() {
   const [code, setCode] = useState(""), [reason, setReason] = useState("");
@@ -218,7 +231,7 @@ export function AgentManagement({ api }: { api: Api }) {
       {!agents.length ? <p className="wb-agent-help">还没有代理，点击“创建代理”开始。</p> : <div className="wb-agent-list">{agents.map(agent => {
         const link = `https://musetoken.store/?ref=${encodeURIComponent(agent.referralCode)}`;
         return <article className="wb-agent-card" key={agent.id}><div className="wb-agent-card-heading"><div><strong>{agent.name}</strong><span className={agent.status === "active" ? "wb-agent-active" : "wb-agent-disabled"}>{agent.status === "active" ? "启用中" : "已停用"}</span></div><button className="wb-action" type="button" disabled={busy} onClick={() => void toggle(agent)}>{agent.status === "active" ? "停用" : "启用"}</button></div>
-          <p>归属订单 {agent.orderCount || 0} 笔 · 已完成 {agent.completedOrderCount || 0} 笔</p><label>推广链接<input readOnly value={link} onFocus={e => e.currentTarget.select()}/></label><div className="wb-agent-card-actions"><button className="wb-action" type="button" onClick={() => void copy(link)}>复制推广链接</button><details><summary>查看代理登录账号</summary><code>{agent.referralCode}</code></details></div></article>;
+          <p>归属订单 {agent.orderCount || 0} 笔 · 已完成 {agent.completedOrderCount || 0} 笔</p><label>推广链接<input readOnly value={link} onFocus={e => e.currentTarget.select()}/></label><div className="wb-agent-card-actions"><button className="wb-action" type="button" onClick={() => void copy(link)}>复制推广链接</button><details><summary>查看代理登录账号</summary><code>{agent.referralCode}</code></details></div><AgentOrders agent={agent} api={api}/></article>;
       })}</div>}
       <WithdrawalManagement/>
       <div className="wb-agent-section-title"><h3>商品佣金设置</h3><span>统一规则 · 每笔订单</span></div>
