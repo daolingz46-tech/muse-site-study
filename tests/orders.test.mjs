@@ -418,6 +418,13 @@ test("订单、收款核实和交付的数据库流程", async t => {
     const secondAfter=(await call("/api/agent/orders",undefined,secondLogin.cookie)).data.orders;
     assert.equal(secondAfter.find(order=>order.code===unset.code).ruleVersion,0);
     assert.ok(!(await call("/api/agent/orders",undefined,login.cookie)).data.orders.some(order=>order.code===unset.code));
+    const detailUrl=`/api/admin/agent-orders?agentId=${created.data.id}`;
+    assert.equal((await call(detailUrl)).status,401);
+    assert.equal((await call(detailUrl,undefined,login.cookie)).status,401);
+    const details=await call(detailUrl,undefined,session);
+    assert.equal(details.status,200);assert.equal(details.data.orders.length,1);assert.equal(details.data.orders[0].code,orders[0].data.code);
+    assert.equal(details.data.orders[0].settlement,"awaiting");assert.doesNotMatch(JSON.stringify(details.data),/passwordHash|tokenHash/);
+    assert.equal((await call(`/api/admin/agent-orders?agentId=${second.data.id}`,undefined,session)).data.orders[0].settlement,"unconfigured");
     const summary=(await call("/api/admin/agents",undefined,session)).data.agents.find(a=>a.id===created.data.id);
     assert.equal(summary.orderCount,1);assert.equal(summary.completedOrderCount,0);
     assert.equal((await call("/api/agent/balance",undefined,login.cookie)).data.availableCents,0);
@@ -426,6 +433,8 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal((await call("/api/admin/update",{id:orders[0].data.id,action:"complete",checked:true,delivery:{email:"example@example.com",password:"fake",codeUrl:"https://example.com/code"}},session)).status,200);
     const notMatured=(await call("/api/agent/balance",undefined,login.cookie)).data;
     assert.equal(notMatured.availableCents,0);assert.equal(notMatured.pendingCents,200);
+    assert.equal((await call(detailUrl,undefined,session)).data.orders[0].settlement,"pending");
+    assert.equal((await call("/api/agent/orders",undefined,login.cookie)).data.orders[0].commissionState,"pending");
     await db.prepare("UPDATE orders SET paidAt=?,completedAt=? WHERE id=?").bind(Date.now()-3*86400000,Date.now()-3*86400000,orders[0].data.id).run();
     await db.prepare("UPDATE agent_ledger SET availableAt=? WHERE orderId=?").bind(Date.now()-86400000,orders[0].data.id).run();
     assert.equal((await call("/api/agent/balance",undefined,login.cookie)).data.availableCents,200);

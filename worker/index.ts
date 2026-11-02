@@ -295,7 +295,7 @@ async function agentApi(env: Env, request: Request, path: string) {
   if (!agent) throw new HttpError(401,"请登录代理工作台");
   if (path === "/api/agent/me" && request.method === "GET") return json({id:agent.id,name:agent.name,referralCode:agent.referralCode});
   if (path === "/api/agent/orders" && request.method === "GET") {
-    const rows = await env.DB.prepare("SELECT o.code,o.title,o.status,o.createdAt,a.commissionCents,a.ruleVersion,CASE WHEN c.state='hold' THEN 'hold' WHEN c.state='refunded' THEN 'refunded' WHEN a.ruleVersion=0 THEN 'unconfigured' WHEN a.commissionCents>o.amountCents THEN 'review' WHEN o.status!='complete' OR o.paidAt IS NULL OR o.completedAt IS NULL THEN 'awaiting' ELSE 'eligible' END AS commissionState FROM agent_order_attribution a JOIN orders o ON o.id=a.orderId LEFT JOIN commission_controls c ON c.orderId=a.orderId WHERE a.agentId=? ORDER BY o.createdAt DESC LIMIT 100").bind(agent.id).all();
+    const rows = await env.DB.prepare("SELECT o.code,o.title,o.status,o.createdAt,a.commissionCents,a.ruleVersion,CASE WHEN c.state='hold' THEN 'hold' WHEN c.state='refunded' THEN 'refunded' WHEN a.ruleVersion=0 THEN 'unconfigured' WHEN a.commissionCents>o.amountCents THEN 'review' WHEN o.status!='complete' OR o.paidAt IS NULL OR o.completedAt IS NULL THEN 'awaiting' WHEN ((MAX(o.paidAt,o.completedAt)+28800000)/86400000+1)*86400000-28800000>? THEN 'pending' ELSE 'matured' END AS commissionState FROM agent_order_attribution a JOIN orders o ON o.id=a.orderId LEFT JOIN commission_controls c ON c.orderId=a.orderId WHERE a.agentId=? ORDER BY o.createdAt DESC LIMIT 100").bind(Date.now(),agent.id).all();
     return json({agentId:agent.id,orders:rows.results},200,{"Cache-Control":"no-store"});
   }
   if (path === "/api/agent/balance" && request.method === "GET") return json({agentId:agent.id,...await agentBalance(env.DB,agent.id,Date.now())});
@@ -395,6 +395,16 @@ async function admin(env: Env, request: Request, path: string) {
     const agents = await env.DB.prepare("SELECT a.id,a.name,a.referralCode,a.status,a.createdAt,COUNT(o.id) AS orderCount,COALESCE(SUM(CASE WHEN o.status='complete' THEN 1 ELSE 0 END),0) AS completedOrderCount FROM agents a LEFT JOIN agent_order_attribution x ON x.agentId=a.id LEFT JOIN orders o ON o.id=x.orderId GROUP BY a.id ORDER BY a.createdAt DESC LIMIT 200").all();
     const rules = await env.DB.prepare("SELECT productKey,amountCents,updatedAt FROM agent_commission_rules ORDER BY productKey").all();
     return json({agents:agents.results,rules:rules.results,products:agentProducts()});
+  }
+  if (path === "/api/admin/agent-orders" && request.method === "GET") {
+    const params = new URL(request.url).searchParams, agentId = params.get("agentId") || "", page = Number(params.get("page") || 0);
+    if (!/^[a-f0-9-]{36}$/i.test(agentId) || !Number.isSafeInteger(page) || page < 0 || page > 10000) throw new HttpError(400, "代理或页码无效");
+    if (!await env.DB.prepare("SELECT id FROM agents WHERE id=?").bind(agentId).first()) throw new HttpError(404, "代理不存在");
+    const rows = await env.DB.prepare(`SELECT o.code,o.title,o.status,o.amountCents,o.target,o.contactEmail,o.createdAt,o.paidAt,o.completedAt,a.commissionCents,a.ruleVersion,
+      CASE WHEN c.state='hold' THEN 'hold' WHEN c.state='refunded' THEN 'refunded' WHEN a.ruleVersion=0 THEN 'unconfigured' WHEN a.commissionCents>o.amountCents THEN 'review' WHEN o.status!='complete' OR o.paidAt IS NULL OR o.completedAt IS NULL THEN 'awaiting' WHEN ((MAX(o.paidAt,o.completedAt)+28800000)/86400000+1)*86400000-28800000>? THEN 'pending' ELSE 'matured' END AS settlement,
+      CASE WHEN o.paidAt IS NOT NULL AND o.completedAt IS NOT NULL THEN ((MAX(o.paidAt,o.completedAt)+28800000)/86400000+1)*86400000-28800000 ELSE NULL END AS availableAt
+      FROM agent_order_attribution a JOIN orders o ON o.id=a.orderId LEFT JOIN commission_controls c ON c.orderId=o.id WHERE a.agentId=? ORDER BY o.createdAt DESC,o.id DESC LIMIT 51 OFFSET ?`).bind(Date.now(),agentId,page*50).all();
+    return json({orders:rows.results.slice(0,50),hasMore:rows.results.length>50,page},200,{"Cache-Control":"no-store"});
   }
   if (["/api/admin/agent-create","/api/admin/agent-status","/api/admin/agent-rule"].includes(path) && request.method === "POST" && !await hasOwnerSession(env,request,adminSession(request))) throw new HttpError(401,"请先完成店主认证");
   if (path === "/api/admin/agent-create" && request.method === "POST") {
