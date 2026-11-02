@@ -17,7 +17,7 @@ type Step = "details" | "notice" | "payment";
 type PaymentMethod = "alipay" | "wechat";
 
 const terms = [
-  { title: "仅质保首次登录", body: "24 小时内仅保障首次登录，首次登录成功后质保失效。首次登录有问题，请保留订单号和截图联系支持。" },
+  { title: "7 天质保", body: "7 天内封号，可以免费换号；请在 8 小时内首次登录验证。有问题请保留订单号和截图联系支持。" },
   { title: "商品内容", body: `${formatMoney(accountPriceCents)} 元包含 1 个 Muse AI 成品账号及该账号的 10 亿 Token，无需另购此额度。` },
   { title: "邮箱交付", body: "店主确认收款后准备成品账号卡密，发送到你填写的邮箱，请核对邮箱地址。" },
   { title: "登录后立即更换邮箱", body: "登录需使用美国 IP；首次登录成功后，请立即在 Muse 内更换为自己的邮箱，并删除旧邮箱。" },
@@ -39,6 +39,7 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
   const [email, setEmail] = useState("");
   const [inviteCode, setInviteCode] = useState("");
   const [tokenPlanId, setTokenPlanId] = useState<string>(tokenPlans[0].id);
+  const [musePlanId, setMusePlanId] = useState<"basic" | "warranty">("warranty");
   const [gptPlanId, setGptPlanId] = useState<string>(gptPlans[0].id);
   const [eligibleConfirmed, setEligibleConfirmed] = useState(false);
   const [stock, setStock] = useState<Record<string, boolean | null>>({});
@@ -50,8 +51,8 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
   const selectedTokenPlan = tokenPlans.find(plan => plan.id === tokenPlanId) || tokenPlans[0];
   const isToken = product === "muse-token";
   const productTitle = product === "gpt" ? `GPT · ${gptPlan.label}` : isToken ? `Muse Token · ${selectedTokenPlan.label}` : accountTitle;
-  const purchaseTerms = product === "gpt" ? gptPlanId === "plus15Day" ? [{ title: "账号有效期", body: "Plus 老号，供货商说明剩余有效期约 20–26 天，实际以账号显示为准；续费或重置次数不保证。" }, { title: "质保与操作限制", body: "供货商提供 15 天质保，质保期内账号失效按其规则处理；无库存可补时可能按剩余质保天数退款。请勿换绑、修改密码或 2FA，否则不再提供质保。" }, { title: "首次登录与使用", body: "供货商说明：发货后 1 小时内首次登录失效可免费更换；使用 1 天内出现降智可申请更换一次，更换后效果不保证。" }, { title: "售后联系", body: "供货商售后时间 11:00–23:00；请联系 692972690@qq.com 咨询处理。" }] : gptPlanId === "plusAccount" ? [{ title: "成品账号", body: "交付账号、密码和 2FA。订阅剩余时间以账号实际显示为准。" }, { title: "时效与售后", body: "请在购买后 20 分钟内完成兑换并检查首次登录；上游对首登售后时限有不同说明，请购买前向售后确认具体范围。" }, { title: "售后联系", body: "如有首次登录问题，请直接联系货源商邮箱 692972690@qq.com，保留北京时间和登录过程录屏。" }] : gptPlanId === "halfPriceAccountOneMonth" ? [{ title: "商品内容", body: "半价资格期限为 1 个月，不是 45 天；账号可更换绑定邮箱。本商品不包含 Plus 订阅，需另行充值。" }, { title: "交付方式", body: "店主核实收款后通过邮箱发送账号资料，请仔细核对收件邮箱。" }] : gptPlanId === "halfPriceTopup" ? [{ title: "使用条件", body: "需先拥有一个月半价资格账号；没有半价资格的账号无法使用。" }, { title: "交付方式", body: "核实收款后通过邮箱发送充值卡密，请按说明自助兑换。" }] : [{ title: "商品内容", body: "菲律宾渠道正价代充，提供卡密供你为自己的账号自助充值。" }, { title: "交付方式", body: "核实收款后通过邮箱发送充值卡密和使用说明，发货不等于充值已完成。" }] : isToken ? tokenTerms : terms;
-  const amountCents = product === "gpt" ? gptPlan.amountCents : isToken ? selectedTokenPlan.amountCents : accountPriceCents;
+  const purchaseTerms = product === "gpt" ? gptPlanId === "plus15Day" ? [{ title: "账号有效期", body: "Plus 老号，供货商说明剩余有效期约 20–26 天，实际以账号显示为准；续费或重置次数不保证。" }, { title: "质保与操作限制", body: "供货商提供 15 天质保，质保期内账号失效按其规则处理；无库存可补时可能按剩余质保天数退款。请勿换绑、修改密码或 2FA，否则不再提供质保。" }, { title: "首次登录与使用", body: "供货商说明：发货后 1 小时内首次登录失效可免费更换；使用 1 天内出现降智可申请更换一次，更换后效果不保证。" }, { title: "售后联系", body: "供货商售后时间 11:00–23:00；请联系 692972690@qq.com 咨询处理。" }] : gptPlanId === "plusAccount" ? [{ title: "成品账号", body: "交付账号、密码和 2FA。订阅剩余时间以账号实际显示为准。" }, { title: "时效与售后", body: "请在购买后 20 分钟内完成兑换并检查首次登录；上游对首登售后时限有不同说明，请购买前向售后确认具体范围。" }, { title: "售后联系", body: "如有首次登录问题，请直接联系货源商邮箱 692972690@qq.com，保留北京时间和登录过程录屏。" }] : gptPlanId === "halfPriceAccountOneMonth" ? [{ title: "商品内容", body: "半价资格期限为 1 个月，不是 45 天；账号可更换绑定邮箱。本商品不包含 Plus 订阅，需另行充值。" }, { title: "交付方式", body: "店主核实收款后通过邮箱发送账号资料，请仔细核对收件邮箱。" }] : gptPlanId === "halfPriceTopup" ? [{ title: "使用条件", body: "需先拥有一个月半价资格账号；没有半价资格的账号无法使用。" }, { title: "交付方式", body: "核实收款后通过邮箱发送充值卡密，请按说明自助兑换。" }] : [{ title: "商品内容", body: "菲律宾渠道正价代充，提供卡密供你为自己的账号自助充值。" }, { title: "交付方式", body: "核实收款后通过邮箱发送充值卡密和使用说明，发货不等于充值已完成。" }] : isToken ? tokenTerms : musePlanId === "basic" ? [{ title: "质保说明", body: "本款没有 7 天质保。首次登录保障期限请联系支持确认。" }, ...terms.slice(1).map(item => item.title === "商品内容" ? { ...item, body: "14 元包含 1 个 Muse AI 成品账号及该账号的 10 亿 Token。" } : item)] : terms;
+  const amountCents = product === "gpt" ? gptPlan.amountCents : isToken ? selectedTokenPlan.amountCents : musePlanId === "basic" ? 1400 : accountPriceCents;
   const feeCents = 0;
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("alipay");
   const [accepted, setAccepted] = useState(false);
@@ -176,7 +177,7 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
 
   function submitDetails(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if ((product === "gpt" && stock[gptPlanId] === false) || (product === "muse" && stock.museAccount === false)) { setError("该商品暂时缺货，请选择其他商品"); return; }
+    if ((product === "gpt" && stock[gptPlanId] === false) || (product === "muse" && musePlanId === "warranty" && stock.museAccount === false)) { setError("该商品暂时缺货，请选择其他商品"); return; }
     if (product === "gpt" && gptPlanId === "halfPriceTopup" && !eligibleConfirmed) { setError("请确认账号具有半价资格"); return; }
     if (isToken && !inviteCode.trim()) {
       setError("请填写需要充值的账号邀请码");
@@ -211,7 +212,7 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
         if (!referralVerified) throw new Error("推广链接暂时无法验证，请检查网络后重试。");
         let referralCode = temporaryReferral.current;
         if (!referralCode) { try { referralCode = storedReferralCode(sessionStorage); } catch { /* Storage may be disabled. */ } }
-        const order = await createStoreOrder({ product, referralCode, planId: isToken ? tokenPlanId : product === "gpt" ? gptPlanId : undefined, eligibleConfirmed,
+        const order = await createStoreOrder({ product, referralCode, planId: isToken ? tokenPlanId : product === "gpt" ? gptPlanId : musePlanId, eligibleConfirmed,
           email: email.trim(), inviteCode: isToken ? inviteCode.trim() : undefined,
           method: paymentMethod, acceptedTerms: true }, orderRequestRef.current);
         setOrders(previous => [order, ...previous.filter(item => item.id !== order.id)]);
@@ -363,14 +364,8 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
                   <p className="muse-field-hint" id="muse-invite-hint">请务必填写并核对邀请码，Token 将充值到对应账号</p>
                 </div>
                 <div className="muse-email-field"><label htmlFor="muse-email">联系邮箱</label><div className="muse-input-wrap"><Mail size={17}/><input id="muse-email" type="email" placeholder="you@example.com" maxLength={254} value={email} onChange={event => setEmail(event.target.value)}/></div><p className="muse-field-hint">用于订单出现问题时联系你</p></div>
-              </> : <><div className="muse-selected-plan">
-                <div className="muse-plan-description">
-                  <span className="muse-selected-circle"><Check size={12} strokeWidth={3}/></span>
-                  <div><strong>成品账号 + 10亿 Token</strong><span>账号与额度一同交付</span></div>
-                </div>
-                <div className="muse-plan-price"><span>¥</span>{formatMoney(accountPriceCents)}<small>一次购买</small></div>
-              </div>
-              {stock.museAccount === false && <div className="muse-token-notice" role="status">此商品暂时缺货，请稍后再来或联系店主。</div>}
+              </> : <><fieldset className="muse-token-plans"><legend>选择账号规格</legend>{([{id: "warranty", label: "7 天质保", description: "7 天内封号免费换号，8 小时内首次登录验证", price: 1800}, {id: "basic", label: "无 7 天质保", description: "首次登录保障期限请联系支持确认", price: 1400}] as const).map(plan => <label key={plan.id} className={musePlanId === plan.id ? "is-selected" : ""}><input type="radio" name="muse-plan" checked={musePlanId === plan.id} onChange={() => { setMusePlanId(plan.id); setAccepted(false); setError(""); }}/><strong>{plan.label} · ¥{formatMoney(plan.price)}</strong><span>{plan.description}</span></label>)}</fieldset>
+              {musePlanId === "warranty" && stock.museAccount === false && <div className="muse-token-notice" role="status">此商品暂时缺货，请选择其他规格或联系店主。</div>}
               <div className="muse-email-field">
                 <label htmlFor="muse-email">收件邮箱</label>
                 <div className={`muse-input-wrap ${error.includes("邮箱") ? "has-error" : ""}`}>

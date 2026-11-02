@@ -23,11 +23,11 @@ test("订单、收款核实和交付的数据库流程", async t => {
     if (new URL(request.url).hostname === "www.16688.com.cn") {
       const path = new URL(request.url).pathname;
       const params = await request.json();
-      if (path.endsWith("/quotePrice")) return Response.json({ code: 1, data: { balance_enough: supplierBalanceEnough, available_quantity: supplierStock, total_amount: params.goods_no === "G85161614" ? params.quantity * 1.03 : params.goods_no === "G43844575" ? 4.12 : params.goods_no === "G39595340" ? 11.31 : params.goods_no === "G97316889" ? 60.65 : 110 } });
+      if (path.endsWith("/quotePrice")) return Response.json({ code: 1, data: { balance_enough: supplierBalanceEnough, available_quantity: supplierStock, total_amount: params.goods_no === "G85161614" ? params.quantity * 1.03 : ["G37376813", "G43844575"].includes(params.goods_no) ? 4.12 : params.goods_no === "G39595340" ? 11.31 : params.goods_no === "G97316889" ? 60.65 : 110 } });
       if (path.endsWith("/create")) { supplierGoods = params.goods_no; supplierQuantity = params.quantity; supplierRemark = params.remark; supplierPurchases++; if (supplierTimeout) throw new Error("simulated network failure"); return Response.json({ code: 1, data: { trade_no: "TEST-16688" } }); }
       if (path.endsWith("/query") && supplierGoods === "G85161614") return Response.json({code:1,data:{status:4,cards:Array.from({length:supplierQuantity},(_,i)=>({code:`TEST-${i}`}))}});
-      if (path.endsWith("/query") && params.trade_no === "INVENTORY-ORDER") return Response.json({ code: 1, data: { goods_no: "G43844575", status: 4, cards: [{ code: "stock@example.com—pass--https://example.com/code" }], instruction: "说明" } });
-      if (path.endsWith("/query")) return Response.json({ code: 1, data: { status: 4, cards: [{ code: supplierGoods === "G43844575" ? "muse@example.com—mailpass--https://example.com/code" : "TEST-CARD" }], instruction: "<h3>使用说明</h3><p>打开 <a href=\"https://example.com/redeem\">兑换地址</a></p>" } });
+      if (path.endsWith("/query") && params.trade_no === "INVENTORY-ORDER") return Response.json({ code: 1, data: { goods_no: "G37376813", status: 4, cards: [{ code: "stock@example.com—pass--https://example.com/code" }], instruction: "说明" } });
+      if (path.endsWith("/query")) return Response.json({ code: 1, data: { status: 4, cards: [{ code: supplierGoods === "G37376813" ? "muse@example.com—mailpass--https://example.com/code" : "TEST-CARD" }], instruction: "<h3>使用说明</h3><p>打开 <a href=\"https://example.com/redeem\">兑换地址</a></p>" } });
       throw new Error("unexpected supplier request");
     }
     assert.equal(new URL(request.url).hostname, "mail.test");
@@ -106,7 +106,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal((await call("/api/orders/lookup", order)).data.status, "complete");
     const audit = await db.prepare("SELECT * FROM audit WHERE orderId=?").bind(order.id).all(); assert.equal(audit.results.length, 2);
     const account = (await call("/api/orders", { product: "muse", email: "buyer@example.com", method: "alipay", acceptedTerms: true, requestId: randomUUID() })).data;
-    assert.equal(account.amountCents, 1400);
+    assert.equal(account.amountCents, 1800);
     assert.equal(account.title, "Muse AI · 成品账号 + 10亿 Token");
     await call("/api/admin/update", { id: account.id, action: "confirm", checked: true, reference: "TEST-ALIPAY-002" }, session);
     assert.equal((await call("/api/admin/update", { id: account.id, action: "complete", checked: true }, session)).status, 400);
@@ -274,7 +274,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
     await call("/api/admin/update", { id: account.id, action: "confirm" }, session);
     const before = supplierPurchases;
     assert.equal((await call("/api/admin/supplier-deliver", { id: account.id }, session)).status, 200);
-    assert.equal(supplierPurchases, before + 1); assert.equal(supplierGoods, "G43844575");
+    assert.equal(supplierPurchases, before + 1); assert.equal(supplierGoods, "G37376813");
     const mail = sentMessages.find(item => item.to === "muse-buyer@example.com" && item.text.includes("muse@example.com"));
     assert.ok(mail); assert.match(mail.text, /Muse 登录账号/); assert.match(mail.text, /邮箱密码：mailpass/); assert.match(mail.text, /邮箱验证码获取地址/);
     assert.equal((await call("/api/admin/send-delivery", { id: account.id, card: "OTHER" }, session)).status, 409);
@@ -285,7 +285,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal((await call("/api/admin/supplier-deliver", { id: manual.id }, session)).status, 409);
     assert.equal(supplierPurchases, before + 1);
     const catalog = await call("/api/admin/catalog", undefined, session);
-    assert.ok(catalog.data.products.some(item => item.supplier === "G43844575"));
+    assert.ok(catalog.data.products.some(item => item.supplier === "G37376813"));
   });
 
   await t.test("20 元 Plus 成品账号使用指定货源及售后邮箱", async () => {
@@ -503,6 +503,35 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.ok(audit.results.some(event=>event.action==="create"));
     assert.ok(audit.results.some(event=>event.action==="rule" && event.amountCents===400));
     assert.doesNotMatch(JSON.stringify(audit.results),/ExamplePassword|passwordHash|salt/);
+  });
+
+  await t.test("Muse 两种规格的库存互不混用", async () => {
+    await db.prepare("DELETE FROM rate_limits").run();
+    for (const [id, product] of [["basic-stock", "muse-basic-43844575"], ["warranty-stock", "muse-7day"]]) {
+      await db.prepare("INSERT INTO inventory_cards(id,product,card,cardHash,tradeNo,createdAt) VALUES(?,?,?,?,?,?)").bind(id, product, id, id, id, Date.now()).run();
+    }
+    for (const [planId, expected] of [["warranty", "warranty-stock"], ["basic", "basic-stock"]]) {
+      const created = (await call("/api/orders", { product: "muse", planId, email: `stock-${planId}@example.com`, method: "alipay", acceptedTerms: true, requestId: randomUUID() })).data;
+      await call("/api/admin/update", { id: created.id, action: "confirm" }, session);
+      assert.equal((await call("/api/admin/supplier-deliver", { id: created.id }, session)).status, 200);
+      const task = await db.prepare("SELECT inventoryId FROM supplier_fulfillment WHERE orderId=?").bind(created.id).first();
+      assert.equal(task.inventoryId, expected);
+    }
+  });
+
+  await t.test("Muse 两种规格各自定价并采购对应货源", async () => {
+    await db.prepare("DELETE FROM rate_limits").run();
+    for (const [planId, amount, goods] of [["basic", 1400, "G43844575"], ["warranty", 1800, "G37376813"]]) {
+      const input = { product: "muse", planId, email: `${planId}@example.com`, method: "alipay", acceptedTerms: true, requestId: randomUUID() };
+      const created = await call("/api/orders", input);
+      assert.equal(created.status, 201); assert.equal(created.data.amountCents, amount);
+      assert.equal((await call("/api/orders", { ...input, planId: planId === "basic" ? "warranty" : "basic" })).status, 409);
+      await call("/api/admin/update", { id: created.data.id, action: "confirm" }, session);
+      assert.equal((await call("/api/admin/supplier-deliver", { id: created.data.id }, session)).status, 200);
+      assert.equal(supplierGoods, goods);
+      const email = sentMessages.find(item => item.to === `${planId}@example.com` && item.purpose === "buyer_delivery");
+      assert.ok(email); assert.match(email.text, planId === "basic" ? /不含 7 天质保/ : /7 天内封号/);
+    }
   });
 
 });
