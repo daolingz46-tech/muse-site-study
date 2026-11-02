@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { Eye, EyeOff } from "lucide-react";
 import { formatMoney } from "./catalog";
 import { storeApiUrl } from "./store-api";
 
@@ -173,6 +174,7 @@ function RuleEditor({ product, rule, disabled, save }: { product: Product; rule?
 export function AgentManagement({ api }: { api: Api }) {
   const [data, setData] = useState<AgentData | null>(null);
   const [name, setName] = useState(""), [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState(""), [notice, setNotice] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const load = useCallback(async () => {
@@ -188,7 +190,7 @@ export function AgentManagement({ api }: { api: Api }) {
     setBusy(true); setError(""); setNotice("");
     try {
       const created = await api("agent-create", { name: name.trim(), password }) as { name: string; referralCode: string };
-      setPassword(""); setName(""); setCreateOpen(false);
+      setPassword(""); setShowPassword(false); setName(""); setCreateOpen(false);
       setNotice(`已创建 ${created.name}。请在下方复制推广链接；代理登录账号为推广码，密码由你安全告知代理。`);
       await load();
     } catch (cause) { await load(); setError(agentActionError(cause, "创建结果未确认，请先检查上方代理列表，再决定是否重试。")); }
@@ -221,10 +223,10 @@ export function AgentManagement({ api }: { api: Api }) {
     {data && <>
       <div className="wb-agent-summary"><div><span>显示代理数</span><strong>{agents.length}</strong></div><div><span>显示启用数</span><strong>{agents.filter(a => a.status === "active").length}</strong></div><div><span>显示代理订单</span><strong>{agents.reduce((sum,a) => sum + (a.orderCount || 0), 0)}</strong></div><div><span>显示已完成</span><strong>{agents.reduce((sum,a) => sum + (a.completedOrderCount || 0), 0)}</strong></div></div>
       <p className="wb-agent-help">统计只包含当前列表中的代理，最多显示 200 位；订单数量不代表可提现金额。</p>
-      <div className="wb-agent-section-title"><h3>代理列表</h3><button className="wb-primary" type="button" onClick={() => { setCreateOpen(!createOpen); setError(""); }} disabled={busy}>{createOpen ? "取消创建" : "创建代理"}</button></div>
+      <div className="wb-agent-section-title"><h3>代理列表</h3><button className="wb-primary" type="button" onClick={() => { setCreateOpen(!createOpen); setShowPassword(false); setError(""); }} disabled={busy}>{createOpen ? "取消创建" : "创建代理"}</button></div>
       {createOpen && <form className="wb-agent-create" onSubmit={create}>
         <label>代理名称<input value={name} onChange={e => setName(e.target.value)} maxLength={80} required autoComplete="off"/></label>
-        <label>设置登录密码<input type="password" value={password} onChange={e => setPassword(e.target.value)} minLength={12} maxLength={256} required autoComplete="new-password"/></label>
+        <div><label htmlFor="new-agent-password">设置登录密码</label><div className="wb-agent-password"><input id="new-agent-password" type={showPassword ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)} minLength={12} maxLength={256} required autoComplete="new-password"/><button type="button" aria-label={showPassword ? "隐藏密码" : "显示密码"} aria-pressed={showPassword} onClick={() => setShowPassword(value => !value)}>{showPassword ? <EyeOff size={18}/> : <Eye size={18}/>}</button></div></div>
         <p>密码至少 12 位。代理登录账号为创建后显示的推广码；密码不会再次显示，请安全交给代理。</p>
         <button className="wb-primary" disabled={busy}>{busy ? "处理中…" : "确认创建"}</button>
       </form>}
