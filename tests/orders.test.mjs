@@ -24,7 +24,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
     if (new URL(request.url).hostname === "www.16688.com.cn") {
       const path = new URL(request.url).pathname;
       const params = await request.json();
-      if (path.endsWith("/quotePrice")) return Response.json({ code: 1, data: { balance_enough: supplierBalanceEnough, available_quantity: emptyGoods.has(params.goods_no) ? 0 : supplierStock, total_amount: params.goods_no === "G85161614" ? params.quantity * 1.03 : ["G88655555", "G75777360"].includes(params.goods_no) ? 3.10 : ["G37376813", "G43844575"].includes(params.goods_no) ? 4.12 : params.goods_no === "G39595340" ? 11.31 : params.goods_no === "G97316889" ? 60.65 : 110 } });
+      if (path.endsWith("/quotePrice")) return Response.json({ code: 1, data: { balance_enough: supplierBalanceEnough, available_quantity: emptyGoods.has(params.goods_no) ? 0 : supplierStock, total_amount: params.goods_no === "G85161614" ? params.quantity * 1.03 : params.goods_no === "G17614190" ? 58.5 : ["G88655555", "G75777360"].includes(params.goods_no) ? 3.10 : ["G37376813", "G43844575"].includes(params.goods_no) ? 4.12 : params.goods_no === "G39595340" ? 11.31 : params.goods_no === "G97316889" ? 60.65 : 110 } });
       if (path.endsWith("/create")) { supplierGoods = params.goods_no; supplierQuantity = params.quantity; supplierRemark = params.remark; supplierPurchases++; if (supplierTimeout) throw new Error("simulated network failure"); return Response.json({ code: 1, data: { trade_no: "TEST-16688" } }); }
       if (path.endsWith("/query") && params.trade_no === "INVENTORY-ORDER") return Response.json({ code: 1, data: { goods_no: "G37376813", status: 4, cards: [{ code: "stock@example.com—pass--https://example.com/code" }], instruction: "说明" } });
       if (path.endsWith("/query") && params.trade_no === "GPT-STOCK") return Response.json({code:1,data:{goods_no:"G88655555",status:4,cards:[{code:"gpt-stock-card"}],instruction:"供应商原说明"}});
@@ -385,6 +385,13 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.notEqual(first.id,second.id);
   });
 
+  await t.test("半价代充使用新货源及其说明", async () => {
+    const o=(await call("/api/orders",{product:"gpt",planId:"halfPriceTopup",email:"topup-new@example.com",method:"wechat",eligibleConfirmed:true,acceptedTerms:true,requestId:randomUUID()})).data;
+    await call("/api/admin/update",{id:o.id,action:"confirm"},session);
+    const quote=(await call("/api/admin/supplier-preview",{id:o.id},session)).data;assert.equal(quote.goodsNo,"G17614190");
+    assert.equal((await call("/api/admin/supplier-deliver",{id:o.id,expectedGoodsNo:quote.goodsNo,expectedCents:5850},session)).status,200);
+    assert.equal(supplierGoods,"G17614190");const mail=sentMessages.find(x=>x.to==="topup-new@example.com");assert.match(mail.text,/Free 状态/);assert.match(mail.text,/example.com\/redeem/);assert.doesNotMatch(mail.text,/shuwang\.space/);
+  });
   await t.test("统一库存按货源编号保存并对对应商品优先发货", async () => {
     const imported=await call("/api/admin/inventory-import",{tradeNo:"GPT-STOCK"},session);assert.equal(imported.status,200);assert.equal(imported.data.linked,true);
     const unknown=await call("/api/admin/inventory-import",{tradeNo:"OTHER-STOCK"},session);assert.equal(unknown.status,200);assert.equal(unknown.data.linked,false);
