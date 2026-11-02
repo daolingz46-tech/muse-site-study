@@ -1,6 +1,6 @@
 {
   "name": "muse-workbench-desktop",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "description": "Muse 店主工作台 Windows 桌面版",
   "main": "main.cjs",
@@ -30,7 +30,9 @@
       "target": [
         {
           "target": "portable",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "artifactName": "Muse-店主工作台-${version}-${arch}.${ext}"
