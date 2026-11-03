@@ -4,14 +4,14 @@ export const MUSE_BASIC_SUPPLIER = { goodsNo: "G43844575", priceCents: 1400 } as
 export const MUSE_ACCOUNT_SUPPLIER = { goodsNo: "G37376813", priceCents: 1800 } as const;
 export const GPT_SUPPLIER_PRODUCTS = {
   halfPriceAccount: { goodsNo: "G26126458", priceCents: 1500, title: "GPT · 两个月半价资格账号" },
-  halfPriceAccountOneMonth: { goodsNo: "G88655555", priceCents: 1500, title: "GPT · 一个月半价资格账号" },
+  halfPriceAccountOneMonth: { goodsNo: "G95786160", priceCents: 1500, title: "GPT · 一个月半价资格账号" },
   halfPriceTopup: { goodsNo: "G17614190", priceCents: 7500, title: "GPT · 一个月半价代充" },
   philippinesTopup: { goodsNo: "G19335525", priceCents: 12800, title: "GPT · 菲律宾正价代充" },
   plusAccount: { goodsNo: "G39595340", priceCents: 2000, title: "GPT · Plus 成品账号" },
   plus15Day: { goodsNo: "G97316889", priceCents: 7200, title: "GPT · Plus 老号（15 天质保）" },
 } as const;
 // Only compatible account products are eligible; unknown or failing quotes never trigger fallback.
-export const SUPPLIER_BACKUPS: Record<string, readonly string[]> = { halfPriceAccountOneMonth: ["G75777360"] };
+export const SUPPLIER_BACKUPS: Record<string, readonly string[]> = { halfPriceAccountOneMonth: ["G88655555", "G75777360"] };
 type Parameter = string | number | boolean | null | Parameter[] | { [key: string]: Parameter };
 
 function ordered(value: Parameter): Parameter {
