@@ -200,14 +200,14 @@ test("订单、收款核实和交付的数据库流程", async t => {
     const videoStart = await call("/api/admin/delivery-file/start", { orderId: account.id, name: "video.mp4", mime: "video/mp4", size: video.length }, adminCookie);
     const uploadPart = part => mf.dispatchFetch(`https://shop.example/api/admin/delivery-file/${videoStart.data.id}/${part}`, { method: "POST", headers: { Origin: "https://shop.example", Cookie: adminCookie, "Content-Type": "application/octet-stream" }, body: video.slice(part * videoStart.data.chunkBytes, (part + 1) * videoStart.data.chunkBytes) });
     assert.equal((await uploadPart(0)).status, 200);
-    assert.equal((await call("/api/admin/send-delivery", { id: account.id, card: "VIDEO", fileIds: [videoStart.data.id] }, adminCookie)).status, 400);
+    assert.equal((await call("/api/admin/send-delivery", { id: account.id, card: "VIDEO", fileIds: [videoStart.data.id], confirmResend:true }, adminCookie)).status, 400);
     assert.equal((await uploadPart(1)).status, 200);
-    assert.equal((await call("/api/admin/send-delivery", { id: account.id, card: "VIDEO", fileIds: [videoStart.data.id] }, adminCookie)).status, 200);
+    assert.equal((await call("/api/admin/send-delivery", { id: account.id, card: "VIDEO", fileIds: [videoStart.data.id], confirmResend:true }, adminCookie)).status, 200);
     const videoMail = sentMessages.find(m => m.attachments?.some(file => file.name === "video.mp4"));
     const downloaded = await mf.dispatchFetch(videoMail.attachments[0].url);
     assert.equal(downloaded.status, 200);
     assert.deepEqual(new Uint8Array(await downloaded.arrayBuffer()), video);
-    assert.equal((await call("/api/admin/send-delivery", { id: account.id, card: "CARD-TEST-AGAIN", includeTutorial: true, fileIds: [] }, adminCookie)).status, 200);
+    assert.equal((await call("/api/admin/send-delivery", { id: account.id, card: "CARD-TEST-AGAIN", includeTutorial: true, fileIds: [], confirmResend:true }, adminCookie)).status, 200);
     assert.equal((await db.prepare("SELECT sendCount FROM delivery_emails WHERE orderId=?").bind(account.id).first()).sendCount, 3);
     const delivered = (await call("/api/orders/lookup", account)).data;
     assert.equal(delivered.status, "complete"); assert.equal(delivered.delivery.method, "email");
@@ -293,6 +293,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
     const mail = sentMessages.find(item => item.to === "muse-buyer@example.com" && item.text.includes("muse@example.com"));
     assert.ok(mail); assert.match(mail.text, /Muse 登录账号/); assert.match(mail.text, /邮箱密码：mailpass/); assert.match(mail.text, /邮箱验证码获取地址/);
     assert.equal((await call("/api/admin/send-delivery", { id: account.id, card: "OTHER" }, session)).status, 409);
+    const resend=await call("/api/admin/send-delivery",{id:account.id,card:"这是更新后的教程",includeTutorial:false,confirmResend:true},session);assert.equal(resend.status,200);assert.equal(supplierPurchases,before+1);assert.ok(sentMessages.some(x=>x.to==="muse-buyer@example.com" && x.text.includes("这是更新后的教程")));
     assert.equal((await call("/api/admin/supplier-deliver", { id: account.id }, session)).status, 409);
     const manual = (await call("/api/orders", { product: "muse", email: "manual@example.com", method: "alipay", acceptedTerms: true, requestId: randomUUID() })).data;
     await call("/api/admin/update", { id: manual.id, action: "confirm" }, session);

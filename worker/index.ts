@@ -946,12 +946,14 @@ async function admin(env: Env, request: Request, path: string) {
   }
   if (path === "/api/admin/send-delivery" && request.method === "POST") {
     const input = await body(request), id = str(input.id, 64), card = str(input.card, 4000);
-    if (!card) throw new HttpError(400, "请粘贴卡密内容");
     const order = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(id).first<Row>();
     if (!order || !["muse", "gpt"].includes(order.product)) throw new HttpError(404, "未找到可邮件交付的订单");
     if (!["processing", "complete"].includes(order.status)) throw new HttpError(409, "请先核实收款");
+    const resend = order.status === "complete";
+    if (resend && input.confirmResend !== true) throw new HttpError(409,"请确认这是给已交付订单补发邮件");
+    if (!resend && !card) throw new HttpError(400,"请粘贴卡密内容");
     let instructions = "";
-    if (order.product === "gpt") {
+    if (order.product === "gpt" && !resend) {
       const goodsNo = str(input.goodsNo, 30);
       if (!inventoryProducts(order).includes(`gpt:${goodsNo}`)) throw new HttpError(400, "请选择此商品对应的实际采购货源");
       instructions = goodsNo === "G88230690" ? gmailBackupGuide : goodsNo === "G30430004" ? gmailAccountGuide : goodsNo === "G94215456" ? plus15NewGuide : goodsNo === "G39595340" ? plusAccountGuide : goodsNo === "G42078548" ? freeAccountGuide : goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G88655555" ? qualificationGuide : str(input.instructions, 2000);
@@ -966,6 +968,7 @@ async function admin(env: Env, request: Request, path: string) {
       if (!file || file.uploadedBytes !== file.size) throw new HttpError(400, "附件尚未上传完成");
       files.push(file);
     }
+    if (resend && !card && !files.length && !(order.product === "muse" && input.includeTutorial !== false)) throw new HttpError(400,"请填写教程或选择附件后再发送");
     if (files.reduce((sum, file) => sum + file.size, 0) > maxMailBytes) throw new HttpError(413, "单封邮件附件合计不能超过 20 MB");
     if (files.length && !await hasAttachmentDelivery(env)) throw new HttpError(503, "请先更新 Google 邮件脚本，才能发送附件");
     const tutorial = order.product !== "muse" || input.includeTutorial === false ? null : await env.DB.prepare("SELECT title,blocks FROM tutorials WHERE id='muse-account'").first<{ title: string; blocks: string }>();
@@ -974,11 +977,11 @@ async function admin(env: Env, request: Request, path: string) {
       ? `<p style="white-space:pre-wrap">${escapeHtml(block.content)}</p>`
       : `<figure style="margin:18px 0"><img src="${block.url}" alt="${escapeHtml(block.caption || "教程图片")}" style="max-width:100%;height:auto;border-radius:8px"><figcaption>${escapeHtml(block.caption)}</figcaption></figure>`).join("");
     const tutorialText = blocks.map(block => block.type === "text" ? block.content : `${block.caption || "教程图片"}：${block.url}`).join("\n\n");
-    const { html, text } = deliveryEmail({ title: order.title, code: order.code, card, instructions, extraHtml: tutorial && blocks.length ? `<h3>${escapeHtml(tutorial.title)}</h3>${tutorialHtml}` : "", extraText: tutorial && blocks.length ? `${tutorial.title}\n${tutorialText}` : "" });
+    const { html, text } = deliveryEmail({ title: order.title, code: order.code, card: card || "请查看下方教程或附件。", instructions, extraHtml: tutorial && blocks.length ? `<h3>${escapeHtml(tutorial.title)}</h3>${tutorialHtml}` : "", extraText: tutorial && blocks.length ? `${tutorial.title}\n${tutorialText}` : "" });
     const previous = await env.DB.prepare("SELECT status FROM delivery_emails WHERE orderId=?").bind(order.id).first<{ status: string }>();
     const claimed = previous
-      ? await env.DB.prepare("UPDATE delivery_emails SET status='sending' WHERE orderId=? AND status='sent'").bind(order.id).run()
-      : await env.DB.prepare("INSERT OR IGNORE INTO delivery_emails(orderId,status,createdAt) SELECT ?,'sending',? WHERE NOT EXISTS (SELECT 1 FROM supplier_fulfillment WHERE orderId=?)").bind(order.id, Date.now(), order.id).run();
+      ? await env.DB.prepare(resend ? "UPDATE delivery_emails SET status='sending' WHERE orderId=? AND status IN ('sent','external','unknown')" : "UPDATE delivery_emails SET status='sending' WHERE orderId=? AND status='sent'").bind(order.id).run()
+      : await env.DB.prepare(resend ? "INSERT OR IGNORE INTO delivery_emails(orderId,status,createdAt) VALUES(?,'sending',?)" : "INSERT OR IGNORE INTO delivery_emails(orderId,status,createdAt) SELECT ?,'sending',? WHERE NOT EXISTS (SELECT 1 FROM supplier_fulfillment WHERE orderId=?)").bind(...(resend ? [order.id,Date.now()] : [order.id,Date.now(),order.id])).run();
     if (!claimed.meta.changes) throw new HttpError(409, "已有采购、发货或待核查记录，请先核查订单和发件箱，勿重复发货");
     const historyId = crypto.randomUUID();
     await env.DB.prepare("INSERT INTO delivery_history(id,orderId,text,state,createdAt) VALUES(?,?,?,'sending',?)").bind(historyId, order.id, text, Date.now()).run();
@@ -993,9 +996,9 @@ async function admin(env: Env, request: Request, path: string) {
       env.DB.prepare("UPDATE delivery_history SET state='sent' WHERE id=?").bind(historyId),
       env.DB.prepare("UPDATE delivery_emails SET status='sent',sentAt=?,sendCount=sendCount+1 WHERE orderId=? AND status='sending'").bind(now, order.id),
       env.DB.prepare("UPDATE orders SET status='complete',completedAt=COALESCE(completedAt,?),delivery=?,updatedAt=? WHERE id=? AND status IN ('processing','complete')").bind(now, JSON.stringify({ method: "email", sentAt: now }), now, order.id),
-      env.DB.prepare("INSERT INTO audit(orderId,action,createdAt) VALUES(?,?,?)").bind(order.id, previous ? "email_redelivery" : "email_delivery", now),
+      env.DB.prepare("INSERT INTO audit(orderId,action,createdAt) VALUES(?,?,?)").bind(order.id, resend ? "email_redelivery" : "email_delivery", now),
     ]);
-    return json({ ok: true, sentAt: now, to: order.target, resent: Boolean(previous) });
+    return json({ ok: true, sentAt: now, to: order.target, resent: resend || Boolean(previous) });
   }
   if (path === "/api/admin/confirm-external-delivery" && request.method === "POST") {
     const input = await body(request), id = str(input.id, 64), note = str(input.note, 500);
