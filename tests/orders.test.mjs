@@ -663,4 +663,13 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal(cost.goodsNo,"G75777360");assert.equal(cost.costCents,425);
   });
 
+  await t.test("商品货源详情按档位询价且仅管理员可访问", async () => {
+    assert.equal((await call("/api/admin/catalog-suppliers",{key:"halfPriceAccountOneMonth"})).status,401);
+    const result=await call("/api/admin/catalog-suppliers",{key:"halfPriceAccountOneMonth"},session);
+    assert.equal(result.status,200);assert.deepEqual(result.data.items.map(x=>x.goodsNo),["G95786160","G88655555","G75777360"]);assert.equal(result.data.items[0].total,3.1);
+    const token=await call("/api/admin/catalog-suppliers",{key:"token:300亿 Token"},session);
+    assert.equal(token.status,200);assert.equal(token.data.quantity,30);assert.equal(Math.round(token.data.items[0].total*100),3090);
+    assert.equal((await call("/api/admin/catalog-suppliers",{key:"not-valid"},session)).status,400);
+  });
+
 });

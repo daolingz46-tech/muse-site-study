@@ -524,12 +524,31 @@ async function admin(env: Env, request: Request, path: string) {
   if (path === "/api/admin/catalog" && request.method === "GET") {
     const sales = await env.DB.prepare("SELECT product,title,supplierPlan,COUNT(*) AS sales FROM orders WHERE paidAt IS NOT NULL GROUP BY product,title,supplierPlan").all<{product:string;title:string;supplierPlan:string|null;sales:number}>();
     const products = [
-      { category: "Muse", title: `${accountTitle} · 7 天质保`, supplier: MUSE_ACCOUNT_SUPPLIER.goodsNo, sales: sales.results.filter(x => x.product === "muse" && x.supplierPlan === "museWarranty").reduce((n,x) => n + x.sales,0) },
-      { category: "Muse", title: `${accountTitle} · 基础款`, supplier: MUSE_BASIC_SUPPLIER.goodsNo, sales: sales.results.filter(x => x.product === "muse" && x.supplierPlan !== "museWarranty").reduce((n,x) => n + x.sales,0) },
-      ...tokenPlans.map(p => ({ category: "Muse Token", title: `Muse Token · ${p.label}`, supplier: "G85161614", sales: sales.results.filter(x => x.product === "muse-token" && x.title === `Muse Token · ${p.label}`).reduce((n,x) => n + x.sales,0) })),
-      ...Object.entries(GPT_SUPPLIER_PRODUCTS).filter(([key]) => key !== "halfPriceAccount").map(([key,p]) => ({ category: "GPT", title: p.title, supplier: p.goodsNo, sales: sales.results.filter(x => x.product === "gpt" && x.supplierPlan === key).reduce((n,x) => n + x.sales,0) })),
+      { key:"museWarranty", category: "Muse", title: `${accountTitle} · 7 天质保`, supplier: MUSE_ACCOUNT_SUPPLIER.goodsNo, sales: sales.results.filter(x => x.product === "muse" && x.supplierPlan === "museWarranty").reduce((n,x) => n + x.sales,0) },
+      { key:"museBasic", category: "Muse", title: `${accountTitle} · 基础款`, supplier: MUSE_BASIC_SUPPLIER.goodsNo, sales: sales.results.filter(x => x.product === "muse" && x.supplierPlan !== "museWarranty").reduce((n,x) => n + x.sales,0) },
+      ...tokenPlans.map(p => ({ key:`token:${p.label}`, category: "Muse Token", title: `Muse Token · ${p.label}`, supplier: "G85161614", sales: sales.results.filter(x => x.product === "muse-token" && x.title === `Muse Token · ${p.label}`).reduce((n,x) => n + x.sales,0) })),
+      ...Object.entries(GPT_SUPPLIER_PRODUCTS).filter(([key]) => key !== "halfPriceAccount").map(([key,p]) => ({ key, category: "GPT", title: p.title, supplier: p.goodsNo, sales: sales.results.filter(x => x.product === "gpt" && x.supplierPlan === key).reduce((n,x) => n + x.sales,0) })),
     ];
     return json({ products });
+  }
+  if (path === "/api/admin/catalog-suppliers" && request.method === "POST") {
+    const key = str((await body(request)).key, 80);
+    let goods: readonly string[] = [], quantity = 1;
+    if (key === "museWarranty") goods = [MUSE_ACCOUNT_SUPPLIER.goodsNo];
+    else if (key === "museBasic") goods = [MUSE_BASIC_SUPPLIER.goodsNo];
+    else if (key.startsWith("token:")) { const plan = tokenPlans.find(p => `token:${p.label}` === key); if (plan) { goods = ["G85161614"]; quantity = Number(plan.label.match(/^(\d+)/)?.[1]) / 10; } }
+    else if (Object.hasOwn(GPT_SUPPLIER_PRODUCTS,key) && key !== "halfPriceAccount") { const plan = GPT_SUPPLIER_PRODUCTS[key as keyof typeof GPT_SUPPLIER_PRODUCTS]; goods = [plan.goodsNo, ...(SUPPLIER_BACKUPS[key] || [])]; }
+    if (!goods.length || !Number.isInteger(quantity) || quantity < 1) throw new HttpError(400,"商品不存在");
+    const names: Record<string,string> = {G95786160:"huaiyesu@gmail.com",G88655555:"lzz_ai小铺",G75777360:"原货源商（名称待核实）",G17614190:"AI源头",G37376813:"阿度AI账号批发",G43844575:"小白ai一手货源",G85161614:"海外批发"};
+    const items = await Promise.all(goods.map(async (goodsNo,index) => {
+      const entry = {goodsNo, name:names[goodsNo] || "名称待核实", priority:index === 0 ? "首选" : `备用 ${index}`, unitPrice:null as number|null, total:null as number|null, stock:null as number|null};
+      if (!env.SUPPLIER_APP_ID || !env.SUPPLIER_SECRET) return entry;
+      try { const result = await supplierRequest({appId:env.SUPPLIER_APP_ID,secret:env.SUPPLIER_SECRET},"purchase","quotePrice",{goods_no:goodsNo,quantity}) as {code:number;data?:{unit_price?:number;total_amount?:number;available_quantity?:number}}; if(result.code !== 1 || !result.data) return entry;
+        const unit=result.data.unit_price, total=result.data.total_amount, stock=result.data.available_quantity;
+        return {...entry,unitPrice:typeof unit === "number" && Number.isFinite(unit) && unit >= 0 ? unit : null,total:typeof total === "number" && Number.isFinite(total) && total >= 0 ? total : null,stock:typeof stock === "number" && Number.isFinite(stock) && stock >= 0 ? stock : null};
+      } catch { return entry; }
+    }));
+    return json({quantity,items});
   }
   if (path === "/api/admin/email-bridge-match" && request.method === "POST") {
     const candidate = str((await body(request)).url, 500);
