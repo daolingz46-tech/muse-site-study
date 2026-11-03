@@ -296,13 +296,14 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.ok(catalog.data.products.some(item => item.supplier === "G37376813"));
   });
 
-  await t.test("20 元 Plus 成品账号使用指定货源及售后邮箱", async () => {
+  await t.test("40 元 Plus 成品账号使用指定货源及售后邮箱", async () => {
     await db.prepare("DELETE FROM rate_limits").run();
     const account = (await call("/api/orders", { product: "gpt", planId: "plusAccount", email: "plus@example.com", method: "alipay", acceptedTerms: true, requestId: randomUUID() })).data;
-    assert.equal(account.amountCents, 2000);
+    assert.equal(account.amountCents, 4000);
     await call("/api/admin/update", { id: account.id, action: "confirm" }, session);
     assert.equal((await call("/api/admin/supplier-deliver", { id: account.id }, session)).status, 200);
     assert.equal(supplierGoods, "G39595340");
+    const plusMail=sentMessages.findLast(x=>x.to==="plus@example.com");assert.match(plusMail.text,/20 分钟/);assert.match(plusMail.text,/首次无法登录/);assert.match(plusMail.text,/2fa.vip/);
     const mail = sentMessages.find(item => item.to === "plus@example.com" && item.text.includes("TEST-CARD"));
     assert.ok(mail); assert.match(mail.text, /692972690@qq\.com/); assert.match(mail.text, /源头订单编号：TEST-16688/); assert.match(mail.text, /联系售后时，请提供以上源头订单编号/); assert.match(mail.html, /源头订单编号：/); assert.match(mail.html, /TEST-16688/); assert.doesNotMatch(mail.text, /3557785836/);
     const catalog = await call("/api/admin/catalog", undefined, session);
