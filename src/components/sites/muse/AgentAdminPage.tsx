@@ -24,6 +24,8 @@ export function AgentAdminPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [pendingPayouts,setPendingPayouts]=useState(0);
+  useEffect(()=>{if(state!=="ready")return;let active=true;const refresh=()=>{void api("withdrawal-count").then(value=>{if(active)setPendingPayouts((value as {count:number}).count)}).catch(()=>{});};refresh();const timer=window.setInterval(refresh,10000);return()=>{active=false;window.clearInterval(timer);};},[state]);
   useEffect(() => { let active = true; void api("agents").then(() => { if (active) setState("ready"); }).catch(cause => { if (active) { setState("login"); if (!(cause instanceof AdminError && cause.status === 401)) setError("无法连接工作台，请检查网络后重试。"); } }); return () => { active = false; }; }, []);
   async function login(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); if (busy) return; setBusy(true); setError("");
@@ -43,7 +45,7 @@ export function AgentAdminPage() {
     {error && <p role="alert" className="wb-error">{error}</p>}<Link href="/admin/">返回订单工作台</Link>
   </form></main>;
   return <main className="workbench"><header className="wb-header"><div><p className="wb-eyebrow">卡密大王 / 管理中心</p><h1>代理管理</h1></div><nav><Link href="/">打开商店</Link><button type="button" disabled={busy} onClick={() => void logout()}><LogOut size={15}/>退出</button></nav></header>
-    <nav className="wb-workspace-nav" aria-label="管理工作台"><a href="/admin/">订单工作台</a><Link className="active" aria-current="page" href="/admin/agents/">代理管理</Link></nav>
+    <nav className="wb-workspace-nav" aria-label="管理工作台"><a href="/admin/">订单工作台</a><Link className="active" aria-current="page" href="/admin/agents/">代理管理{pendingPayouts>0 && <span className="wb-payout-badge">提现 {pendingPayouts}</span>}</Link></nav>
     {error && <p role="alert" className="wb-error">{error}</p>}<AgentManagement api={api}/>
   </main>;
 }

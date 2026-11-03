@@ -9,7 +9,7 @@ type Agent = { id: string; name: string; referralCode: string };
 type AgentOrder = { code: string; title: string; status: string; createdAt: number; commissionCents: number; ruleVersion: number; commissionState: string };
 type Balance = { availableCents: number; pendingCents: number; reservedCents: number; paidCents: number; debtCents:number; reserveShortfallCents:number; hasHold:boolean };
 type Withdrawal = { id: string; amountCents: number; status: string; requestedAt: number; dueAt: number | null };
-type PendingWithdrawal = { requestId: string; amountCents: number; uncertain: boolean };
+type PendingWithdrawal = { requestId: string; amountCents: number; uncertain: boolean; payoutCodeId: string };
 const statusNames: Record<string, string> = { pending: "待付款", reported: "待核款", processing: "处理中", complete: "已完成", expired: "已过期" };
 
 class AgentRequestError extends Error {
@@ -57,7 +57,7 @@ function withdrawalKey(agentId: string) { return `agent-withdrawal-${agentId}`; 
 function recoverWithdrawal(agentId: string): PendingWithdrawal | null {
   try {
     const value: unknown = JSON.parse(sessionStorage.getItem(withdrawalKey(agentId)) || "null");
-    if (!value || typeof value !== "object" || !("requestId" in value) || typeof value.requestId !== "string" || !/^[0-9a-f-]{36}$/i.test(value.requestId) || !("amountCents" in value) || !Number.isSafeInteger(value.amountCents) || Number(value.amountCents) <= 0 || !("uncertain" in value) || typeof value.uncertain !== "boolean") return null;
+    if (!value || typeof value !== "object" || !("requestId" in value) || typeof value.requestId !== "string" || !/^[0-9a-f-]{36}$/i.test(value.requestId) || !("amountCents" in value) || !Number.isSafeInteger(value.amountCents) || Number(value.amountCents) <= 0 || !("uncertain" in value) || typeof value.uncertain !== "boolean" || !("payoutCodeId" in value) || typeof value.payoutCodeId !== "string") return null;
     return value as PendingWithdrawal;
   } catch { return null; }
 }
@@ -75,6 +75,7 @@ export function AgentWorkbench() {
   const [notice, setNotice] = useState("");
   const [balance, setBalance] = useState<Balance | null>(null);
   const [withdrawals, setWithdrawals] = useState<Withdrawal[]>([]);
+  const [payoutMethod,setPayoutMethod]=useState<"alipay"|"wechat">("alipay"), [payoutImage,setPayoutImage]=useState<File|null>(null);
   const [withdrawalAmount, setWithdrawalAmount] = useState("");
   const [pendingWithdrawal, setPendingWithdrawal] = useState<PendingWithdrawal | null>(null);
   const withdrawalInFlight = useRef(false);
@@ -147,7 +148,15 @@ export function AgentWorkbench() {
       if (!match) { setError("请输入有效的提现金额，最多保留两位小数。"); return; }
       const amountCents = Number(match[1]) * 100 + Number((match[2] || "").padEnd(2, "0"));
       if (!Number.isSafeInteger(amountCents) || amountCents <= 0 || amountCents > balance.availableCents) { setError("提现金额须大于零且不超过可申请金额。"); return; }
-      attempt = { requestId: crypto.randomUUID(), amountCents, uncertain: false };
+      if (!payoutImage || payoutImage.size > 500000 || !["image/png","image/jpeg"].includes(payoutImage.type)) { setError("请上传 500 KB 以内的 PNG 或 JPG 收款码。"); return; }
+      withdrawalInFlight.current=true; setBusy(true); setError("");
+      try {
+        const form=new FormData();form.set("method",payoutMethod);form.set("image",payoutImage);form.set("expectedAgentId",agent.id);
+        const response=await fetch(storeApiUrl("/api/agent/payout-code"),{method:"POST",credentials:"include",cache:"no-store",body:form,signal:AbortSignal.timeout(15000)});
+        const result=await response.json() as {id?:string;message?:string};
+        if (!response.ok || !result.id) throw new Error(result.message || "收款码上传失败");
+        attempt = { requestId: crypto.randomUUID(), amountCents, uncertain: false, payoutCodeId:result.id };
+      } catch (cause) { setError(errorMessage(cause));return; } finally { withdrawalInFlight.current=false;setBusy(false); }
     }
     const previous = attempt;
     const pending = { ...attempt, uncertain: true };
@@ -156,9 +165,9 @@ export function AgentWorkbench() {
     setPendingWithdrawal(pending); withdrawalInFlight.current = true; setBusy(true); setError(""); setNotice("");
     let submitted = false;
     try {
-      await agentRequest("/api/agent/withdrawals", { amountCents: pending.amountCents, requestId: pending.requestId, expectedAgentId: agent.id });
+      await agentRequest("/api/agent/withdrawals", { amountCents: pending.amountCents, requestId: pending.requestId, expectedAgentId: agent.id, payoutCodeId:pending.payoutCodeId });
       submitted = true;
-      sessionStorage.removeItem(withdrawalKey(agent.id)); setPendingWithdrawal(null); setWithdrawalAmount("");
+      sessionStorage.removeItem(withdrawalKey(agent.id)); setPendingWithdrawal(null); setWithdrawalAmount(""); setPayoutImage(null);
       setNotice("提现申请已提交，等待店主审核。");
       await refresh();
     } catch (cause) {
@@ -188,9 +197,9 @@ export function AgentWorkbench() {
           <div className="agent-balances"><div><span>可申请提现</span><strong>{money(balance.availableCents)}</strong></div><div><span>待结算</span><strong>{money(balance.pendingCents)}</strong></div><div><span>提现处理中</span><strong>{money(balance.reservedCents)}</strong></div><div><span>已打款</span><strong>{money(balance.paidCents)}</strong></div></div>
           {!balance.hasHold && (balance.debtCents > 0 || balance.reserveShortfallCents > 0) && <p className="agent-error">佣金调整后{balance.debtCents > 0 ? `存在 ${money(balance.debtCents)} 待抵扣金额` : "提现预留款需要核查"}，请联系店主。</p>}
           {balance.hasHold && <p className="agent-error">佣金正在核查，暂不可申请提现，请联系店主。</p>}
-          <p className="agent-hint">订单确认收款并完成交付后，次日（北京时间自然日）结算。提现需店主审核，批准后的次日安排人工打款，请联系店主提供收款信息。</p>
+          <p className="agent-hint">订单确认收款并完成交付后，次日（北京时间自然日）结算。提现需店主审核，批准后的次日安排人工打款。建议优先使用支付宝，便于店主优先处理。</p>
           {error && <p className="agent-error" role="alert">{error}</p>}{notice && <p className="agent-notice" role="status">{notice}</p>}
-          <form className="agent-withdraw" onSubmit={submitWithdrawal}><label htmlFor="withdraw-amount">提现金额（元）</label><div className="agent-link-row"><input id="withdraw-amount" type="text" inputMode="decimal" value={pendingWithdrawal ? (pendingWithdrawal.amountCents / 100).toFixed(2) : withdrawalAmount} onChange={event => setWithdrawalAmount(event.target.value)} disabled={busy || !!pendingWithdrawal} placeholder="输入提现金额" /><button type="submit" className="agent-primary" disabled={busy || (!pendingWithdrawal && balance.availableCents <= 0)}>{busy ? "处理中…" : pendingWithdrawal ? "重试同一申请" : "申请提现"}</button></div></form>
+          <form className="agent-withdraw" onSubmit={submitWithdrawal}><label htmlFor="payout-method">收款方式</label><select id="payout-method" value={payoutMethod} disabled={busy || !!pendingWithdrawal} onChange={event=>setPayoutMethod(event.target.value as "alipay"|"wechat")}><option value="alipay">支付宝（推荐）</option><option value="wechat">微信</option></select><label htmlFor="payout-image">上传本人收款码（PNG 或 JPG，不超过 500 KB）</label><input id="payout-image" type="file" accept="image/png,image/jpeg" disabled={busy || !!pendingWithdrawal} onChange={event=>setPayoutImage(event.target.files?.[0] || null)}/><p className="agent-hint">请确认收款码与所选方式一致，申请后店主将据此人工转账。</p><label htmlFor="withdraw-amount">提现金额（元）</label><div className="agent-link-row"><input id="withdraw-amount" type="text" inputMode="decimal" value={pendingWithdrawal ? (pendingWithdrawal.amountCents / 100).toFixed(2) : withdrawalAmount} onChange={event => setWithdrawalAmount(event.target.value)} disabled={busy || !!pendingWithdrawal} placeholder="输入提现金额" /><button type="submit" className="agent-primary" disabled={busy || (!pendingWithdrawal && balance.availableCents <= 0)}>{busy ? "处理中…" : pendingWithdrawal ? "重试同一申请" : "申请提现"}</button></div></form>
           {pendingWithdrawal && <p className="agent-error">上一笔 {money(pendingWithdrawal.amountCents)} 申请结果尚未确认，请重试同一申请或联系店主核实，避免重复申请。</p>}
           <h3 className="agent-withdraw-title">提现记录</h3>{!withdrawals.length ? <div className="agent-empty">暂无提现申请</div> : <div className="agent-orders">{withdrawals.map(item => <article className="agent-order" key={item.id}><div><strong>{money(item.amountCents)}</strong><p>申请时间 {displayDate(item.requestedAt)}{item.dueAt ? ` · 计划打款 ${displayDate(item.dueAt)}` : ""}</p></div><div className="agent-order-end"><span>{withdrawalStatus[item.status] || "状态待确认"}</span></div></article>)}</div>}
         </section>}

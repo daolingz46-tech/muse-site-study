@@ -10,7 +10,7 @@ type Rule = { productKey: string; amountCents: number; updatedAt: number };
 type Product = { productKey: string; name: string; priceCents: number; category: string };
 type AgentData = { agents: Agent[]; rules: Rule[]; products: Product[] };
 type Api = (path: string, input?: unknown) => Promise<unknown>;
-type Withdrawal = { id: string; agentId: string; agentName: string; amountCents: number; status: string; requestedAt: number; approvedAt: number | null; dueAt: number | null; paidAt: number | null };
+type Withdrawal = { id: string; agentId: string; agentName: string; amountCents: number; status: string; requestedAt: number; approvedAt: number | null; dueAt: number | null; paidAt: number | null; payoutMethod: "alipay" | "wechat" | null; payoutCodeId:string|null };
 type Commission = { orderId: string; code: string; agentName: string; amountCents: number; payoutInFlight: boolean; state: "active" | "held" | "refunded" | "unconfigured" };
 type AgentOrderDetail = { code:string; title:string; status:string; amountCents:number; target:string; contactEmail:string|null; createdAt:number; paidAt:number|null; completedAt:number|null; commissionCents:number; settlement:string; availableAt:number|null };
 function agentActionError(cause: unknown, fallback: string) {
@@ -132,7 +132,7 @@ function WithdrawalManagement() {
     {auth === "ready" && <CommissionControls/>}
     {auth === "ready" && (rows.length ? <div className="wb-withdrawal-list">{rows.map(row => <article className="wb-withdrawal-card" key={row.id}>
       <div className="wb-agent-card-heading"><strong>{row.agentName}</strong><strong>¥{formatMoney(row.amountCents)}</strong></div>
-      <p>状态：{withdrawalStatus[row.status] || row.status}</p><p>申请：{ownerDate(row.requestedAt)} · 批准：{ownerDate(row.approvedAt)} · 可安排打款：{ownerDate(row.dueAt)}（北京时间）</p>{row.paidAt && <p>打款记录：{ownerDate(row.paidAt)}</p>}
+      <p>收款方式：{row.payoutMethod === "alipay" ? "支付宝" : row.payoutMethod === "wechat" ? "微信" : "旧申请未提供，请联系代理"}</p>{row.payoutCodeId && <details><summary>查看收款码</summary><img src={storeApiUrl(`/api/admin/owner-payout-code?withdrawalId=${encodeURIComponent(row.id)}`)} alt={`${row.agentName}的收款码`} style={{display:"block",maxWidth:240,maxHeight:300,marginTop:8}}/></details>}<p>状态：{withdrawalStatus[row.status] || row.status}</p><p>申请：{ownerDate(row.requestedAt)} · 批准：{ownerDate(row.approvedAt)} · 可安排打款：{ownerDate(row.dueAt)}（北京时间）</p>{row.paidAt && <p>打款记录：{ownerDate(row.paidAt)}</p>}
       {row.status === "unknown" && <p className="wb-error">打款结果待核查。请先查明转账状态，切勿重复打款；确认成功后填写真实流水号。</p>}
       <div className="wb-withdrawal-actions">
         {row.status === "pending" && <button className="wb-primary" type="button" disabled={busy} onClick={() => void action(row, "approve")}>批准提现</button>}
