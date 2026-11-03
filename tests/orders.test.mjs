@@ -28,6 +28,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
       if (path.endsWith("/quotePrice")) return Response.json({ code: 1, data: { balance_enough: supplierBalanceEnough, available_quantity: emptyGoods.has(params.goods_no) ? 0 : supplierStock, total_amount: params.goods_no === "G85161614" ? params.quantity * 1.03 : params.goods_no === "G17614190" ? 58.5 : ["G95786160", "G88655555", "G75777360"].includes(params.goods_no) ? 3.10 : ["G37376813", "G43844575"].includes(params.goods_no) ? 4.12 : params.goods_no === "G39595340" ? 11.31 : params.goods_no === "G97316889" ? 60.65 : 110 } });
       if (path.endsWith("/create")) { supplierGoods = params.goods_no; supplierQuantity = params.quantity; supplierRemark = params.remark; supplierPurchases++; if (supplierTimeout) throw new Error("simulated network failure"); return Response.json({ code: 1, data: { trade_no: "TEST-16688", total_amount: params.goods_no === "G75777360" ? 3.27 : 3.10 } }); }
       if (path.endsWith("/query") && params.trade_no === "INVENTORY-ORDER") return Response.json({ code: 1, data: { goods_no: "G37376813", status: 4, cards: [{ code: "stock@example.com—pass--https://example.com/code" }], instruction: "说明" } });
+      if (path.endsWith("/query") && params.trade_no === "MAIL-STOCK") return Response.json({code:1,data:{goods_no:"G24433963",status:4,cards:[{code:"mail-one-example"},{code:"mail-two-example"}]}});
       if (path.endsWith("/query") && params.trade_no === "GPT-STOCK") return Response.json({code:1,data:{goods_no:"G95786160",status:4,cards:[{code:"gpt-stock-card"}],instruction:"供应商原说明"}});
       if (path.endsWith("/query") && params.trade_no === "OTHER-STOCK") return Response.json({code:1,data:{goods_no:"G12345678",status:4,cards:[{code:"other-stock-card"}]}});
       if (path.endsWith("/query") && supplierGoods === "G85161614") return Response.json({code:1,data:{status:4,cards:Array.from({length:supplierQuantity},(_,i)=>({code:`TEST-${i}`}))}});
@@ -670,6 +671,22 @@ test("订单、收款核实和交付的数据库流程", async t => {
     const token=await call("/api/admin/catalog-suppliers",{key:"token:300亿 Token"},session);
     assert.equal(token.status,200);assert.equal(token.data.quantity,30);assert.equal(Math.round(token.data.items[0].total*100),3090);
     assert.equal((await call("/api/admin/catalog-suppliers",{key:"not-valid"},session)).status,400);
+  });
+
+  await t.test("Mail.com 库存按商品识别且并发分配不重复", async () => {
+    await db.prepare("DELETE FROM rate_limits").run();
+    const imported=await call("/api/admin/inventory-import",{tradeNo:"MAIL-STOCK"},session);
+    assert.equal(imported.status,200);assert.equal(imported.data.linked,true);assert.equal(imported.data.added,2);
+    assert.equal((await call("/api/admin/inventory-import",{tradeNo:"MAIL-STOCK"},session)).data.added,0);
+    const make=async email=>{const o=(await call("/api/orders",{product:"gpt",planId:"mailCom",email,method:"alipay",acceptedTerms:true,requestId:randomUUID()})).data;assert.equal(o.amountCents,500);await call("/api/admin/update",{id:o.id,action:"confirm"},session);return o;};
+    const a=await make("mail-a@example.com"),b=await make("mail-b@example.com");
+    const n=supplierPurchases;
+    const delivered=await Promise.all([call("/api/admin/supplier-deliver",{id:a.id,expectedInventory:true},session),call("/api/admin/supplier-deliver",{id:b.id,expectedInventory:true},session)]);
+    assert.deepEqual(delivered.map(x=>x.status),[200,200]);
+    const rows=(await db.prepare("SELECT card,orderId,product FROM inventory_cards WHERE tradeNo='MAIL-STOCK'").all()).results;
+    assert.equal(new Set(rows.map(r=>r.orderId)).size,2);assert.ok(rows.every(r=>r.product==="gpt:G24433963"));assert.equal(supplierPurchases,n);
+    const mailA=sentMessages.findLast(x=>x.to==="mail-a@example.com"),mailB=sentMessages.findLast(x=>x.to==="mail-b@example.com");assert.ok(mailA && mailB);assert.notEqual(mailA.text,mailB.text);assert.match(mailA.text,/Mail.com/);
+    const c=await make("mail-c@example.com");assert.equal((await call("/api/admin/supplier-deliver",{id:c.id},session)).status,409);assert.equal(supplierPurchases,n);
   });
 
 });
