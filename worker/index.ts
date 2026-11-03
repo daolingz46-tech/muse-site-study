@@ -707,6 +707,16 @@ async function admin(env: Env, request: Request, path: string) {
     const groups=await env.DB.prepare("SELECT product,COUNT(*) AS available FROM inventory_cards WHERE orderId IS NULL AND (product LIKE 'gpt:G%' OR product LIKE 'unlinked:G%') GROUP BY product ORDER BY product").all();
     return json({ available: count?.available || 0, basicAvailable: basic?.available || 0, gpt:groups.results });
   }
+  if (path === "/api/admin/inventory-details" && request.method === "GET") {
+    const rows = await env.DB.prepare("SELECT id,product,tradeNo,createdAt FROM inventory_cards WHERE orderId IS NULL ORDER BY product,createdAt,id").all<{id:string;product:string;tradeNo:string;createdAt:number}>();
+    const names: Record<string,string> = {"muse-7day":"Muse 成品账号 · 7 天质保", "muse-basic-43844575":"Muse 成品账号 · 基础款", "muse":"Muse 成品账号 · 旧库存"};
+    for (const [plan, product] of Object.entries(GPT_SUPPLIER_PRODUCTS)) {
+      names[`gpt:${product.goodsNo}`] = product.title;
+      for (const backup of SUPPLIER_BACKUPS[plan] || []) names[`gpt:${backup}`] = `${product.title} · 备用货源`;
+    }
+    const items = rows.results.map(row => ({ ...row, title:names[row.product] || (row.product.startsWith("unlinked:") ? "未关联商品" : "未知商品"), goodsNo:row.product.includes(":") ? row.product.split(":")[1] : row.product === "muse-7day" ? MUSE_ACCOUNT_SUPPLIER.goodsNo : row.product === "muse-basic-43844575" ? MUSE_BASIC_SUPPLIER.goodsNo : "", linked:!row.product.startsWith("unlinked:") }));
+    return json({items},200,{"Cache-Control":"no-store"});
+  }
   if (path === "/api/admin/inventory-import" && request.method === "POST") {
     const tradeNo = str((await body(request)).tradeNo, 128);
     if (!tradeNo) throw new HttpError(400, "请填写 16688 采购订单编号");

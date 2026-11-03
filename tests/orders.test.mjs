@@ -795,4 +795,14 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal(supplierPurchases,before+1);supplierTimeout=false;emptyGoods.clear();supplierStock=null;
   });
 
+  await t.test("库存明细仅管理员查看，逐份列出未分配商品且不暴露卡密", async () => {
+    assert.equal((await call("/api/admin/inventory-details")).status,401);
+    await db.prepare("INSERT INTO inventory_cards(id,product,card,cardHash,tradeNo,createdAt) VALUES(?,?,?,?,?,?)").bind(randomUUID(),"gpt:G24433963","inventory-private-test",randomUUID(),"TEST-DETAIL",Date.now()).run();
+    const r=await call("/api/admin/inventory-details",undefined,session);assert.equal(r.status,200);
+    const cards=await db.prepare("SELECT COUNT(*) AS count FROM inventory_cards WHERE orderId IS NULL").first();assert.equal(r.data.items.length,cards.count);
+    assert.ok(r.data.items.some(item=>item.goodsNo==="G24433963" && item.title.includes("Mail.com")));
+    assert.ok(r.data.items.every(item=>!("card" in item) && !("cardHash" in item)));
+    assert.ok(!JSON.stringify(r.data).includes("inventory-private-test"));
+  });
+
 });
