@@ -1060,7 +1060,11 @@ const worker = {
       return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
     };
     try {
-      if (!path.startsWith("/api/")) return env.ASSETS.fetch(request);
+      if (!path.startsWith("/api/")) {
+        const asset=await env.ASSETS.fetch(request);
+        if ((path === "/admin" || path.startsWith("/admin/")) && (asset.headers.get("Content-Type") || "").includes("text/html")) { const headers=new Headers(asset.headers); headers.set("Cache-Control","no-store"); return new Response(asset.body,{status:asset.status,statusText:asset.statusText,headers}); }
+        return asset;
+      }
       if (request.method === "OPTIONS") {
         if (!corsOrigin) throw new HttpError(403, "请求来源无效，请刷新页面");
         return withCors(new Response(null, { status: 204 }));

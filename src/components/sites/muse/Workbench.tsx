@@ -65,6 +65,7 @@ export function Workbench() {
   async function saveCost(event:FormEvent) {event.preventDefault();if(!costOrder||costBusy)return;setCostBusy(true);setCostError("");try {if(!/^\d+(?:\.\d{1,2})?$/.test(costValue)) throw new Error("请输入正确的实际成本，最多两位小数");await api("order-cost",{id:costOrder.id,goodsNo:costGoods.trim(),supplierName:costSupplier.trim(),costCents:Math.round(Number(costValue)*100)});setCostOrder(null);await load();}catch(e){setCostError(e instanceof Error?e.message:"保存失败");}finally{setCostBusy(false);}}
 
   const [mailFiles, setMailFiles] = useState<DeliveryFile[]>([]), [selectedFileIds, setSelectedFileIds] = useState<string[]>([]);
+  const [confirmFollowup,setConfirmFollowup]=useState(false);
   const [mailBusy, setMailBusy] = useState(false), [uploadingFile, setUploadingFile] = useState(false), [mailError, setMailError] = useState("");
   const [supplierBusy, setSupplierBusy] = useState("");
   const [supplierFeedback, setSupplierFeedback] = useState<{ orderId: string; message: string; kind: "success" | "error" } | null>(null);
@@ -291,7 +292,7 @@ export function Workbench() {
   }
   function open(order: AdminOrder) { setSelected(order); setChecked(false); setReference(""); setDelivery({ email: "", password: "", codeUrl: "" }); setActionError(""); }
   function openMail(order: AdminOrder) {
-    setMailOrder(order); setCard(""); setIncludeTutorial(true); setMailError(""); setMailFiles([]); setSelectedFileIds([]);
+    setMailOrder(order); setConfirmFollowup(false); setCard(""); setIncludeTutorial(true); setMailError(""); setMailFiles([]); setSelectedFileIds([]);
     setMailSources([]); setMailGoodsNo(""); setMailInstructions("");
     void api(`delivery-files?orderId=${encodeURIComponent(order.id)}`).then((data: { files: DeliveryFile[]; sources?: {goodsNo:string;instructions:string}[] }) => {
       setMailFiles(data.files); setSelectedFileIds(data.files.map(file => file.id));
@@ -336,10 +337,10 @@ export function Workbench() {
   }
   async function sendDelivery(event: FormEvent) {
     event.preventDefault(); if (!mailOrder || mailBusy || uploadingFile) return;
+    if (mailOrder.status === "complete" && !confirmFollowup) { setMailError("请先勾选确认补发"); return; }
     setMailBusy(true); setMailError("");
     try {
-      if (mailOrder.status === "complete" && !window.confirm("？这笔订单已经交付。确认把本次内容再次发送到买家邮箱？")) return;
-      const response = await api("send-delivery", { id: mailOrder.id, card, includeTutorial, fileIds: selectedFileIds, goodsNo: mailGoodsNo, instructions: mailInstructions, confirmResend:mailOrder.status === "complete" });
+      const response = await api("send-delivery", { id: mailOrder.id, card, includeTutorial, fileIds: selectedFileIds, goodsNo: mailGoodsNo, instructions: mailInstructions, confirmResend:mailOrder.status === "complete" && confirmFollowup });
       if (!response?.ok) throw new Error("邮件发送失败");
       setMailSuccess({ code: mailOrder.code, to: mailOrder.target });
       setAlert(`订单 ${mailOrder.code} 的邮件已发送到 ${mailOrder.target}${mailOrder.status === "complete" ? "，可继续售后" : "，订单已交付"}`);
@@ -422,7 +423,8 @@ export function Workbench() {
         {mailFiles.map(file => <div className="wb-file-row" key={file.id}><label className="wb-check"><input type="checkbox" checked={selectedFileIds.includes(file.id)} onChange={event => setSelectedFileIds(current => event.target.checked ? [...current, file.id] : current.filter(id => id !== file.id))}/><span>{file.name} · {(file.size / 1_000_000).toFixed(1)} MB</span></label><button type="button" aria-label={`删除附件 ${file.name}`} onClick={() => void removeMailFile(file.id)}><Trash2 size={15}/></button></div>)}
         <label className="wb-add-file"><Plus size={17}/>{uploadingFile ? `正在上传 ${uploadProgress}%` : "添加附件"}<input type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/quicktime,video/webm" disabled={uploadingFile || mailBusy} onChange={event => { void addMailFiles(event.target.files); event.target.value = ""; }}/></label>
         {attachmentReady === false && <p className="wb-file-help">暂未确认附件发信状态；可尝试发送，若失败会显示具体原因。</p>}
-        {mailError && <p className="wb-error" role="alert">{mailError}</p>}{mailOrder.status !== "complete" && !card.trim() && <p className="wb-file-help">填写卡密后即可发送。</p>}<button className="wb-primary wb-mail-submit" disabled={mailBusy || uploadingFile || (mailOrder.status === "complete" ? !card.trim() && !selectedFileIds.length && !(mailOrder.product === "muse" && includeTutorial && tutorial?.blocks.length) : !card.trim() || (mailOrder.product === "gpt" && (!mailGoodsNo || !mailInstructions.trim())))}>{mailBusy ? "发送中…" : mailOrder.status === "complete" ? "再次发送到买家邮箱" : "发送邮件并标记已交付"}</button>
+        {mailOrder.status === "complete" && <label className="wb-mail-tutorial wb-check"><input type="checkbox" checked={confirmFollowup} onChange={e=>setConfirmFollowup(e.target.checked)}/><span><strong>我确认向该客户补发以上内容</strong><small>本次只发送填写的内容、勾选的教程和附件，不会自动补发卡密或采购。</small></span></label>}
+        {mailError && <p className="wb-error" role="alert">{mailError}</p>}{mailOrder.status !== "complete" && !card.trim() && <p className="wb-file-help">填写卡密后即可发送。</p>}<button className="wb-primary wb-mail-submit" disabled={mailBusy || uploadingFile || (mailOrder.status === "complete" && !confirmFollowup) || (mailOrder.status === "complete" ? !card.trim() && !selectedFileIds.length && !(mailOrder.product === "muse" && includeTutorial && tutorial?.blocks.length) : !card.trim() || (mailOrder.product === "gpt" && (!mailGoodsNo || !mailInstructions.trim())))}>{mailBusy ? "发送中…" : mailOrder.status === "complete" ? "再次发送到买家邮箱" : "发送邮件并标记已交付"}</button>
       </form>
     </dialog>}
   </main>;
