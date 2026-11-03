@@ -26,7 +26,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
     if (new URL(request.url).hostname === "www.16688.com.cn") {
       const path = new URL(request.url).pathname;
       const params = await request.json();
-      if (path.endsWith("/quotePrice")) return Response.json({ code: 1, data: { balance_enough: supplierBalanceEnough, available_quantity: emptyGoods.has(params.goods_no) ? 0 : supplierStock, total_amount: params.goods_no === "G42078548" ? 0.05 : params.goods_no === "G85161614" ? params.quantity * 1.03 : params.goods_no === "G17614190" ? 58.5 : ["G95786160", "G88655555", "G75777360"].includes(params.goods_no) ? 3.10 : ["G37376813", "G43844575"].includes(params.goods_no) ? 4.12 : params.goods_no === "G39595340" ? 11.31 : params.goods_no === "G97316889" ? 60.65 : 110 } });
+      if (path.endsWith("/quotePrice")) return Response.json({ code: 1, data: { balance_enough: supplierBalanceEnough, available_quantity: emptyGoods.has(params.goods_no) ? 0 : supplierStock, total_amount: params.goods_no === "G42078548" ? 0.05 : params.goods_no === "G85161614" ? params.quantity * 1.03 : params.goods_no === "G17614190" ? 58.5 : ["G95786160", "G88655555", "G75777360"].includes(params.goods_no) ? 3.10 : ["G37376813", "G43844575"].includes(params.goods_no) ? 4.12 : params.goods_no === "G39595340" ? 11.31 : params.goods_no === "G94215456" ? 40.65 : 110 } });
       if (path.endsWith("/create")) { supplierGoods = params.goods_no; supplierQuantity = params.quantity; supplierRemark = params.remark; supplierPurchases++; if (supplierTimeout) throw new Error("simulated network failure"); return Response.json({ code: 1, data: { trade_no: "TEST-16688", total_amount: params.goods_no === "G75777360" ? 3.27 : 3.10 } }); }
       if (path.endsWith("/query") && params.trade_no === "INVENTORY-ORDER") return Response.json({ code: 1, data: { goods_no: "G37376813", status: 4, cards: [{ code: "stock@example.com—pass--https://example.com/code" }], instruction: "说明" } });
       if (path.endsWith("/query") && params.trade_no === "MAIL-STOCK") return Response.json({code:1,data:{goods_no:"G24433963",status:4,cards:[{code:"mail-one-example"},{code:"mail-two-example"}]}});
@@ -310,17 +310,26 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.ok(catalog.data.products.some(item => item.supplier === "G39595340" && item.sales === 1));
   });
 
-  await t.test("72 元 Plus 老号对应指定货源和售后", async () => {
+  await t.test("69 元 Plus 老号对应指定货源和售后", async () => {
     await db.prepare("DELETE FROM rate_limits").run();
     const account = (await call("/api/orders", { product: "gpt", planId: "plus15Day", email: "plus15@example.com", method: "alipay", acceptedTerms: true, requestId: randomUUID() })).data;
-    assert.equal(account.amountCents, 7200);
+    assert.equal(account.amountCents, 6900);
     await call("/api/admin/update", { id: account.id, action: "confirm" }, session);
     assert.equal((await call("/api/admin/supplier-deliver", { id: account.id }, session)).status, 200);
-    assert.equal(supplierGoods, "G97316889");
+    assert.equal(supplierGoods, "G94215456");
     const mail = sentMessages.find(item => item.to === "plus15@example.com" && item.text.includes("TEST-CARD"));
-    assert.ok(mail); assert.match(mail.text, /692972690@qq\.com/); assert.match(mail.text, /源头订单编号：TEST-16688/); assert.match(mail.text, /联系售后时，请提供以上源头订单编号/); assert.match(mail.html, /源头订单编号：/); assert.match(mail.html, /TEST-16688/); assert.match(mail.text, /https:\/\/2fa\.fun\//); assert.match(mail.text, /请勿换绑/);
+    assert.ok(mail); assert.match(mail.text, /692972690@qq\.com/); assert.match(mail.text, /源头订单编号：TEST-16688/); assert.match(mail.text, /联系售后时，请提供以上源头订单编号/); assert.match(mail.html, /源头订单编号：/); assert.match(mail.html, /TEST-16688/); assert.match(mail.text, /https:\/\/2fa\.fun\//); assert.match(mail.text, /请勿换绑/); assert.match(mail.text, /部分账号重置次数以实际库存为准/);
     const catalog = await call("/api/admin/catalog", undefined, session);
-    assert.ok(catalog.data.products.some(item => item.supplier === "G97316889" && item.sales === 1));
+    assert.ok(catalog.data.products.some(item => item.supplier === "G94215456" && item.sales === 1));
+    const original={product:"gpt",planId:"plus15Day",email:"old-plus@example.com",method:"alipay",acceptedTerms:true,requestId:randomUUID()};
+    const old=(await call("/api/orders",original)).data;
+    const oldHash=createHash("sha256").update(JSON.stringify(["gpt",old.title,7200,original.email,original.method])).digest("hex");
+    await db.prepare("UPDATE orders SET amountCents=7200,inputHash=? WHERE id=?").bind(oldHash,old.id).run();
+    assert.equal((await call("/api/orders",original)).data.amountCents,7200);
+    await call("/api/admin/update",{id:old.id,action:"confirm"},session);
+    await db.prepare("INSERT INTO supplier_fulfillment(orderId,state,tradeNo,card,instruction,updatedAt) VALUES(?,'ready','HISTORY-OLD','HISTORY-CARD','旧货源说明',?)").bind(old.id,Date.now()).run();
+    const before=supplierPurchases;assert.equal((await call("/api/admin/supplier-deliver",{id:old.id},session)).status,200);assert.equal(supplierPurchases,before);
+    const history=sentMessages.findLast(x=>x.to==="old-plus@example.com");assert.match(history.text,/旧货源说明/);assert.doesNotMatch(history.text,/部分账号重置次数以实际库存为准/);
   });
 
   await t.test("导入已购库存后优先发货，重复导入和发货不重复使用", async () => {
