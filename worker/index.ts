@@ -318,25 +318,40 @@ async function agentApi(env: Env, request: Request, path: string) {
   if (path === "/api/agent/logout" && request.method === "POST") { await env.DB.prepare("DELETE FROM agent_sessions WHERE hash=?").bind(await hash(session)).run(); const secure=new URL(request.url).protocol === "https:"; return json({ok:true},200,{"Set-Cookie":`agent_session=; HttpOnly; SameSite=${secure?"None":"Lax"}; Path=/api/agent; Max-Age=0${secure?"; Secure":""}`}); }
   throw new HttpError(404,"接口不存在");
 }
+async function eligibleInventoryProducts(env: Env, order: Row): Promise<string[]> {
+  const products = inventoryProducts(order);
+  if (order.supplierPlan !== "gmailAccount") return products;
+  const primary = products[0], backup = products[1];
+  if (!backup || !await env.DB.prepare("SELECT id FROM inventory_cards WHERE product=? AND orderId IS NULL LIMIT 1").bind(backup).first()) return [primary];
+  if (await env.DB.prepare("SELECT id FROM inventory_cards WHERE product=? AND orderId IS NULL LIMIT 1").bind(primary).first()) return [primary];
+  let result: {code:number;data?:{available_quantity?:number}};
+  try { result = await supplierRequest({appId:env.SUPPLIER_APP_ID!,secret:env.SUPPLIER_SECRET!}, "purchase", "quotePrice", {goods_no:"G30430004",quantity:1}) as typeof result; }
+  catch { throw new HttpError(502,"无法确认首选货源库存，未切换备选货源。"); }
+  if (result.code !== 1 || typeof result.data?.available_quantity !== "number") throw new HttpError(409,"无法确认首选货源库存，未切换备选货源。");
+  return result.data.available_quantity === 0 ? [primary,backup] : [primary];
+}
 async function chooseSupplier(env: Env, order: Row, primary: string) {
   const candidates = [primary, ...(order.supplierPlan ? SUPPLIER_BACKUPS[order.supplierPlan] || [] : [])];
   for (const goodsNo of candidates) {
+    const quantity = goodsNo === "G88230690" ? 3 : 1;
     let quote: { code:number; data?: { total_amount?:number; unit_price?:number; available_quantity?:number; balance_enough?:boolean } };
-    try { quote = await supplierRequest({appId:env.SUPPLIER_APP_ID!,secret:env.SUPPLIER_SECRET!},"purchase","quotePrice",{goods_no:goodsNo,quantity:1}) as typeof quote; }
+    try { quote = await supplierRequest({appId:env.SUPPLIER_APP_ID!,secret:env.SUPPLIER_SECRET!},"purchase","quotePrice",{goods_no:goodsNo,quantity}) as typeof quote; }
     catch { throw new HttpError(502,"货源询价失败，未执行采购；请稍后重试。"); }
     if (quote.code !== 1 || !quote.data) throw new HttpError(409,"货源询价未确认，未执行采购。");
     if (quote.data.available_quantity === 0) continue;
+    if (quantity > 1 && (typeof quote.data.available_quantity !== "number" || quote.data.available_quantity < quantity)) throw new HttpError(409,"备选货源不足三件或库存未确认，未执行采购。");
     const total=Number(quote.data.total_amount);
     if (!Number.isFinite(total) || total <= 0) throw new HttpError(409,"货源价格未确认，未执行采购。");
     if (quote.data.balance_enough !== true) throw new HttpError(409,`运营钱包余额不足，本次需 ¥${total.toFixed(2)}（含手续费）。`);
-    if (Math.round(total*100)>order.amountCents) throw new HttpError(409,"货源成本高于售价，未执行采购。");
-    const supplierName:Record<string,string>={G30430004:"ai小头",G94215456:"692972690@qq.com",G53967132:"332297567@qq.com",G42078548:"692972690@qq.com",G95786160:"huaiyesu",G88655555:"lzz_ai小铺",G75777360:"原货源商",G17614190:"AI源头"};
-    return { goodsNo, supplierName:supplierName[goodsNo] || "16688 货源", total, unitPrice:quote.data.unit_price };
+    if (Math.ceil(Math.round(total*100)/quantity)>order.amountCents) throw new HttpError(409,"货源成本高于售价，未执行采购。");
+    const supplierName:Record<string,string>={G30430004:"ai小头",G88230690:"AI贝贝",G94215456:"692972690@qq.com",G53967132:"332297567@qq.com",G42078548:"692972690@qq.com",G95786160:"huaiyesu",G88655555:"lzz_ai小铺",G75777360:"原货源商",G17614190:"AI源头"};
+    return { goodsNo, supplierName:supplierName[goodsNo] || "16688 货源", total, unitPrice:quote.data.unit_price, quantity };
   }
   throw new HttpError(409,"已配置货源均缺货，未执行采购。");
 }
 
 const gmailAccountGuide = `本商品为 Gmail 邮箱账号，仅保障 Gmail 邮箱收件正常；不保证 Gemini、GP 或其他第三方服务授权。注册地区和 2023–2026 年注册时间随机，不保证全新。供货商对首登售后时限有 30 分钟与一天两种表述，请从下单起 30 分钟内完成首次登录检查并及时联系店主。请使用 https://accounts.google.com/ 登录，并妥善更新账号安全资料；如发生封号或第三方服务问题，请按供货商实际售后规则处理。`;
+const gmailBackupGuide = `Gmail 邮箱账号，注册时间和地区以实际账号为准。请尽快使用 https://accounts.google.com/ 登录并检查，妥善设置账号安全资料。供货商要求采购后 5 分钟内检查，登录后不售后；库存账号交付时该期限可能已经结束。如有问题请及时联系店主。`;
 const plus15NewGuide = `Plus 老号：供货商提供 15 天质保，剩余有效期约 20–26 天。商品标称带 2 张重置卡，但供货商说明部分账号重置次数以实际库存为准。请勿换绑、修改密码或 2FA，否则不再提供质保。首次登录失败请在发货后 1 小时内联系售后；其他售后依照供货商规则处理。`;
 const plusAccountGuide = `本商品为 Plus 成品账号，交付格式为账号、密码和 2FA。卡密有时效，请在购买后 20 分钟内完成兑换并检查首次登录。货源仅受理首次无法登录问题，20 分钟与 30 分钟的售后时限表述不一致，请按较短的 20 分钟及时联系售后。请保留北京时间和完整登录录屏。登录需用 2FA 生成验证码，可使用自己的验证器；货源提供 https://2fa.vip/，请谨慎保护 2FA 密钥。`;
 const freeAccountGuide = `此商品为 GPT Free 白号，不含 Plus 和半价资格，可换绑邮箱。请在收到后 1 小时内首次登录检查。使用账号和密码在 ChatGPT 官方页面登录，按提示使用 2FA 密钥生成验证码（可使用本地验证器；货源提供 https://2fa.fun/）。本商品不含接码服务，如有问题请联系店主。`;
@@ -545,11 +560,12 @@ async function admin(env: Env, request: Request, path: string) {
     else if (key.startsWith("token:")) throw new HttpError(410,"Muse Token 为手工充值，没有货源采购。");
     else if (Object.hasOwn(GPT_SUPPLIER_PRODUCTS,key) && key !== "halfPriceAccount") { const plan = GPT_SUPPLIER_PRODUCTS[key as keyof typeof GPT_SUPPLIER_PRODUCTS]; goods = [plan.goodsNo, ...(SUPPLIER_BACKUPS[key] || [])]; }
     if (!goods.length || !Number.isInteger(quantity) || quantity < 1) throw new HttpError(400,"商品不存在");
-    const names: Record<string,string> = {G30430004:"ai小头",G94215456:"692972690@qq.com",G53967132:"332297567@qq.com",G42078548:"692972690@qq.com",G95786160:"huaiyesu@gmail.com",G88655555:"lzz_ai小铺",G75777360:"原货源商（名称待核实）",G17614190:"AI源头",G37376813:"阿度AI账号批发",G43844575:"小白ai一手货源"};
+    const names: Record<string,string> = {G30430004:"ai小头",G88230690:"AI贝贝",G94215456:"692972690@qq.com",G53967132:"332297567@qq.com",G42078548:"692972690@qq.com",G95786160:"huaiyesu@gmail.com",G88655555:"lzz_ai小铺",G75777360:"原货源商（名称待核实）",G17614190:"AI源头",G37376813:"阿度AI账号批发",G43844575:"小白ai一手货源"};
     const items = await Promise.all(goods.map(async (goodsNo,index) => {
-      const entry = {goodsNo, name:names[goodsNo] || "名称待核实", priority:index === 0 ? "首选" : `备用 ${index}`, unitPrice:null as number|null, total:null as number|null, stock:null as number|null};
+      const quoteQuantity = goodsNo === "G88230690" ? 3 : quantity;
+      const entry = {goodsNo, quoteQuantity, name:names[goodsNo] || "名称待核实", priority:index === 0 ? "首选" : `备用 ${index}`, unitPrice:null as number|null, total:null as number|null, stock:null as number|null};
       if (!env.SUPPLIER_APP_ID || !env.SUPPLIER_SECRET) return entry;
-      try { const result = await supplierRequest({appId:env.SUPPLIER_APP_ID,secret:env.SUPPLIER_SECRET},"purchase","quotePrice",{goods_no:goodsNo,quantity}) as {code:number;data?:{unit_price?:number;total_amount?:number;available_quantity?:number}}; if(result.code !== 1 || !result.data) return entry;
+      try { const result = await supplierRequest({appId:env.SUPPLIER_APP_ID,secret:env.SUPPLIER_SECRET},"purchase","quotePrice",{goods_no:goodsNo,quantity:quoteQuantity}) as {code:number;data?:{unit_price?:number;total_amount?:number;available_quantity?:number}}; if(result.code !== 1 || !result.data) return entry;
         const unit=result.data.unit_price, total=result.data.total_amount, stock=result.data.available_quantity;
         return {...entry,unitPrice:typeof unit === "number" && Number.isFinite(unit) && unit >= 0 ? unit : null,total:typeof total === "number" && Number.isFinite(total) && total >= 0 ? total : null,stock:typeof stock === "number" && Number.isFinite(stock) && stock >= 0 ? stock : null};
       } catch { return entry; }
@@ -650,7 +666,7 @@ async function admin(env: Env, request: Request, path: string) {
     if (!order || !["muse", "gpt"].includes(order.product)) throw new HttpError(404, "订单不存在");
     const rows = await env.DB.prepare("SELECT id,name,mime,size,uploadedBytes FROM delivery_files WHERE orderId=? AND uploadedBytes=size ORDER BY createdAt").bind(orderId).all();
     const goods = order.product === "gpt" ? inventoryProducts(order).map(value => value.slice(4)) : [];
-    return json({ files: rows.results, sources: goods.map(goodsNo => ({ goodsNo, instructions: goodsNo === "G30430004" ? gmailAccountGuide : goodsNo === "G94215456" ? plus15NewGuide : goodsNo === "G39595340" ? plusAccountGuide : goodsNo === "G42078548" ? freeAccountGuide : goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G88655555" ? qualificationGuide : "" })) });
+    return json({ files: rows.results, sources: goods.map(goodsNo => ({ goodsNo, instructions: goodsNo === "G88230690" ? gmailBackupGuide : goodsNo === "G30430004" ? gmailAccountGuide : goodsNo === "G94215456" ? plus15NewGuide : goodsNo === "G39595340" ? plusAccountGuide : goodsNo === "G42078548" ? freeAccountGuide : goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G88655555" ? qualificationGuide : "" })) });
   }
   if (path === "/api/admin/delivery-file/start" && request.method === "POST") {
     const input = await body(request), orderId = str(input.orderId, 64), name = str(input.name, 120).replace(/[\\/\x00-\x1f]/g, "_");
@@ -714,7 +730,7 @@ async function admin(env: Env, request: Request, path: string) {
       const used = await env.DB.prepare("SELECT orderId FROM supplier_fulfillment WHERE card=? LIMIT 1").bind(card).first();
       if (used) continue;
       const rawInstruction=typeof data.instruction === "string" ? data.instruction.trim() : "";
-      const instructions=goodsNo === "G24433963" ? "这是 Mail.com 邮箱账号，交付格式为邮箱和密码。请前往 https://www.mail.com/ 登录。" : goodsNo === "G30430004" ? [gmailAccountGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G94215456" ? [plus15NewGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G39595340" ? [plusAccountGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G42078548" ? freeAccountGuide : goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G88655555" ? qualificationGuide : goodsNo === "G17614190" ? [halfPriceTopupGuide,rawInstruction || "（兑换说明未提供）"].join("\n\n") : goodsNo === "G53967132" ? [philippinesSupplierGuide,rawInstruction || "（兑换说明未提供）"].join("\n\n") : rawInstruction;
+      const instructions=goodsNo === "G24433963" ? "这是 Mail.com 邮箱账号，交付格式为邮箱和密码。请前往 https://www.mail.com/ 登录。" : goodsNo === "G88230690" ? [gmailBackupGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G30430004" ? [gmailAccountGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G94215456" ? [plus15NewGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G39595340" ? [plusAccountGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G42078548" ? freeAccountGuide : goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G88655555" ? qualificationGuide : goodsNo === "G17614190" ? [halfPriceTopupGuide,rawInstruction || "（兑换说明未提供）"].join("\n\n") : goodsNo === "G53967132" ? [philippinesSupplierGuide,rawInstruction || "（兑换说明未提供）"].join("\n\n") : rawInstruction;
       const saved = await env.DB.prepare("INSERT OR IGNORE INTO inventory_cards(id,product,card,cardHash,tradeNo,instruction,createdAt) VALUES(?,?,?,?,?,?,?)").bind(crypto.randomUUID(), product, card, await hash(card), tradeNo, instructions, Date.now()).run();
       added += saved.meta.changes;
     }
@@ -750,7 +766,7 @@ async function admin(env: Env, request: Request, path: string) {
     if (!order || !["gpt","muse"].includes(order.product) || order.status !== "processing") throw new HttpError(409,"请先核实收款并选择订单。");
     if (!env.SUPPLIER_APP_ID || !env.SUPPLIER_SECRET) throw new HttpError(503,"货源接口凭证尚未配置");
     if (await env.DB.prepare("SELECT orderId FROM supplier_fulfillment WHERE orderId=?").bind(order.id).first()) throw new HttpError(409,"已有采购记录，请刷新订单后继续查询。");
-    const products=inventoryProducts(order);
+    const products=await eligibleInventoryProducts(env,order);
     for (const product of (order.supplierPlan === "halfPriceAccountOneMonth" ? products.filter(p => p === "gpt:G95786160") : order.supplierPlan === "philippinesTopup" ? products.filter(p => p === "gpt:G53967132") : products)) { const item=await env.DB.prepare("SELECT id,product FROM inventory_cards WHERE product=? AND orderId IS NULL LIMIT 1").bind(product).first<{product:string}>(); if (item) return json({inventory:true,goodsNo:item.product.startsWith("gpt:") ? item.product.slice(4) : ""},200,{"Cache-Control":"no-store"}); }
     const plan=order.product === "muse" ? (order.supplierPlan === "museWarranty" ? MUSE_ACCOUNT_SUPPLIER : MUSE_BASIC_SUPPLIER) : GPT_SUPPLIER_PRODUCTS[order.supplierPlan as keyof typeof GPT_SUPPLIER_PRODUCTS]; if (!plan) throw new HttpError(400,"商品货源尚未配置");
     if (order.supplierPlan === "mailCom") throw new HttpError(409,"Mail.com 库存不足，请先批量采购并导入库存；未执行采购。");
@@ -769,10 +785,11 @@ async function admin(env: Env, request: Request, path: string) {
     type SupplierResult = { code: number; msg?: string; data?: Record<string, unknown> };
     let task = await env.DB.prepare("SELECT state,tradeNo,card,instruction FROM supplier_fulfillment WHERE orderId=?").bind(id).first<{ state: string; tradeNo: string | null; card: string | null; instruction: string | null }>();
     if (!task) {
-      for (const product of (order.supplierPlan === "halfPriceAccountOneMonth" ? inventoryProducts(order).filter(p => p === "gpt:G95786160") : order.supplierPlan === "philippinesTopup" ? inventoryProducts(order).filter(p => p === "gpt:G53967132") : inventoryProducts(order))) {
+      for (const product of (order.supplierPlan === "halfPriceAccountOneMonth" ? inventoryProducts(order).filter(p => p === "gpt:G95786160") : order.supplierPlan === "philippinesTopup" ? inventoryProducts(order).filter(p => p === "gpt:G53967132") : await eligibleInventoryProducts(env,order))) {
         await env.DB.batch([
         env.DB.prepare("INSERT OR IGNORE INTO supplier_fulfillment(orderId,state,tradeNo,card,instruction,inventoryId,updatedAt) SELECT ?,'ready',tradeNo,card,instruction,id,? FROM inventory_cards WHERE product=? AND orderId IS NULL AND NOT EXISTS (SELECT 1 FROM delivery_emails WHERE orderId=?) ORDER BY createdAt,id LIMIT 1").bind(id, Date.now(), product, id),
         env.DB.prepare("UPDATE inventory_cards SET orderId=? WHERE id=(SELECT inventoryId FROM supplier_fulfillment WHERE orderId=?) AND orderId IS NULL").bind(id, id),
+        env.DB.prepare("INSERT OR IGNORE INTO order_procurement_cost(orderId,goodsNo,supplierName,costCents,source,updatedAt) SELECT ?,substr(product,5),'AI贝贝',costCents,'supplier',? FROM inventory_cards WHERE id=(SELECT inventoryId FROM supplier_fulfillment WHERE orderId=?) AND product='gpt:G88230690'").bind(id,Date.now(),id),
       ]);
       task = await env.DB.prepare("SELECT state,tradeNo,card,instruction FROM supplier_fulfillment WHERE orderId=?").bind(id).first<{ state: string; tradeNo: string | null; card: string | null; instruction: string | null }>();
       if (task) break;
@@ -786,10 +803,10 @@ async function admin(env: Env, request: Request, path: string) {
       catch(error) { if (error instanceof HttpError && error.message.includes("均缺货")) await env.DB.prepare("UPDATE orders SET stockIssue=1,updatedAt=? WHERE id=? AND status='processing'").bind(Date.now(),id).run(); throw error; }
       if (input.expectedGoodsNo !== undefined && (input.expectedGoodsNo !== selected.goodsNo || input.expectedCents !== Math.round(selected.total*100))) throw new HttpError(409,"货源或价格已变化，请重新询价确认，未执行采购。");
       const claimed = await env.DB.prepare("INSERT OR IGNORE INTO supplier_fulfillment(orderId,state,instruction,updatedAt) SELECT ?,'purchasing',?,? WHERE NOT EXISTS (SELECT 1 FROM delivery_emails WHERE orderId=?)").bind(id, `source:${selected.goodsNo}`, Date.now(), id).run();
-      if (!claimed.meta.changes) throw new HttpError(409, "该订单已有发货操作，请先核查订单和邮件");
+      if (!claimed.meta.changes) throw new HttpError(409, "该订单或备选货源采购正在处理中，请先核查采购记录，勿重复采购");
       await env.DB.prepare("UPDATE orders SET stockIssue=0 WHERE id=?").bind(id).run();
       let purchase: SupplierResult;
-      try { purchase = await supplierRequest(creds, "purchase", "create", { goods_no: selected.goodsNo, quantity: 1, remark: `订单码:${order.code} 平台订单:${order.id}` }) as SupplierResult; }
+      try { purchase = await supplierRequest(creds, "purchase", "create", { goods_no: selected.goodsNo, quantity: selected.quantity, remark: `订单码:${order.code} 平台订单:${order.id}` }) as SupplierResult; }
       catch { await env.DB.prepare("UPDATE supplier_fulfillment SET state='purchase_unknown',updatedAt=? WHERE orderId=?").bind(Date.now(), id).run(); throw new HttpError(502, "采购结果不明，请先在 16688 核查采购记录，勿重复采购"); }
       if (purchase.code !== 1 || !purchase.data || typeof purchase.data.trade_no !== "string") {
         await env.DB.prepare("UPDATE supplier_fulfillment SET state='purchase_unknown',updatedAt=? WHERE orderId=?").bind(Date.now(), id).run();
@@ -797,8 +814,8 @@ async function admin(env: Env, request: Request, path: string) {
       }
       const actual = Number(purchase.data.total_amount);
       await env.DB.batch([
-        env.DB.prepare("UPDATE supplier_fulfillment SET state='awaiting',tradeNo=?,updatedAt=? WHERE orderId=?").bind(purchase.data.trade_no,Date.now(),id),
-        env.DB.prepare("INSERT OR IGNORE INTO order_procurement_cost(orderId,goodsNo,supplierName,costCents,source,updatedAt) VALUES(?,?,?,?, 'supplier',?)").bind(id,selected.goodsNo,selected.supplierName,Number.isFinite(actual) && actual > 0 ? Math.round(actual*100) : null,Date.now()),
+        env.DB.prepare("UPDATE supplier_fulfillment SET state='awaiting',tradeNo=?,batchCostCents=?,updatedAt=? WHERE orderId=?").bind(purchase.data.trade_no,selected.quantity > 1 && Number.isFinite(actual) && actual > 0 ? Math.round(actual*100) : null,Date.now(),id),
+        env.DB.prepare("INSERT OR IGNORE INTO order_procurement_cost(orderId,goodsNo,supplierName,costCents,source,updatedAt) VALUES(?,?,?,?, 'supplier',?)").bind(id,selected.goodsNo,selected.supplierName,selected.quantity === 1 && Number.isFinite(actual) && actual > 0 ? Math.round(actual*100) : null,Date.now()),
       ]);
       task = { state: "awaiting", tradeNo: purchase.data.trade_no, card: null, instruction: `source:${selected.goodsNo}` };
     }
@@ -808,10 +825,33 @@ async function admin(env: Env, request: Request, path: string) {
       catch { throw new HttpError(502, "采购订单查询失败，请稍后重新点击发货，不会重复采购"); }
       if (result.code !== 1 || !result.data || ![4, 5].includes(Number(result.data.status))) throw new HttpError(409, "货源尚未发货，请稍后重新点击发货");
       const actualCost = Number(result.data.total_amount);
-      if (Number.isFinite(actualCost) && actualCost > 0) await env.DB.prepare("UPDATE order_procurement_cost SET costCents=?,updatedAt=? WHERE orderId=? AND source='supplier' AND costCents IS NULL").bind(Math.round(actualCost*100),Date.now(),id).run();
+      if (task.instruction !== "source:G88230690" && Number.isFinite(actualCost) && actualCost > 0) await env.DB.prepare("UPDATE order_procurement_cost SET costCents=?,updatedAt=? WHERE orderId=? AND source='supplier' AND costCents IS NULL").bind(Math.round(actualCost*100),Date.now(),id).run();
       const cards = Array.isArray(result.data.cards) ? result.data.cards : [];
       const card = cards.map(value => typeof value === "object" && value !== null && "code" in value ? String(value.code) : "").filter(Boolean).join("\n");
       if (!card) throw new HttpError(409, "货源未返回卡密，请核查采购订单");
+      if (task.instruction === "source:G88230690") {
+        const goods = typeof result.data.goods_no === "string" ? result.data.goods_no : "G88230690";
+        if (goods !== "G88230690") throw new HttpError(409,"采购货源编号不一致，请核查采购单，勿重复采购。");
+        const entries = cards.map(value => typeof value === "object" && value !== null && "code" in value ? String(value.code).trim() : "").filter(Boolean);
+        if (entries.length !== 3 || new Set(entries).size !== 3) throw new HttpError(409,"备选采购未返回三份不同卡密，请核查采购单，勿重复采购。");
+        const raw = typeof result.data.instruction === "string" ? result.data.instruction.trim() : "";
+        const guide = [gmailBackupGuide, raw].filter(Boolean).join("\n\n");
+        const recordedBatch = await env.DB.prepare("SELECT batchCostCents FROM supplier_fulfillment WHERE orderId=?").bind(id).first<{batchCostCents:number|null}>();
+        const cents = Number.isFinite(actualCost) && actualCost > 0 ? Math.round(actualCost * 100) : recordedBatch?.batchCostCents ?? null;
+        const cardRows = await Promise.all(entries.map(async (value, i) => ({id: crypto.randomUUID(), value, hash: await hash(value), cost: cents === null ? null : Math.floor(cents / 3) + (i < cents % 3 ? 1 : 0)})));
+        const prior = await Promise.all(cardRows.map(row => env.DB.prepare("SELECT tradeNo FROM inventory_cards WHERE cardHash=?").bind(row.hash).first<{tradeNo:string}>()));
+        if (prior.some(row => row && row.tradeNo !== task!.tradeNo)) throw new HttpError(409,"采购卡密与已有库存重复，请核查采购单，勿发货。");
+        const now=Date.now();
+        await env.DB.batch([
+          ...cardRows.map(row => env.DB.prepare("INSERT OR IGNORE INTO inventory_cards(id,product,card,cardHash,tradeNo,instruction,costCents,createdAt) VALUES(?,'gpt:G88230690',?,?,?,?,?,?)").bind(row.id,row.value,row.hash,task!.tradeNo,guide,row.cost,now)),
+          env.DB.prepare("UPDATE supplier_fulfillment SET state='ready', inventoryId=(SELECT id FROM inventory_cards WHERE product='gpt:G88230690' AND tradeNo=? AND orderId IS NULL ORDER BY id LIMIT 1), updatedAt=? WHERE orderId=? AND state='awaiting' AND (SELECT COUNT(*) FROM inventory_cards WHERE product='gpt:G88230690' AND tradeNo=? AND orderId IS NULL)=3").bind(task.tradeNo,now,id,task.tradeNo),
+          env.DB.prepare("UPDATE inventory_cards SET orderId=? WHERE id=(SELECT inventoryId FROM supplier_fulfillment WHERE orderId=? AND state='ready') AND orderId IS NULL").bind(id,id),
+          env.DB.prepare("UPDATE supplier_fulfillment SET card=(SELECT card FROM inventory_cards WHERE id=inventoryId AND orderId=?),instruction=(SELECT instruction FROM inventory_cards WHERE id=inventoryId AND orderId=?) WHERE orderId=? AND state='ready'").bind(id,id,id),
+          env.DB.prepare("UPDATE order_procurement_cost SET costCents=(SELECT costCents FROM inventory_cards WHERE id=(SELECT inventoryId FROM supplier_fulfillment WHERE orderId=?)),updatedAt=? WHERE orderId=?").bind(id,now,id),
+        ]);
+        task=await env.DB.prepare("SELECT state,tradeNo,card,instruction FROM supplier_fulfillment WHERE orderId=?").bind(id).first<{state:string;tradeNo:string|null;card:string|null;instruction:string|null}>();
+        if (!task || task.state !== "ready" || !task.card) throw new HttpError(409,"批量库存正在处理或需要核查，请刷新订单，勿重复采购。");
+      } else {
       const fallback = order.product === "muse" ? "请使用美国 IP 登录 Muse，通过验证码获取地址查看验证码；账号自带 10 亿 Token。请检查首次登录并换绑自己的邮箱。" : order.supplierPlan === "plus15Day" ? "请输入账号及密码登录，将 2FA 密钥输入 https://2fa.fun/ 或 https://2fa.live/ 获取验证码。供货商提供 15 天质保，请勿换绑、修改密码或 2FA，否则不再提供质保。" : order.supplierPlan === "plusAccount" ? "请在购买后 20 分钟内完成兑换并检查首次登录。验证码获取地址：https://2fa.vip/。售后规则请联系货源商确认。" : order.supplierPlan === "halfPriceAccount" || order.supplierPlan === "halfPriceAccountOneMonth" ? `账号资料格式：账号、密码和 2FA。验证码获取地址：https://2fa.run/（备用：https://2fa.fun/）。该账号包含${order.supplierPlan === "halfPriceAccount" ? "两个月" : "一个月"}半价资格，不包含 Plus 订阅。` : "请访问 https://shuwang.space/ ，使用收到的卡密按网站说明自行充值；发货并不代表充值已经完成。";
       const recordedSource=task.instruction?.match(/^source:(G\d+)$/)?.[1] || "";
       const queriedSource=typeof result.data.goods_no === "string" ? result.data.goods_no : "";
@@ -820,10 +860,11 @@ async function admin(env: Env, request: Request, path: string) {
       if (["halfPriceAccountOneMonth","halfPriceTopup","philippinesTopup"].includes(order.supplierPlan || "") && !goodsNo) throw new HttpError(409,"无法确认这笔采购的货源编号，请核查后再发货。");
       const rawInstruction=typeof result.data.instruction === "string" ? result.data.instruction.trim() : "";
       if (["G17614190","G53967132"].includes(goodsNo) && !rawInstruction) throw new HttpError(409,"新货源未返回兑换说明，已采购，请核查教程后再发货，勿重复采购。");
-      const instruction = goodsNo === "G30430004" ? [gmailAccountGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G94215456" ? [plus15NewGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G39595340" ? [plusAccountGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G42078548" ? freeAccountGuide : goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G88655555" ? qualificationGuide : goodsNo === "G17614190" ? [halfPriceTopupGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G53967132" ? [philippinesSupplierGuide,rawInstruction].filter(Boolean).join("\n\n") : rawInstruction || fallback;
+      const instruction = goodsNo === "G88230690" ? [gmailBackupGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G30430004" ? [gmailAccountGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G94215456" ? [plus15NewGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G39595340" ? [plusAccountGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G42078548" ? freeAccountGuide : goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G88655555" ? qualificationGuide : goodsNo === "G17614190" ? [halfPriceTopupGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G53967132" ? [philippinesSupplierGuide,rawInstruction].filter(Boolean).join("\n\n") : rawInstruction || fallback;
       const saved = await env.DB.prepare("UPDATE supplier_fulfillment SET state='ready',card=?,instruction=?,updatedAt=? WHERE orderId=? AND state='awaiting'").bind(card, instruction, Date.now(), id).run();
       if (!saved.meta.changes) throw new HttpError(409, "订单正在处理，请刷新");
       task = { ...task, state: "ready", card, instruction };
+      }
     }
     if (task.state !== "ready" || !task.card) throw new HttpError(409, "该订单正在处理或结果待核查，请查看货源及邮件记录，勿重复采购");
     if (task.instruction?.includes("（兑换说明未提供）")) throw new HttpError(409,"库存卡密缺少兑换说明，请核查教程后再发货，勿重复采购。");
@@ -856,7 +897,7 @@ async function admin(env: Env, request: Request, path: string) {
     if (order.product === "gpt") {
       const goodsNo = str(input.goodsNo, 30);
       if (!inventoryProducts(order).includes(`gpt:${goodsNo}`)) throw new HttpError(400, "请选择此商品对应的实际采购货源");
-      instructions = goodsNo === "G30430004" ? gmailAccountGuide : goodsNo === "G94215456" ? plus15NewGuide : goodsNo === "G39595340" ? plusAccountGuide : goodsNo === "G42078548" ? freeAccountGuide : goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G88655555" ? qualificationGuide : str(input.instructions, 2000);
+      instructions = goodsNo === "G88230690" ? gmailBackupGuide : goodsNo === "G30430004" ? gmailAccountGuide : goodsNo === "G94215456" ? plus15NewGuide : goodsNo === "G39595340" ? plusAccountGuide : goodsNo === "G42078548" ? freeAccountGuide : goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G88655555" ? qualificationGuide : str(input.instructions, 2000);
       if (!instructions) throw new HttpError(400, "请填写该货源的使用或兑换说明，不能使用其他商品的教程");
     }
     if (!hasEmailConfig(env)) throw new HttpError(503, "邮件服务尚未配置");
