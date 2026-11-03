@@ -26,9 +26,11 @@ test("订单、收款核实和交付的数据库流程", async t => {
     if (new URL(request.url).hostname === "www.16688.com.cn") {
       const path = new URL(request.url).pathname;
       const params = await request.json();
-      if (path.endsWith("/quotePrice")) return Response.json({ code: 1, data: { balance_enough: supplierBalanceEnough, available_quantity: emptyGoods.has(params.goods_no) ? 0 : supplierStock, total_amount: params.goods_no === "G30430004" ? 4.85 : params.goods_no === "G42078548" ? 0.05 : params.goods_no === "G85161614" ? params.quantity * 1.03 : params.goods_no === "G17614190" ? 58.5 : ["G95786160", "G88655555", "G75777360"].includes(params.goods_no) ? 3.10 : ["G37376813", "G43844575"].includes(params.goods_no) ? 4.12 : params.goods_no === "G39595340" ? 11.31 : params.goods_no === "G94215456" ? 40.65 : 110 } });
-      if (path.endsWith("/create")) { supplierGoods = params.goods_no; supplierQuantity = params.quantity; supplierRemark = params.remark; supplierPurchases++; if (supplierTimeout) throw new Error("simulated network failure"); return Response.json({ code: 1, data: { trade_no: "TEST-16688", total_amount: params.goods_no === "G75777360" ? 3.27 : 3.10 } }); }
+      if (path.endsWith("/quotePrice")) return Response.json({ code: 1, data: { balance_enough: supplierBalanceEnough, available_quantity: emptyGoods.has(params.goods_no) ? 0 : supplierStock, total_amount: params.goods_no === "G88230690" ? 12.61 : params.goods_no === "G30430004" ? 4.85 : params.goods_no === "G42078548" ? 0.05 : params.goods_no === "G85161614" ? params.quantity * 1.03 : params.goods_no === "G17614190" ? 58.5 : ["G95786160", "G88655555", "G75777360"].includes(params.goods_no) ? 3.10 : ["G37376813", "G43844575"].includes(params.goods_no) ? 4.12 : params.goods_no === "G39595340" ? 11.31 : params.goods_no === "G94215456" ? 40.65 : 110 } });
+      if (path.endsWith("/create")) { supplierGoods = params.goods_no; supplierQuantity = params.quantity; supplierRemark = params.remark; supplierPurchases++; if (supplierTimeout) throw new Error("simulated network failure"); return Response.json({ code: 1, data: { trade_no: params.goods_no === "G88230690" ? "BATCH-16688" : "TEST-16688", total_amount: params.goods_no === "G88230690" ? 12.61 : params.goods_no === "G75777360" ? 3.27 : 3.10 } }); }
       if (path.endsWith("/query") && params.trade_no === "INVENTORY-ORDER") return Response.json({ code: 1, data: { goods_no: "G37376813", status: 4, cards: [{ code: "stock@example.com—pass--https://example.com/code" }], instruction: "说明" } });
+      if (path.endsWith("/query") && params.trade_no === "BATCH-16688") return Response.json({code:1,data:{goods_no:"G88230690",status:4,total_amount:12.61,cards:[{code:"new-batch-a"},{code:"new-batch-b"},{code:"new-batch-c"}]}});
+      if (path.endsWith("/query") && params.trade_no === "GMAIL-BACKUP") return Response.json({code:1,data:{goods_no:"G88230690",status:4,cards:[{code:"backup-card-a"},{code:"backup-card-b"},{code:"backup-card-c"}]}});
       if (path.endsWith("/query") && params.trade_no === "GMAIL-STOCK") return Response.json({code:1,data:{goods_no:"G30430004",status:4,cards:[{code:"gmail-test-stock"}],instruction:"Gmail 专属说明"}});
       if (path.endsWith("/query") && params.trade_no === "MAIL-STOCK") return Response.json({code:1,data:{goods_no:"G24433963",status:4,cards:[{code:"mail-one-example"},{code:"mail-two-example"}]}});
       if (path.endsWith("/query") && params.trade_no === "GPT-STOCK") return Response.json({code:1,data:{goods_no:"G95786160",status:4,cards:[{code:"gpt-stock-card"}],instruction:"供应商原说明"}});
@@ -741,6 +743,56 @@ test("订单、收款核实和交付的数据库流程", async t => {
     const imported=await call("/api/admin/inventory-import",{tradeNo:"GMAIL-STOCK"},session);assert.equal(imported.data.goodsNo,"G30430004");assert.equal(imported.data.linked,true);assert.equal(imported.data.added,1);assert.equal((await call("/api/admin/inventory-import",{tradeNo:"GMAIL-STOCK"},session)).data.added,0);
     const second=await make("gmail-stock@example.com");await call("/api/admin/update",{id:second.id,action:"confirm"},session);assert.equal((await call("/api/admin/supplier-preview",{id:second.id},session)).data.goodsNo,"G30430004");assert.equal((await call("/api/admin/supplier-deliver",{id:second.id,expectedInventory:true},session)).status,200);assert.equal(supplierPurchases,before+1);
     const inventory=await db.prepare("SELECT product,orderId FROM inventory_cards WHERE card=?").bind("gmail-test-stock").first();assert.equal(inventory.product,"gpt:G30430004");assert.equal(inventory.orderId,second.id);
+  });
+
+  await t.test("Gmail 备选库存按件发放，首选缺货才切换", async () => {
+    await db.prepare("DELETE FROM rate_limits").run();
+    const imported=await call("/api/admin/inventory-import",{tradeNo:"GMAIL-BACKUP"},session);
+    assert.equal(imported.data.linked,true);assert.equal(imported.data.added,3);
+    assert.equal((await call("/api/admin/inventory-import",{tradeNo:"GMAIL-BACKUP"},session)).data.added,0);
+    const make=async email=>{const r=await call("/api/orders",{product:"gpt",planId:"gmailAccount",email,method:"alipay",acceptedTerms:true,requestId:randomUUID()});await call("/api/admin/update",{id:r.data.id,action:"confirm"},session);return r.data;};
+    const primary=await make("gmail-primary-check@example.com");supplierStock=10;
+    assert.equal((await call("/api/admin/supplier-preview",{id:primary.id},session)).data.goodsNo,"G30430004");
+    emptyGoods.add("G30430004");
+    const a=await make("gmail-backup-a@example.com"), b=await make("gmail-backup-b@example.com");
+    assert.equal((await call("/api/admin/supplier-preview",{id:a.id},session)).data.goodsNo,"G88230690");
+    const before=supplierPurchases;
+    const responses=await Promise.all([call("/api/admin/supplier-deliver",{id:a.id,expectedInventory:true},session),call("/api/admin/supplier-deliver",{id:b.id,expectedInventory:true},session)]);
+    assert.ok(responses.every(r=>r.status===200));assert.equal(supplierPurchases,before);
+    const rows=await db.prepare("SELECT card,orderId FROM inventory_cards WHERE product='gpt:G88230690' AND orderId IS NOT NULL").all();
+    assert.equal(rows.results.length,2);assert.equal(new Set(rows.results.map(x=>x.card)).size,2);
+    assert.match(sentMessages.findLast(x=>x.to==="gmail-backup-a@example.com").text,/采购后 5 分钟/);
+    emptyGoods.clear();supplierStock=null;
+  });
+
+  await t.test("Gmail 备选自动批购三件，成本分摊且并发不重复", async () => {
+    await db.prepare("DELETE FROM rate_limits").run();
+    await db.prepare("DELETE FROM inventory_cards WHERE product='gpt:G88230690' AND orderId IS NULL").run();
+    const make=async email=>{const r=await call("/api/orders",{product:"gpt",planId:"gmailAccount",email,method:"alipay",acceptedTerms:true,requestId:randomUUID()});await call("/api/admin/update",{id:r.data.id,action:"confirm"},session);return r.data;};
+    emptyGoods.add("G30430004");supplierStock=10;
+    const a=await make("batch-first@example.com"), b=await make("batch-concurrent@example.com");
+    const quote=await call("/api/admin/supplier-preview",{id:a.id},session);assert.equal(quote.data.goodsNo,"G88230690");assert.equal(quote.data.quantity,3);assert.equal(quote.data.total,12.61);
+    const before=supplierPurchases;
+    const results=await Promise.all([a,b].map(o=>call("/api/admin/supplier-deliver",{id:o.id,expectedGoodsNo:"G88230690",expectedCents:1261},session)));
+    assert.equal(supplierPurchases,before+1);assert.equal(supplierQuantity,3);assert.equal(results.filter(x=>x.status===200).length,1);
+    const cards=await db.prepare("SELECT card,costCents,orderId FROM inventory_cards WHERE tradeNo='BATCH-16688'").all();assert.equal(cards.results.length,3);assert.equal(cards.results.reduce((n,x)=>n+x.costCents,0),1261);assert.equal(cards.results.filter(x=>x.orderId).length,1);
+    const pending=results[0].status===200?b:a;
+    const preview=await call("/api/admin/supplier-preview",{id:pending.id},session);assert.equal(preview.data.inventory,true);
+    assert.equal((await call("/api/admin/supplier-deliver",{id:pending.id,expectedInventory:true},session)).status,200);
+    const costs=await db.prepare("SELECT costCents FROM order_procurement_cost WHERE orderId IN (?,?)").bind(a.id,b.id).all();assert.ok(costs.results.every(x=>x.costCents>=420 && x.costCents<=421));
+    assert.equal(supplierPurchases,before+1);emptyGoods.clear();supplierStock=null;
+  });
+
+  await t.test("Gmail 批购结果不明时阻止重复采购", async () => {
+    await db.prepare("DELETE FROM rate_limits").run();
+    await db.prepare("DELETE FROM inventory_cards WHERE product='gpt:G88230690' AND orderId IS NULL").run();
+    emptyGoods.add("G30430004");supplierStock=10;supplierTimeout=true;
+    const make=async email=>{const r=await call("/api/orders",{product:"gpt",planId:"gmailAccount",email,method:"alipay",acceptedTerms:true,requestId:randomUUID()});await call("/api/admin/update",{id:r.data.id,action:"confirm"},session);return r.data;};
+    const a=await make("batch-timeout-a@example.com"),b=await make("batch-timeout-b@example.com"),before=supplierPurchases;
+    assert.equal((await call("/api/admin/supplier-deliver",{id:a.id,expectedGoodsNo:"G88230690",expectedCents:1261},session)).status,502);
+    assert.equal((await call("/api/admin/supplier-deliver",{id:a.id},session)).status,409);
+    assert.equal((await call("/api/admin/supplier-deliver",{id:b.id,expectedGoodsNo:"G88230690",expectedCents:1261},session)).status,409);
+    assert.equal(supplierPurchases,before+1);supplierTimeout=false;emptyGoods.clear();supplierStock=null;
   });
 
 });
