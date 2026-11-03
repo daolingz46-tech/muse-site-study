@@ -527,14 +527,15 @@ async function admin(env: Env, request: Request, path: string) {
       { key:"museWarranty", category: "Muse", title: `${accountTitle} · 7 天质保`, supplier: MUSE_ACCOUNT_SUPPLIER.goodsNo, sales: sales.results.filter(x => x.product === "muse" && x.supplierPlan === "museWarranty").reduce((n,x) => n + x.sales,0) },
       { key:"museBasic", category: "Muse", title: `${accountTitle} · 基础款`, supplier: MUSE_BASIC_SUPPLIER.goodsNo, sales: sales.results.filter(x => x.product === "muse" && x.supplierPlan !== "museWarranty").reduce((n,x) => n + x.sales,0) },
       ...tokenPlans.map(p => ({ key:`token:${p.label}`, category: "Muse Token", title: `Muse Token · ${p.label}`, supplier: "G85161614", sales: sales.results.filter(x => x.product === "muse-token" && x.title === `Muse Token · ${p.label}`).reduce((n,x) => n + x.sales,0) })),
-      ...Object.entries(GPT_SUPPLIER_PRODUCTS).filter(([key]) => key !== "halfPriceAccount").map(([key,p]) => ({ key, category: "GPT", title: p.title, supplier: p.goodsNo, sales: sales.results.filter(x => x.product === "gpt" && x.supplierPlan === key).reduce((n,x) => n + x.sales,0) })),
+      ...Object.entries(GPT_SUPPLIER_PRODUCTS).filter(([key]) => key !== "halfPriceAccount").map(([key,p]) => ({ key, category: key === "mailCom" ? "Mail.com" : "GPT", title: p.title, supplier: p.goodsNo, sales: sales.results.filter(x => x.product === "gpt" && x.supplierPlan === key).reduce((n,x) => n + x.sales,0) })),
     ];
     return json({ products });
   }
   if (path === "/api/admin/catalog-suppliers" && request.method === "POST") {
     const key = str((await body(request)).key, 80);
     let goods: readonly string[] = [], quantity = 1;
-    if (key === "museWarranty") goods = [MUSE_ACCOUNT_SUPPLIER.goodsNo];
+    if (key === "mailCom") { goods = ["G24433963"]; quantity = 10; }
+    else if (key === "museWarranty") goods = [MUSE_ACCOUNT_SUPPLIER.goodsNo];
     else if (key === "museBasic") goods = [MUSE_BASIC_SUPPLIER.goodsNo];
     else if (key.startsWith("token:")) { const plan = tokenPlans.find(p => `token:${p.label}` === key); if (plan) { goods = ["G85161614"]; quantity = Number(plan.label.match(/^(\d+)/)?.[1]) / 10; } }
     else if (Object.hasOwn(GPT_SUPPLIER_PRODUCTS,key) && key !== "halfPriceAccount") { const plan = GPT_SUPPLIER_PRODUCTS[key as keyof typeof GPT_SUPPLIER_PRODUCTS]; goods = [plan.goodsNo, ...(SUPPLIER_BACKUPS[key] || [])]; }
@@ -708,7 +709,7 @@ async function admin(env: Env, request: Request, path: string) {
       const used = await env.DB.prepare("SELECT orderId FROM supplier_fulfillment WHERE card=? LIMIT 1").bind(card).first();
       if (used) continue;
       const rawInstruction=typeof data.instruction === "string" ? data.instruction.trim() : "";
-      const instructions=goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G88655555" ? qualificationGuide : goodsNo === "G17614190" ? [halfPriceTopupGuide,rawInstruction || "（兑换说明未提供）"].join("\n\n") : rawInstruction;
+      const instructions=goodsNo === "G24433963" ? "这是 Mail.com 邮箱账号，交付格式为邮箱和密码。请前往 https://www.mail.com/ 登录。" : goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G88655555" ? qualificationGuide : goodsNo === "G17614190" ? [halfPriceTopupGuide,rawInstruction || "（兑换说明未提供）"].join("\n\n") : rawInstruction;
       const saved = await env.DB.prepare("INSERT OR IGNORE INTO inventory_cards(id,product,card,cardHash,tradeNo,instruction,createdAt) VALUES(?,?,?,?,?,?,?)").bind(crypto.randomUUID(), product, card, await hash(card), tradeNo, instructions, Date.now()).run();
       added += saved.meta.changes;
     }
@@ -788,6 +789,7 @@ async function admin(env: Env, request: Request, path: string) {
     const products=inventoryProducts(order);
     for (const product of (order.supplierPlan === "halfPriceAccountOneMonth" ? products.filter(p => p === "gpt:G95786160") : products)) { const item=await env.DB.prepare("SELECT id,product FROM inventory_cards WHERE product=? AND orderId IS NULL LIMIT 1").bind(product).first<{product:string}>(); if (item) return json({inventory:true,goodsNo:item.product.startsWith("gpt:") ? item.product.slice(4) : ""},200,{"Cache-Control":"no-store"}); }
     const plan=order.product === "muse" ? (order.supplierPlan === "museWarranty" ? MUSE_ACCOUNT_SUPPLIER : MUSE_BASIC_SUPPLIER) : GPT_SUPPLIER_PRODUCTS[order.supplierPlan as keyof typeof GPT_SUPPLIER_PRODUCTS]; if (!plan) throw new HttpError(400,"商品货源尚未配置");
+    if (order.supplierPlan === "mailCom") throw new HttpError(409,"Mail.com 库存不足，请先批量采购并导入库存；未执行采购。");
     return json(await chooseSupplier(env,order,plan.goodsNo),200,{"Cache-Control":"no-store"});
   }
   if (path === "/api/admin/supplier-deliver" && request.method === "POST") {
@@ -813,6 +815,7 @@ async function admin(env: Env, request: Request, path: string) {
       }
     }
     if (!task) {
+      if (order.supplierPlan === "mailCom") throw new HttpError(409,"Mail.com 库存不足，请先批量采购并导入库存；未执行采购。");
       if (input.expectedInventory === true) throw new HttpError(409,"库存已变化，请重新确认后再发货；未执行采购。");
       let selected: Awaited<ReturnType<typeof chooseSupplier>>;
       try { selected=await chooseSupplier(env,order,plan.goodsNo); }
