@@ -9,7 +9,7 @@ export const GPT_SUPPLIER_PRODUCTS = {
   halfPriceAccountOneMonth: { goodsNo: "G95786160", priceCents: 1500, title: "GPT · 一个月半价资格账号" },
   halfPriceTopup: { goodsNo: "G17614190", priceCents: 7500, title: "GPT · 一个月半价代充" },
   philippinesTopup: { goodsNo: "G53967132", priceCents: 12800, title: "GPT · 菲律宾正价代充" },
-  plusAccount: { goodsNo: "G39595340", priceCents: 2000, title: "GPT · Plus 成品账号" },
+  plusAccount: { goodsNo: "G39595340", priceCents: 4000, title: "GPT · Plus 成品账号" },
   plus15Day: { goodsNo: "G97316889", priceCents: 7200, title: "GPT · Plus 老号（15 天质保）" },
 } as const;
 // Only compatible account products are eligible; unknown or failing quotes never trigger fallback.
