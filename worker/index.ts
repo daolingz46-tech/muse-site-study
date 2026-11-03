@@ -126,6 +126,21 @@ async function sendEmail(env: Env, id: string, subject: string, html: string, te
   const response = await fetch("https://api.resend.com/emails", { method: "POST", headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json", "Idempotency-Key": id }, body: JSON.stringify({ from: "Muse 商店 <onboarding@resend.dev>", to: [to], subject, html, text, attachments }) });
   if (!response.ok) throw new Error(`resend_${response.status}`);
 }
+async function sendWithdrawalNotices(env: Env) {
+  if (!hasEmailConfig(env)) return;
+  const now=Date.now();
+  const rows=await env.DB.prepare("SELECT withdrawalId,attempts FROM withdrawal_notice_outbox WHERE sentAt IS NULL AND nextAttemptAt<=? ORDER BY nextAttemptAt LIMIT 5").bind(now).all<{withdrawalId:string;attempts:number}>();
+  for (const item of rows.results) {
+    const claim=await env.DB.prepare("UPDATE withdrawal_notice_outbox SET attempts=attempts+1,nextAttemptAt=? WHERE withdrawalId=? AND sentAt IS NULL AND nextAttemptAt<=?").bind(now+60000,item.withdrawalId,now).run(); if (!claim.meta.changes) continue;
+    try {
+      const row=await env.DB.prepare("SELECT a.name,w.amountCents,p.method FROM agent_withdrawals w JOIN agents a ON a.id=w.agentId LEFT JOIN agent_payout_codes p ON p.id=w.payoutCodeId WHERE w.id=?").bind(item.withdrawalId).first<{name:string;amountCents:number;method:string}>(); if (!row) throw new Error("withdrawal_missing");
+      const safeName=row.name.replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;", "'":"&#39;"}[c]!));
+      const method=row.method === "alipay" ? "支付宝" : "微信", amount=(row.amountCents/100).toFixed(2);
+      await sendEmail(env,`withdrawal:${item.withdrawalId}`,`代理提现申请：${row.name}`,`<p>代理：${safeName}</p><p>提现金额：¥${amount}</p><p>收款方式：${method}</p><p><a href="https://musetoken.store/admin/agents/">查看并审核提现</a></p>`,`代理：${row.name}\n提现金额：¥${amount}\n收款方式：${method}\n工作台：https://musetoken.store/admin/agents/`);
+      await env.DB.prepare("UPDATE withdrawal_notice_outbox SET sentAt=? WHERE withdrawalId=?").bind(Date.now(),item.withdrawalId).run();
+    } catch { await env.DB.prepare("UPDATE withdrawal_notice_outbox SET nextAttemptAt=? WHERE withdrawalId=? AND sentAt IS NULL").bind(Date.now()+Math.min(3600000,15000*2**Math.min(item.attempts,8)),item.withdrawalId).run(); }
+  }
+}
 async function sendOrderEmails(env: Env) {
   if (!hasEmailConfig(env)) return;
   const now = Date.now();
@@ -277,7 +292,7 @@ function agentProducts() {
     ...Object.entries(GPT_SUPPLIER_PRODUCTS).filter(([key]) => key !== "halfPriceAccount").map(([key,plan]) => ({ productKey: `gpt:${key}`, name: plan.title, priceCents: plan.priceCents, category: "GPT" })),
   ];
 }
-async function agentApi(env: Env, request: Request, path: string) {
+async function agentApi(env: Env, request: Request, path: string, ctx: ExecutionContextLike) {
   if (path === "/api/agent/login" && request.method === "POST") {
     await limit(env,request,"agent-login",8,900);
     const input=await body(request), code=str(input.code,32), password=typeof input.password === "string" ? input.password : "";
@@ -300,20 +315,42 @@ async function agentApi(env: Env, request: Request, path: string) {
     return json({agentId:agent.id,orders:rows.results},200,{"Cache-Control":"no-store"});
   }
   if (path === "/api/agent/balance" && request.method === "GET") return json({agentId:agent.id,...await agentBalance(env.DB,agent.id,Date.now())});
+  if (path === "/api/agent/payout-code" && request.method === "POST") {
+    await limit(env,request,"agent-payout-code",15,3600);
+    if (Number(request.headers.get("Content-Length")) > 550000) throw new HttpError(413,"图片过大，请上传 500 KB 以内的图片");
+    if (!request.headers.get("Content-Type")?.startsWith("multipart/form-data;")) throw new HttpError(415,"请选择图片上传");
+    const reader=request.body?.getReader(); if (!reader) throw new HttpError(400,"请选择图片上传");
+    const chunks:Uint8Array[]=[]; let size=0;
+    while (true) { const part=await reader.read(); if (part.done) break; size+=part.value.length; if (size>550000) { await reader.cancel(); throw new HttpError(413,"图片过大，请上传 500 KB 以内的图片"); } chunks.push(part.value); }
+    const bytesBody=new Uint8Array(size);let offset=0;for (const chunk of chunks) {bytesBody.set(chunk,offset);offset+=chunk.length;}
+    let form:FormData;try { form=await new Response(bytesBody,{headers:{"Content-Type":request.headers.get("Content-Type")!}}).formData(); } catch { throw new HttpError(400,"图片格式无效"); }
+    const method=form.get("method"), image=form.get("image");
+    if (form.get("expectedAgentId") !== agent.id) throw new HttpError(409,"代理账号已变化，请重新登录核对");
+    if ((method !== "alipay" && method !== "wechat") || !(image instanceof File) || image.size < 16 || image.size > 500000) throw new HttpError(400,"请选择收款方式并上传 500 KB 以内的图片");
+    const bytes=new Uint8Array(await image.arrayBuffer());
+    const png=bytes[0]===137 && bytes[1]===80 && bytes[2]===78 && bytes[3]===71 && bytes[4]===13 && bytes[5]===10 && bytes[6]===26 && bytes[7]===10;
+    const jpeg=bytes[0]===255 && bytes[1]===216 && bytes[2]===255;
+    if (!png && !jpeg) throw new HttpError(400,"仅支持 PNG 或 JPG 图片");
+    const id=crypto.randomUUID(), now=Date.now();
+    await env.DB.prepare("INSERT INTO agent_payout_codes(id,agentId,method,mime,image,createdAt) VALUES(?,?,?,?,?,?)").bind(id,agent.id,method,png?"image/png":"image/jpeg",base64(bytes),now).run();
+    return json({id,method},200,{"Cache-Control":"no-store"});
+  }
   if (path === "/api/agent/withdrawals" && request.method === "GET") {
     const rows=await env.DB.prepare("SELECT id,amountCents,status,requestedAt,dueAt FROM agent_withdrawals WHERE agentId=? ORDER BY requestedAt DESC LIMIT 100").bind(agent.id).all();
     return json({agentId:agent.id,withdrawals:rows.results});
   }
   if (path === "/api/agent/withdrawals" && request.method === "POST") {
-    const input=await body(request), requestId=str(input.requestId,64), amount=input.amountCents;
+    const input=await body(request), requestId=str(input.requestId,64), amount=input.amountCents, payoutCodeId=str(input.payoutCodeId,64);
     if (input.expectedAgentId !== agent.id) throw new HttpError(409,"代理账号已变化，请重新登录核对");
+    if (!/^[0-9a-f-]{36}$/i.test(payoutCodeId)) throw new HttpError(400,"请先上传收款码");
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId) || !Number.isSafeInteger(amount) || Number(amount)<=0 || Number(amount)>10000000) throw new HttpError(400,"提现金额或请求无效");
     await limit(env,request,"agent-withdrawal",20,3600);
     const id=await hash(`withdrawal:${agent.id}:${requestId}`), now=Date.now();
-    await env.DB.batch([commissionReconciliation(env.DB,agent.id,now),withdrawalReservation(env.DB,agent.id,id,Number(amount),now)]);
-    const withdrawal=await env.DB.prepare("SELECT id,amountCents,status,requestedAt,dueAt FROM agent_withdrawals WHERE id=? AND agentId=?").bind(id,agent.id).first<{amountCents:number}>();
+    await env.DB.batch([commissionReconciliation(env.DB,agent.id,now),withdrawalReservation(env.DB,agent.id,id,Number(amount),now,payoutCodeId),env.DB.prepare("INSERT OR IGNORE INTO withdrawal_notice_outbox(withdrawalId,nextAttemptAt) SELECT id,? FROM agent_withdrawals WHERE id=? AND agentId=?").bind(now,id,agent.id)]);
+    const withdrawal=await env.DB.prepare("SELECT id,amountCents,status,requestedAt,dueAt,payoutCodeId FROM agent_withdrawals WHERE id=? AND agentId=?").bind(id,agent.id).first<{amountCents:number;payoutCodeId:string|null}>();
     if (!withdrawal) throw new HttpError(409,"可提现余额不足，请刷新后重试");
-    if (withdrawal.amountCents!==amount) throw new HttpError(409,"提现内容已改变，请重新提交");
+    if (withdrawal.amountCents!==amount || withdrawal.payoutCodeId!==payoutCodeId) throw new HttpError(409,"提现内容已改变，请重新提交");
+    if (hasEmailConfig(env)) ctx.waitUntil(sendWithdrawalNotices(env));
     return json({withdrawal});
   }
   if (path === "/api/agent/logout" && request.method === "POST") { await env.DB.prepare("DELETE FROM agent_sessions WHERE hash=?").bind(await hash(session)).run(); const secure=new URL(request.url).protocol === "https:"; return json({ok:true},200,{"Set-Cookie":`agent_session=; HttpOnly; SameSite=${secure?"None":"Lax"}; Path=/api/agent; Max-Age=0${secure?"; Secure":""}`}); }
@@ -409,11 +446,18 @@ async function admin(env: Env, request: Request, path: string) {
       if (!result.ok) throw new HttpError(409,"佣金状态已变更，或该代理有打款中、待核查的提现，请先核对后重新查询");
       return json({ok:true,replay:result.replay});
     }
+    if (path === "/api/admin/owner-payout-code" && request.method === "GET") {
+      const id=new URL(request.url).searchParams.get("withdrawalId") || ""; if (!/^[a-f0-9]{64}$/.test(id)) throw new HttpError(400,"提现编号无效");
+      const row=await env.DB.prepare("SELECT p.image,p.mime FROM agent_withdrawals w JOIN agent_payout_codes p ON p.id=w.payoutCodeId WHERE w.id=?").bind(id).first<{image:string;mime:string}>();
+      if (!row) throw new HttpError(404,"未提供收款码");
+      const raw=atob(row.image),bytes=Uint8Array.from(raw,c=>c.charCodeAt(0));
+      return new Response(bytes,{headers:{"Content-Type":row.mime,"Cache-Control":"private, no-store","X-Content-Type-Options":"nosniff","Content-Security-Policy":"default-src 'none'"}});
+    }
     if (path === "/api/admin/owner-withdrawals" && request.method === "GET") {
       const rawPage=new URL(request.url).searchParams.get("page") || "0";
       if (!/^\d{1,5}$/.test(rawPage)) throw new HttpError(400,"页码无效");
       const page=Number(rawPage);
-      const rows=await env.DB.prepare("SELECT w.id,w.agentId,a.name AS agentName,w.amountCents,w.status,w.requestedAt,w.approvedAt,w.dueAt,w.paidAt,w.paymentReference FROM agent_withdrawals w JOIN agents a ON a.id=w.agentId ORDER BY CASE WHEN w.status IN ('pending','approved','paying','unknown') THEN 0 ELSE 1 END,w.requestedAt ASC,w.id ASC LIMIT 51 OFFSET ?").bind(page*50).all();
+      const rows=await env.DB.prepare("SELECT w.id,w.agentId,a.name AS agentName,w.amountCents,w.status,w.requestedAt,w.approvedAt,w.dueAt,w.paidAt,w.paymentReference,p.method AS payoutMethod,w.payoutCodeId FROM agent_withdrawals w JOIN agents a ON a.id=w.agentId LEFT JOIN agent_payout_codes p ON p.id=w.payoutCodeId ORDER BY CASE WHEN w.status IN ('pending','approved','paying','unknown') THEN 0 ELSE 1 END,w.requestedAt ASC,w.id ASC LIMIT 51 OFFSET ?").bind(page*50).all();
       return json({withdrawals:rows.results.slice(0,50),page,hasMore:rows.results.length>50});
     }
     if (path === "/api/admin/owner-withdrawal-action" && request.method === "POST") {
@@ -444,6 +488,7 @@ async function admin(env: Env, request: Request, path: string) {
     }
     throw new HttpError(404,"接口不存在");
   }
+  if (path === "/api/admin/withdrawal-count" && request.method === "GET") { const row=await env.DB.prepare("SELECT COUNT(*) AS count FROM agent_withdrawals WHERE status='pending'").first<{count:number}>(); return json({count:row?.count || 0},200,{"Cache-Control":"no-store"}); }
   if (path === "/api/admin/agents" && request.method === "GET") {
     const agents = await env.DB.prepare("SELECT a.id,a.name,a.referralCode,a.status,a.createdAt,COUNT(o.id) AS orderCount,COALESCE(SUM(CASE WHEN o.status='complete' THEN 1 ELSE 0 END),0) AS completedOrderCount FROM agents a LEFT JOIN agent_order_attribution x ON x.agentId=a.id LEFT JOIN orders o ON o.id=x.orderId GROUP BY a.id ORDER BY a.createdAt DESC LIMIT 200").all();
     const rules = await env.DB.prepare("SELECT productKey,amountCents,updatedAt FROM agent_commission_rules ORDER BY productKey").all();
@@ -1042,7 +1087,7 @@ const worker = {
         return withCors(json({ stock: Object.fromEntries(entries) }));
       }
       if (path.startsWith("/api/admin/")) return withCors(await admin(env, request, path));
-      if (path.startsWith("/api/agent/")) return withCors(await agentApi(env, request, path));
+      if (path.startsWith("/api/agent/")) return withCors(await agentApi(env, request, path, ctx));
       if (path === "/api/visit" && request.method === "POST") {
         await limit(env, request, "visit", 60, 60);
         const input = await body(request);
@@ -1119,6 +1164,6 @@ const worker = {
       return withCors(json({ message: "订单服务暂时不可用，请稍后重试" }, 500));
     }
   },
-  async scheduled(_event: unknown, env: Env) { await expire(env); await sendOrderEmails(env); await sendOrderPushes(env); },
+  async scheduled(_event: unknown, env: Env) { await expire(env); await sendOrderEmails(env); await sendWithdrawalNotices(env); await sendOrderPushes(env); },
 };
 export default worker;

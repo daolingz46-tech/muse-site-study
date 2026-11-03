@@ -498,7 +498,11 @@ test("订单、收款核实和交付的数据库流程", async t => {
     await db.prepare("UPDATE orders SET paidAt=?,completedAt=? WHERE id=?").bind(Date.now()-3*86400000,Date.now()-3*86400000,orders[0].data.id).run();
     await db.prepare("UPDATE agent_ledger SET availableAt=? WHERE orderId=?").bind(Date.now()-86400000,orders[0].data.id).run();
     assert.equal((await call("/api/agent/balance",undefined,login.cookie)).data.availableCents,200);
-    const requestA={amountCents:150,requestId:randomUUID(),expectedAgentId:created.data.id}, requestB={amountCents:150,requestId:randomUUID(),expectedAgentId:created.data.id};
+    const form=new FormData();form.set("method","alipay");form.set("expectedAgentId",created.data.id);form.set("image",new Blob([Uint8Array.from([137,80,78,71,13,10,26,10,0,0,0,0,0,0,0,0])],{type:"image/png"}),"code.png");
+    const encoded=new Request("https://shop.example/api/agent/payout-code",{method:"POST",body:form});
+    const uploaded=await mf.dispatchFetch("https://shop.example/api/agent/payout-code",{method:"POST",headers:{Origin:"https://shop.example",Cookie:login.cookie,"Content-Type":encoded.headers.get("Content-Type")},body:await encoded.arrayBuffer()});assert.equal(uploaded.status,200);const payoutCodeId=(await uploaded.json()).id;
+    assert.equal((await call("/api/agent/withdrawals",{amountCents:1,requestId:randomUUID(),expectedAgentId:second.data.id,payoutCodeId},secondLogin.cookie)).status,409);
+    const requestA={amountCents:150,requestId:randomUUID(),expectedAgentId:created.data.id,payoutCodeId}, requestB={amountCents:150,requestId:randomUUID(),expectedAgentId:created.data.id,payoutCodeId};
     const withdrawals=await Promise.all([call("/api/agent/withdrawals",requestA,login.cookie),call("/api/agent/withdrawals",requestB,login.cookie)]);
     assert.deepEqual(withdrawals.map(item=>item.status).sort(),[200,409]);
     const winner=withdrawals[0].status===200?requestA:requestB;
@@ -509,6 +513,15 @@ test("订单、收款核实和交付的数据库流程", async t => {
     const otherAdmin=(await call("/api/admin/login",{password})).cookie;
     assert.equal((await call("/api/admin/owner-withdrawals",undefined,`${otherAdmin}; ${ownerLogin.cookie}`)).status,401);
     const withdrawal=(await call("/api/agent/withdrawals",winner,login.cookie)).data.withdrawal;
+    assert.equal((await call("/api/admin/withdrawal-count",undefined,session)).data.count,1);
+    assert.equal((await mf.dispatchFetch(`https://shop.example/api/admin/owner-payout-code?withdrawalId=${withdrawal.id}`,{headers:{Cookie:session}})).status,401);
+    const codeResponse=await mf.dispatchFetch(`https://shop.example/api/admin/owner-payout-code?withdrawalId=${withdrawal.id}`,{headers:{Cookie:ownerSession}});assert.equal(codeResponse.status,200);assert.equal(codeResponse.headers.get("content-type"),"image/png");
+    const ownerRows=(await call("/api/admin/owner-withdrawals",undefined,ownerSession)).data.withdrawals;assert.equal(ownerRows.find(x=>x.id===withdrawal.id).payoutMethod,"alipay");
+    assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM withdrawal_notice_outbox WHERE withdrawalId=?").bind(withdrawal.id).first()).n,1);
+    for (let i=0;i<20 && !sentMessages.some(m=>m.subject?.includes("代理提现申请：测试代理"));i++) await new Promise(resolve=>setTimeout(resolve,10));
+    assert.equal(sentMessages.filter(m=>m.subject?.includes("代理提现申请：测试代理")).length,1);
+    assert.match(sentMessages.find(m=>m.subject?.includes("代理提现申请：测试代理")).text,/支付宝/);
+    assert.doesNotMatch(sentMessages.find(m=>m.subject?.includes("代理提现申请：测试代理")).text,/data:image/);
     assert.equal((await call("/api/admin/owner-withdrawal-action",{id:withdrawal.id,action:"approve"},session)).status,401);
     assert.equal((await call("/api/admin/owner-withdrawal-action",{id:withdrawal.id,action:"approve"},ownerSession)).status,200);
     assert.equal((await call("/api/admin/owner-withdrawal-action",{id:withdrawal.id,action:"begin_payout"},ownerSession)).status,409);
@@ -525,7 +538,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
     const paid=(await call("/api/agent/balance",undefined,login.cookie)).data;
     assert.equal(paid.availableCents,50);assert.equal(paid.reservedCents,0);assert.equal(paid.paidCents,150);
     assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM withdrawal_audit WHERE withdrawalId=?").bind(withdrawal.id).first()).n,3);
-    const secondWithdrawal=(await call("/api/agent/withdrawals",{amountCents:40,requestId:randomUUID(),expectedAgentId:created.data.id},login.cookie)).data.withdrawal;
+    const secondWithdrawal=(await call("/api/agent/withdrawals",{amountCents:40,requestId:randomUUID(),expectedAgentId:created.data.id,payoutCodeId},login.cookie)).data.withdrawal;
     const hold={orderId:orders[0].data.id,action:"hold",reason:"正在核实此订单的退款情况",requestId:randomUUID()};
     assert.equal((await call(`/api/admin/owner-commission?code=${orders[0].data.code}`,undefined,session)).status,401);
     assert.equal((await call(`/api/admin/owner-commission?code=${orders[0].data.code}`,undefined,ownerSession)).data.commission.state,"active");
