@@ -3,6 +3,7 @@ export type SupplierCredentials = { appId: string; secret: string };
 export const MUSE_BASIC_SUPPLIER = { goodsNo: "G43844575", priceCents: 1400 } as const;
 export const MUSE_ACCOUNT_SUPPLIER = { goodsNo: "G37376813", priceCents: 1800 } as const;
 export const GPT_SUPPLIER_PRODUCTS = {
+  freeAccount: { goodsNo: "G42078548", priceCents: 500, title: "GPT · 白号（可换绑）" },
   mailCom: { goodsNo: "G24433963", priceCents: 500, title: "Mail.com · 邮箱账号" },
   halfPriceAccount: { goodsNo: "G26126458", priceCents: 1500, title: "GPT · 两个月半价资格账号" },
   halfPriceAccountOneMonth: { goodsNo: "G95786160", priceCents: 1500, title: "GPT · 一个月半价资格账号" },

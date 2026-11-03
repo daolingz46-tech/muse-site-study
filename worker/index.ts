@@ -330,12 +330,13 @@ async function chooseSupplier(env: Env, order: Row, primary: string) {
     if (!Number.isFinite(total) || total <= 0) throw new HttpError(409,"货源价格未确认，未执行采购。");
     if (quote.data.balance_enough !== true) throw new HttpError(409,`运营钱包余额不足，本次需 ¥${total.toFixed(2)}（含手续费）。`);
     if (Math.round(total*100)>order.amountCents) throw new HttpError(409,"货源成本高于售价，未执行采购。");
-    const supplierName:Record<string,string>={G95786160:"huaiyesu",G88655555:"lzz_ai小铺",G75777360:"原货源商",G17614190:"AI源头"};
+    const supplierName:Record<string,string>={G42078548:"692972690@qq.com",G95786160:"huaiyesu",G88655555:"lzz_ai小铺",G75777360:"原货源商",G17614190:"AI源头"};
     return { goodsNo, supplierName:supplierName[goodsNo] || "16688 货源", total, unitPrice:quote.data.unit_price };
   }
   throw new HttpError(409,"已配置货源均缺货，未执行采购。");
 }
 
+const freeAccountGuide = `此商品为 GPT Free 白号，不含 Plus 和半价资格，可换绑邮箱。请在收到后 1 小时内首次登录检查。使用账号和密码在 ChatGPT 官方页面登录，按提示使用 2FA 密钥生成验证码（可使用本地验证器；货源提供 https://2fa.fun/）。本商品不含接码服务，如有问题请联系店主。`;
 const qualificationGuide = `请使用电脑登录，手机端可能不显示优惠。\n1. 使用收到的账号、密码登录 ChatGPT 官方网页；如需 2FA 验证，可使用验证器或 https://2fa.fun/ 获取验证码。\n2. 点击 Upgrade to Plus（升级 Plus），在支付页面查看是否显示半价优惠。\n3. 准备官方支持的支付卡，并确保余额充足；也可自行选购有额度的虚拟卡。\n4. 仅在官方支付页面填写卡号、有效期及 CVV，确认订阅。\n5. 请尽快使用优惠，一个月半价资格未使用可能失效；如需更长优惠，可考虑两个月或三个月资格。首登如需邮箱验证码，请联系商家协助更换账号。`;
 const newQualificationGuide = `此商品是半价资格账号，不含 Plus 订阅。半价资格为 1–3 个月随机，实际期限以账号显示为准。若收到 Go 试用号，请联系店主更换。请在 1 小时内首次登录并检查账号。
 1. 使用收到的账号和密码登录 ChatGPT 官方网页；如需双重验证，请使用验证器生成一次性验证码（可参考 https://2fa.fun/）。
@@ -540,7 +541,7 @@ async function admin(env: Env, request: Request, path: string) {
     else if (key.startsWith("token:")) { const plan = tokenPlans.find(p => `token:${p.label}` === key); if (plan) { goods = ["G85161614"]; quantity = Number(plan.label.match(/^(\d+)/)?.[1]) / 10; } }
     else if (Object.hasOwn(GPT_SUPPLIER_PRODUCTS,key) && key !== "halfPriceAccount") { const plan = GPT_SUPPLIER_PRODUCTS[key as keyof typeof GPT_SUPPLIER_PRODUCTS]; goods = [plan.goodsNo, ...(SUPPLIER_BACKUPS[key] || [])]; }
     if (!goods.length || !Number.isInteger(quantity) || quantity < 1) throw new HttpError(400,"商品不存在");
-    const names: Record<string,string> = {G95786160:"huaiyesu@gmail.com",G88655555:"lzz_ai小铺",G75777360:"原货源商（名称待核实）",G17614190:"AI源头",G37376813:"阿度AI账号批发",G43844575:"小白ai一手货源",G85161614:"海外批发"};
+    const names: Record<string,string> = {G42078548:"692972690@qq.com",G95786160:"huaiyesu@gmail.com",G88655555:"lzz_ai小铺",G75777360:"原货源商（名称待核实）",G17614190:"AI源头",G37376813:"阿度AI账号批发",G43844575:"小白ai一手货源",G85161614:"海外批发"};
     const items = await Promise.all(goods.map(async (goodsNo,index) => {
       const entry = {goodsNo, name:names[goodsNo] || "名称待核实", priority:index === 0 ? "首选" : `备用 ${index}`, unitPrice:null as number|null, total:null as number|null, stock:null as number|null};
       if (!env.SUPPLIER_APP_ID || !env.SUPPLIER_SECRET) return entry;
@@ -645,7 +646,7 @@ async function admin(env: Env, request: Request, path: string) {
     if (!order || !["muse", "gpt"].includes(order.product)) throw new HttpError(404, "订单不存在");
     const rows = await env.DB.prepare("SELECT id,name,mime,size,uploadedBytes FROM delivery_files WHERE orderId=? AND uploadedBytes=size ORDER BY createdAt").bind(orderId).all();
     const goods = order.product === "gpt" ? inventoryProducts(order).map(value => value.slice(4)) : [];
-    return json({ files: rows.results, sources: goods.map(goodsNo => ({ goodsNo, instructions: goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G88655555" ? qualificationGuide : "" })) });
+    return json({ files: rows.results, sources: goods.map(goodsNo => ({ goodsNo, instructions: goodsNo === "G42078548" ? freeAccountGuide : goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G88655555" ? qualificationGuide : "" })) });
   }
   if (path === "/api/admin/delivery-file/start" && request.method === "POST") {
     const input = await body(request), orderId = str(input.orderId, 64), name = str(input.name, 120).replace(/[\\/\x00-\x1f]/g, "_");
@@ -709,7 +710,7 @@ async function admin(env: Env, request: Request, path: string) {
       const used = await env.DB.prepare("SELECT orderId FROM supplier_fulfillment WHERE card=? LIMIT 1").bind(card).first();
       if (used) continue;
       const rawInstruction=typeof data.instruction === "string" ? data.instruction.trim() : "";
-      const instructions=goodsNo === "G24433963" ? "这是 Mail.com 邮箱账号，交付格式为邮箱和密码。请前往 https://www.mail.com/ 登录。" : goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G88655555" ? qualificationGuide : goodsNo === "G17614190" ? [halfPriceTopupGuide,rawInstruction || "（兑换说明未提供）"].join("\n\n") : rawInstruction;
+      const instructions=goodsNo === "G24433963" ? "这是 Mail.com 邮箱账号，交付格式为邮箱和密码。请前往 https://www.mail.com/ 登录。" : goodsNo === "G42078548" ? freeAccountGuide : goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G88655555" ? qualificationGuide : goodsNo === "G17614190" ? [halfPriceTopupGuide,rawInstruction || "（兑换说明未提供）"].join("\n\n") : rawInstruction;
       const saved = await env.DB.prepare("INSERT OR IGNORE INTO inventory_cards(id,product,card,cardHash,tradeNo,instruction,createdAt) VALUES(?,?,?,?,?,?,?)").bind(crypto.randomUUID(), product, card, await hash(card), tradeNo, instructions, Date.now()).run();
       added += saved.meta.changes;
     }
@@ -856,7 +857,7 @@ async function admin(env: Env, request: Request, path: string) {
       if (["halfPriceAccountOneMonth","halfPriceTopup"].includes(order.supplierPlan || "") && !goodsNo) throw new HttpError(409,"无法确认这笔采购的货源编号，请核查后再发货。");
       const rawInstruction=typeof result.data.instruction === "string" ? result.data.instruction.trim() : "";
       if (goodsNo === "G17614190" && !rawInstruction) throw new HttpError(409,"新货源未返回兑换说明，已采购，请核查教程后再发货，勿重复采购。");
-      const instruction = goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G88655555" ? qualificationGuide : goodsNo === "G17614190" ? [halfPriceTopupGuide,rawInstruction].filter(Boolean).join("\n\n") : rawInstruction || fallback;
+      const instruction = goodsNo === "G42078548" ? freeAccountGuide : goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G88655555" ? qualificationGuide : goodsNo === "G17614190" ? [halfPriceTopupGuide,rawInstruction].filter(Boolean).join("\n\n") : rawInstruction || fallback;
       const saved = await env.DB.prepare("UPDATE supplier_fulfillment SET state='ready',card=?,instruction=?,updatedAt=? WHERE orderId=? AND state='awaiting'").bind(card, instruction, Date.now(), id).run();
       if (!saved.meta.changes) throw new HttpError(409, "订单正在处理，请刷新");
       task = { ...task, state: "ready", card, instruction };
@@ -892,7 +893,7 @@ async function admin(env: Env, request: Request, path: string) {
     if (order.product === "gpt") {
       const goodsNo = str(input.goodsNo, 30);
       if (!inventoryProducts(order).includes(`gpt:${goodsNo}`)) throw new HttpError(400, "请选择此商品对应的实际采购货源");
-      instructions = goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G88655555" ? qualificationGuide : str(input.instructions, 2000);
+      instructions = goodsNo === "G42078548" ? freeAccountGuide : goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G88655555" ? qualificationGuide : str(input.instructions, 2000);
       if (!instructions) throw new HttpError(400, "请填写该货源的使用或兑换说明，不能使用其他商品的教程");
     }
     if (!hasEmailConfig(env)) throw new HttpError(503, "邮件服务尚未配置");
