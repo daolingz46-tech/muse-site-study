@@ -360,19 +360,19 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal(lookup.status, 200);
   });
 
-  await t.test("Token 多件采购依据订单数量，不重复采购，手动核实后完成", async () => {
-    supplierStock = 50;
+  await t.test("Token 手工充值不触发货源采购，保留历史采购记录", async () => {
     await db.prepare("DELETE FROM rate_limits").run();
-    const order = (await call("/api/orders", {product:"muse-token",planId:"100",inviteCode:"TEST",email:"token@example.com",method:"wechat",acceptedTerms:true,requestId:randomUUID()})).data;
-    assert.equal((await call("/api/admin/token-quote", {id:order.id}, session)).status,409);
-    await call("/api/admin/update", {id:order.id,action:"confirm"}, session);
-    const quote = await call("/api/admin/token-quote", {id:order.id}, session); assert.equal(quote.data.quantity,10);
-    const before = supplierPurchases;
-    assert.equal((await call("/api/admin/token-purchase", {id:order.id,expectedCents:1},session)).status,409);
-    const result = await call("/api/admin/token-purchase", {id:order.id,expectedCents:Math.round(quote.data.total*100)},session);
-    assert.equal(result.status,200); assert.equal(supplierGoods,"G85161614"); assert.equal(supplierQuantity,10); assert.equal(supplierRemark, `订单码:${order.code} 平台订单:${order.id}`); assert.equal(result.data.card.split("\n").length,10);
-    assert.equal((await call("/api/admin/token-purchase", {id:order.id},session)).status,200); assert.equal(supplierPurchases,before+1);
-    assert.equal((await call("/api/admin/update", {id:order.id,action:"complete",checked:true},session)).status,200);
+    const order=(await call("/api/orders",{product:"muse-token",planId:"100",inviteCode:"TEST-INVITE",method:"alipay",acceptedTerms:true,requestId:randomUUID()})).data;
+    await call("/api/admin/update",{id:order.id,action:"confirm"},session);
+    const before=supplierPurchases;
+    assert.equal((await call("/api/admin/token-quote",{id:order.id},session)).status,410);
+    assert.equal((await call("/api/admin/token-purchase",{id:order.id,expectedCents:1030},session)).status,410);
+    assert.equal(supplierPurchases,before);
+    assert.equal((await call("/api/admin/update",{id:order.id,action:"complete",checked:true},session)).status,200);
+    const old=(await call("/api/orders",{product:"muse-token",planId:"100",inviteCode:"HISTORY",method:"alipay",acceptedTerms:true,requestId:randomUUID()})).data;
+    await call("/api/admin/update",{id:old.id,action:"confirm"},session);
+    await db.prepare("INSERT INTO supplier_fulfillment(orderId,state,tradeNo,card,updatedAt) VALUES(?,'ready','HISTORY-TEST','test-card',?)").bind(old.id,Date.now()).run();
+    const history=await call("/api/admin/token-purchase",{id:old.id},session);assert.equal(history.status,200);assert.equal(history.data.card,"test-card");assert.equal(supplierPurchases,before);
   });
 
   await t.test("同邮箱订单时间线只对管理员开放且回复绑定订单邮箱", async () => {
@@ -669,7 +669,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
     const result=await call("/api/admin/catalog-suppliers",{key:"halfPriceAccountOneMonth"},session);
     assert.equal(result.status,200);assert.deepEqual(result.data.items.map(x=>x.goodsNo),["G95786160","G88655555","G75777360"]);assert.equal(result.data.items[0].total,3.1);
     const token=await call("/api/admin/catalog-suppliers",{key:"token:300亿 Token"},session);
-    assert.equal(token.status,200);assert.equal(token.data.quantity,30);assert.equal(Math.round(token.data.items[0].total*100),3090);
+    assert.equal(token.status,410);
     assert.equal((await call("/api/admin/catalog-suppliers",{key:"not-valid"},session)).status,400);
   });
 
