@@ -26,9 +26,10 @@ test("订单、收款核实和交付的数据库流程", async t => {
     if (new URL(request.url).hostname === "www.16688.com.cn") {
       const path = new URL(request.url).pathname;
       const params = await request.json();
-      if (path.endsWith("/quotePrice")) return Response.json({ code: 1, data: { balance_enough: supplierBalanceEnough, available_quantity: emptyGoods.has(params.goods_no) ? 0 : supplierStock, total_amount: params.goods_no === "G42078548" ? 0.05 : params.goods_no === "G85161614" ? params.quantity * 1.03 : params.goods_no === "G17614190" ? 58.5 : ["G95786160", "G88655555", "G75777360"].includes(params.goods_no) ? 3.10 : ["G37376813", "G43844575"].includes(params.goods_no) ? 4.12 : params.goods_no === "G39595340" ? 11.31 : params.goods_no === "G94215456" ? 40.65 : 110 } });
+      if (path.endsWith("/quotePrice")) return Response.json({ code: 1, data: { balance_enough: supplierBalanceEnough, available_quantity: emptyGoods.has(params.goods_no) ? 0 : supplierStock, total_amount: params.goods_no === "G30430004" ? 4.85 : params.goods_no === "G42078548" ? 0.05 : params.goods_no === "G85161614" ? params.quantity * 1.03 : params.goods_no === "G17614190" ? 58.5 : ["G95786160", "G88655555", "G75777360"].includes(params.goods_no) ? 3.10 : ["G37376813", "G43844575"].includes(params.goods_no) ? 4.12 : params.goods_no === "G39595340" ? 11.31 : params.goods_no === "G94215456" ? 40.65 : 110 } });
       if (path.endsWith("/create")) { supplierGoods = params.goods_no; supplierQuantity = params.quantity; supplierRemark = params.remark; supplierPurchases++; if (supplierTimeout) throw new Error("simulated network failure"); return Response.json({ code: 1, data: { trade_no: "TEST-16688", total_amount: params.goods_no === "G75777360" ? 3.27 : 3.10 } }); }
       if (path.endsWith("/query") && params.trade_no === "INVENTORY-ORDER") return Response.json({ code: 1, data: { goods_no: "G37376813", status: 4, cards: [{ code: "stock@example.com—pass--https://example.com/code" }], instruction: "说明" } });
+      if (path.endsWith("/query") && params.trade_no === "GMAIL-STOCK") return Response.json({code:1,data:{goods_no:"G30430004",status:4,cards:[{code:"gmail-test-stock"}],instruction:"Gmail 专属说明"}});
       if (path.endsWith("/query") && params.trade_no === "MAIL-STOCK") return Response.json({code:1,data:{goods_no:"G24433963",status:4,cards:[{code:"mail-one-example"},{code:"mail-two-example"}]}});
       if (path.endsWith("/query") && params.trade_no === "GPT-STOCK") return Response.json({code:1,data:{goods_no:"G95786160",status:4,cards:[{code:"gpt-stock-card"}],instruction:"供应商原说明"}});
       if (path.endsWith("/query") && params.trade_no === "OTHER-STOCK") return Response.json({code:1,data:{goods_no:"G12345678",status:4,cards:[{code:"other-stock-card"}]}});
@@ -726,6 +727,20 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal((await call("/api/admin/supplier-deliver",{id:order.id},session)).status,409);assert.equal(supplierPurchases,before+1);
     const fallback=await make("topup-fallback@example.com");emptyGoods.add("G53967132");const q=(await call("/api/admin/supplier-preview",{id:fallback.id},session)).data;assert.equal(q.goodsNo,"G19335525");assert.equal((await call("/api/admin/supplier-deliver",{id:fallback.id,expectedGoodsNo:q.goodsNo,expectedCents:11000},session)).status,200);assert.equal(supplierGoods,"G19335525");
     const blocked=await make("topup-missing@example.com");emptyGoods.clear();supplierNoInstructions=true;const prior=supplierPurchases;const r=await call("/api/admin/supplier-deliver",{id:blocked.id,expectedGoodsNo:"G53967132",expectedCents:11000},session);assert.equal(r.status,409);assert.equal(supplierPurchases,prior+1);assert.ok(!sentMessages.some(x=>x.to==="topup-missing@example.com"));assert.equal((await call("/api/admin/supplier-deliver",{id:blocked.id},session)).status,409);assert.equal(supplierPurchases,prior+1);supplierNoInstructions=false;supplierStock=null;
+  });
+
+  await t.test("Gmail 邮箱独立价格、货源、库存与教程", async () => {
+    await db.prepare("DELETE FROM rate_limits").run();
+    const make=async email=>{const r=await call("/api/orders",{product:"gpt",planId:"gmailAccount",email,method:"alipay",acceptedTerms:true,requestId:randomUUID()});assert.equal(r.status,201);assert.equal(r.data.amountCents,1580);return r.data;};
+    const first=await make("gmail-customer@example.com");assert.equal((await call("/api/admin/supplier-deliver",{id:first.id},session)).status,409);
+    await call("/api/admin/update",{id:first.id,action:"confirm"},session);
+    const quote=(await call("/api/admin/supplier-preview",{id:first.id},session)).data;assert.equal(quote.goodsNo,"G30430004");assert.equal(quote.total,4.85);
+    const before=supplierPurchases;assert.equal((await call("/api/admin/supplier-deliver",{id:first.id,expectedGoodsNo:quote.goodsNo,expectedCents:485},session)).status,200);assert.equal(supplierGoods,"G30430004");assert.equal(supplierPurchases,before+1);
+    const msg=sentMessages.findLast(x=>x.to==="gmail-customer@example.com");assert.match(msg.text,/仅保障 Gmail 邮箱收件正常/);assert.match(msg.text,/30 分钟/);assert.doesNotMatch(msg.text,/Mail.com 邮箱账号/);
+    assert.equal((await call("/api/admin/supplier-deliver",{id:first.id},session)).status,409);assert.equal(supplierPurchases,before+1);
+    const imported=await call("/api/admin/inventory-import",{tradeNo:"GMAIL-STOCK"},session);assert.equal(imported.data.goodsNo,"G30430004");assert.equal(imported.data.linked,true);assert.equal(imported.data.added,1);assert.equal((await call("/api/admin/inventory-import",{tradeNo:"GMAIL-STOCK"},session)).data.added,0);
+    const second=await make("gmail-stock@example.com");await call("/api/admin/update",{id:second.id,action:"confirm"},session);assert.equal((await call("/api/admin/supplier-preview",{id:second.id},session)).data.goodsNo,"G30430004");assert.equal((await call("/api/admin/supplier-deliver",{id:second.id,expectedInventory:true},session)).status,200);assert.equal(supplierPurchases,before+1);
+    const inventory=await db.prepare("SELECT product,orderId FROM inventory_cards WHERE card=?").bind("gmail-test-stock").first();assert.equal(inventory.product,"gpt:G30430004");assert.equal(inventory.orderId,second.id);
   });
 
 });
