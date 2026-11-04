@@ -685,7 +685,11 @@ async function admin(env: Env, request: Request, path: string) {
     catch { throw new HttpError(502,"推送加密或密钥配置异常（错误代码 PAYLOAD），请联系店主排查"); }
     let response:Response;
     try { response=await fetch(subscription.endpoint,{...payload,redirect:"error"}); }
-    catch { throw new HttpError(502,"无法连接苹果推送服务（错误代码 NETWORK），请联系店主排查"); }
+    catch (error) {
+      const message=error instanceof Error ? error.message.toLowerCase() : "";
+      const detail=/redirect/.test(message)?"REDIRECT":/timed? ?out|timeout/.test(message)?"TIMEOUT":/dns|resolve/.test(message)?"DNS":/tls|ssl|certificate/.test(message)?"TLS":/network connection lost|disconnected|connection reset/.test(message)?"CONNECTION":/fetch|network/.test(message)?"FETCH":"OTHER";
+      throw new HttpError(502,`服务器连接推送服务失败（代码 NETWORK-${detail}），请联系店主排查`);
+    }
     if (!response.ok) throw new HttpError(502,`推送服务拒绝了请求（状态码 ${response.status}），请联系店主排查`);
     return json({ ok: true });
   }
