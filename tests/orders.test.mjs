@@ -848,7 +848,8 @@ test("订单、收款核实和交付的数据库流程", async t => {
     await db.prepare("DELETE FROM rate_limits").run();const make=async()=> (await call("/api/orders",{product:"muse",email:"cancel-test@example.com",method:"alipay",acceptedTerms:true,requestId:randomUUID()})).data;
     const a=await make();assert.equal((await call("/api/admin/update",{id:a.id,action:"cancel"})).status,401);assert.equal((await call("/api/admin/update",{id:a.id,action:"cancel"},session)).status,200);
     assert.equal((await db.prepare("SELECT status FROM orders WHERE id=?").bind(a.id).first()).status,"cancelled");
-    assert.equal((await call("/api/orders/report",{id:a.id,token:a.token,remarkConfirmed:true})).data.status,"reported");assert.equal((await call("/api/admin/update",{id:a.id,action:"cancel"},session)).status,409);
+    assert.equal((await call("/api/orders/report",{id:a.id,token:a.token,remarkConfirmed:true})).data.status,"reported");assert.equal((await call("/api/admin/update",{id:a.id,action:"cancel"},session)).status,200);
+    assert.equal((await call("/api/orders/report",{id:a.id,token:a.token,remarkConfirmed:true})).data.status,"reported");
     await call("/api/admin/update",{id:a.id,action:"confirm"},session);assert.equal((await call("/api/admin/update",{id:a.id,action:"cancel"},session)).status,409);
   });
 

@@ -1042,8 +1042,8 @@ async function admin(env: Env, request: Request, path: string) {
     if (!row) throw new HttpError(404, "订单不存在");
     const now = Date.now(); let sql: string; let args: (string | number | null)[];
     if (input.action === "cancel") {
-      if (!["pending","expired"].includes(row.status) || row.paidAt || row.reportedAt) throw new HttpError(409,"只能取消未反馈付款的订单，请刷新核查");
-      sql="UPDATE orders SET status='cancelled',updatedAt=? WHERE id=? AND status IN ('pending','expired') AND paidAt IS NULL AND reportedAt IS NULL"; args=[now,row.id];
+      if (!["pending","expired","reported"].includes(row.status) || row.paidAt) throw new HttpError(409,"只能取消尚未确认收款的订单，请刷新核查");
+      sql="UPDATE orders SET status='cancelled',updatedAt=? WHERE id=? AND status IN ('pending','expired','reported') AND paidAt IS NULL"; args=[now,row.id];
     } else if (input.action === "confirm") {
       if (!["pending", "reported", "expired"].includes(row.status)) throw new HttpError(409, "订单状态已更新，请刷新");
       const reference = input.reference ? str(input.reference, 100) : null; if (reference && reference.length < 6) throw new HttpError(400, "支付交易单号格式不正确");
