@@ -461,6 +461,11 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal((await call("/api/admin/agent-rule",{productKey:"museAccount",amountCents:999999},ownerSession)).status,400);
     const login=await call("/api/agent/login",{code:created.data.referralCode,password:payload.password});assert.equal(login.status,200);
     assert.equal((await call("/api/agent/me",undefined,login.cookie)).data.name,"测试代理");
+    assert.equal((await call("/api/agent/prices")).status,401);
+    const beforePrices=(await call("/api/agent/prices",undefined,login.cookie)).data.items;assert.equal(beforePrices.find(x=>x.productKey==="museAccount").commissionCents,200);
+    assert.equal((await call("/api/admin/agent-rule",{productKey:"museAccount",amountCents:175},ownerSession)).status,200);
+    assert.equal((await call("/api/agent/prices",undefined,login.cookie)).data.items.find(x=>x.productKey==="museAccount").commissionCents,175);
+    assert.equal((await call("/api/admin/agent-rule",{productKey:"museAccount",amountCents:200},ownerSession)).status,200);
     assert.equal((await call("/api/admin/agents",undefined,login.cookie)).status,401);
     assert.equal((await call(`/api/referral?code=${created.data.referralCode}`)).data.valid,true);
     assert.equal((await call("/api/referral?code=invalid")).data.valid,false);
