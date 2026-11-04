@@ -105,22 +105,20 @@ export function Workbench() {
   const [pushBusy, setPushBusy] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null), mailDialog = useRef<HTMLDialogElement>(null), sequence = useRef(0);
   const knownOrders = useRef<Map<string, string> | null>(null);
-  const audioContext = useRef<AudioContext | null>(null);
+  const alertAudio = useRef<HTMLAudioElement | null>(null);
   const playDing = useCallback(() => {
-    const context = audioContext.current;
-    if (!context || context.state !== "running") return;
-    const start = context.currentTime;
-    const oscillator = context.createOscillator(), gain = context.createGain();
-    oscillator.type = "sine";
-    oscillator.frequency.setValueAtTime(880, start);
-    oscillator.frequency.exponentialRampToValueAtTime(1175, start + 0.12);
-    gain.gain.setValueAtTime(0.0001, start);
-    gain.gain.exponentialRampToValueAtTime(0.18, start + 0.012);
-    gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.36);
-    oscillator.connect(gain).connect(context.destination);
-    oscillator.start(start);
-    oscillator.stop(start + 0.37);
+    const audio=alertAudio.current;
+    if (!audio) return;
+    audio.currentTime=0;
+    void audio.play().then(()=>setSoundEnabled(true)).catch(()=>{setSoundEnabled(false);setAlert("浏览器需要先点击一次“开启订单提示音”，才能播放提醒。");});
   }, []);
+  useEffect(()=>{
+    if(auth !== "ready") return;
+    const audio=new Audio("/admin/order-alert.mp3"); audio.preload="auto"; alertAudio.current=audio;
+    let active=true;audio.volume=0;
+    void audio.play().then(()=>{audio.pause();audio.currentTime=0;audio.volume=1;if(active)setSoundEnabled(true);}).catch(()=>{audio.volume=1;if(active)setSoundEnabled(false);});
+    return ()=>{active=false;audio.pause();alertAudio.current=null;};
+  },[auth]);
   const load = useCallback(async () => {
     const current = ++sequence.current;
     try {
@@ -226,15 +224,10 @@ export function Workbench() {
     setAlert(permission === "granted" ? "桌面提醒已开启；新付款核实申请会弹出通知" : "浏览器未允许通知；页面内仍会显示新订单提醒");
   }
   async function enableSound() {
-    if (typeof AudioContext === "undefined") { setAlert("当前浏览器不支持工作台提示音"); return; }
-    try {
-      audioContext.current ||= new AudioContext();
-      await audioContext.current.resume();
-      if (audioContext.current.state !== "running") throw new Error("audio_suspended");
-      setSoundEnabled(true);
-      playDing();
-      setAlert("订单叮声已开启；工作台保持打开时，新订单和付款反馈会响铃");
-    } catch { setSoundEnabled(false); setAlert("声音未开启，请检查手机静音设置并再次轻点按钮"); }
+    const audio=alertAudio.current;
+    if(!audio){setAlert("请先登录工作台");return;}
+    try { audio.volume=1;audio.currentTime=0;await audio.play();setSoundEnabled(true);setAlert("订单提示音已开启；工作台打开时，新订单和付款反馈会响铃。"); }
+    catch {setSoundEnabled(false);setAlert("声音未开启，请检查手机静音设置后再次点击。");}
   }
   async function enablePhonePush() {
     if (pushBusy) return;
@@ -369,8 +362,8 @@ export function Workbench() {
   </form></main>;
   return <main className="workbench">
     {mailSuccess && <div className="wb-mail-success" role="status"><span className="wb-success-check" aria-hidden="true">✓</span><div><strong>邮件发送成功</strong><p>订单 {mailSuccess.code} · {mailSuccess.to}</p></div><button type="button" aria-label="关闭发送成功提示" onClick={() => setMailSuccess(null)}><X size={20}/></button></div>}
-    <header className="wb-header"><div><p className="wb-eyebrow">{storeName} / 管理中心</p><h1>订单工作台</h1></div><nav><button onClick={() => void enableSound()}><Volume2 size={15}/>{soundEnabled ? "叮声已开启 · 试听" : "开启订单叮声"}</button><button onClick={() => void enablePhonePush()} disabled={pushBusy}><Bell size={15}/>{pushBusy ? "连接中…" : pushEndpoint ? "测试手机推送" : "开启手机推送"}</button><button onClick={() => void enableDesktopAlerts()}><Bell size={15}/>{desktopAlerts ? "桌面提醒已开" : "开启桌面提醒"}</button><a href={`${process.env.NEXT_PUBLIC_BASE_PATH || ""}/`} target="_blank" rel="noreferrer">打开商店 <ArrowUpRight size={15}/></a><button onClick={() => void logout()}><LogOut size={15}/>退出</button></nav></header>
-    <p className="wb-description">以微信、支付宝收款记录核实到账，再处理充值或账号交付。iPhone 请用 Safari 打开此页，分享 → 添加到主屏幕，从桌面图标进入后点“开启手机推送”。工作台打开时可另点“开启订单叮声”。</p>
+    <header className="wb-header"><div><p className="wb-eyebrow">{storeName} / 管理中心</p><h1>订单工作台</h1></div><nav><button onClick={() => void enableSound()}><Volume2 size={15}/>{soundEnabled ? "订单提示音已开启 · 试听" : "点击开启订单提示音"}</button><button onClick={() => void enablePhonePush()} disabled={pushBusy}><Bell size={15}/>{pushBusy ? "连接中…" : pushEndpoint ? "测试手机推送" : "开启手机推送"}</button><button onClick={() => void enableDesktopAlerts()}><Bell size={15}/>{desktopAlerts ? "桌面提醒已开" : "开启桌面提醒"}</button><a href={`${process.env.NEXT_PUBLIC_BASE_PATH || ""}/`} target="_blank" rel="noreferrer">打开商店 <ArrowUpRight size={15}/></a><button onClick={() => void logout()}><LogOut size={15}/>退出</button></nav></header>
+    <p className="wb-description">以微信、支付宝收款记录核实到账，再处理充值或账号交付。iPhone 请用 Safari 打开此页，分享 → 添加到主屏幕，从桌面图标进入后点“开启手机推送”。工作台打开时会尝试开启订单提示音；若浏览器限制自动播放，请点击“开启订单提示音”。</p>
     {emailConfigured === false && <div className="wb-email-setup" role="status"><strong>订单邮件提醒还未启用</strong><span>邮件服务尚未配置。可用个人 Gmail 的 Apps Script 免域名发信，或配置 Resend API Key；新订单和买家付款反馈会发到 daolingz46@gmail.com。</span></div>}
     {emailConfigured === true && <div className="wb-email-ready"><span>邮件提醒已连接 · 新订单和付款反馈将发送到 daolingz46@gmail.com</span><button onClick={() => void sendTestEmail()} disabled={emailTestBusy}>{emailTestBusy ? "发送中…" : "发送测试邮件"}</button></div>}
     <section className="wb-visitors"><h2>核对邮件部署地址</h2><p>从 Apps Script 管理部署中复制网页应用网址，在这里核对是否为工作台当前使用的地址。</p><form onSubmit={async e => { e.preventDefault(); setBridgeBusy(true); setBridgeResult(""); try { const data = await api("email-bridge-match", {url:bridgeUrl.trim()}); setBridgeResult(data.matches ? "匹配：这是工作台正在使用的部署。" : "不匹配：请检查其他部署。 "); } catch (error) { setBridgeResult(error instanceof Error ? error.message : "核对失败"); } finally { setBridgeBusy(false); } }}><input aria-label="网页应用网址" value={bridgeUrl} onChange={e => setBridgeUrl(e.target.value)} placeholder="粘贴以 /exec 结尾的网址" style={{width:"100%",boxSizing:"border-box",padding:12,margin:"12px 0"}}/><button className="wb-primary" disabled={bridgeBusy || !bridgeUrl.trim()}>{bridgeBusy ? "正在核对…" : "核对地址"}</button></form>{bridgeResult && <p role="status">{bridgeResult}</p>}</section>
