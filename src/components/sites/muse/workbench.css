@@ -145,3 +145,5 @@
 .wb-payout-badge{display:inline-block;margin-left:8px;padding:2px 8px;border-radius:12px;background:#cd2525;color:white;font-size:12px;font-weight:700}
 
 .wb-visitors .wb-primary svg{vertical-align:middle;margin-right:4px}.wb-dialog textarea{display:block;width:100%;padding:10px 12px;border:1px solid #dce2ed;border-radius:8px;margin-top:7px;background:#fcfdff;resize:vertical}
+
+.wb-cancel-order{display:inline-flex;vertical-align:middle;align-items:center;justify-content:center;width:32px;height:32px;margin-right:8px;border:1px solid #e9aaaa;border-radius:8px;background:#fff0f0;color:#b32929;cursor:pointer}.wb-cancel-order:hover{background:#ffdede}

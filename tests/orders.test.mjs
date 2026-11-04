@@ -844,4 +844,12 @@ test("订单、收款核实和交付的数据库流程", async t => {
     const mail=sentMessages.findLast(x=>x.to==="custom-test@example.com");assert.match(mail.text,/原教程/);assert.doesNotMatch(mail.text,/新教程/);
   });
 
+  await t.test("店主取消未付款订单，付款反馈和收款不可误取消",async()=>{
+    await db.prepare("DELETE FROM rate_limits").run();const make=async()=> (await call("/api/orders",{product:"muse",email:"cancel-test@example.com",method:"alipay",acceptedTerms:true,requestId:randomUUID()})).data;
+    const a=await make();assert.equal((await call("/api/admin/update",{id:a.id,action:"cancel"})).status,401);assert.equal((await call("/api/admin/update",{id:a.id,action:"cancel"},session)).status,200);
+    assert.equal((await db.prepare("SELECT status FROM orders WHERE id=?").bind(a.id).first()).status,"cancelled");
+    assert.equal((await call("/api/orders/report",{id:a.id,token:a.token,remarkConfirmed:true})).data.status,"reported");assert.equal((await call("/api/admin/update",{id:a.id,action:"cancel"},session)).status,409);
+    await call("/api/admin/update",{id:a.id,action:"confirm"},session);assert.equal((await call("/api/admin/update",{id:a.id,action:"cancel"},session)).status,409);
+  });
+
 });

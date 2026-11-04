@@ -1041,7 +1041,10 @@ async function admin(env: Env, request: Request, path: string) {
     const input = await body(request); const row = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(str(input.id, 64)).first<Row>();
     if (!row) throw new HttpError(404, "订单不存在");
     const now = Date.now(); let sql: string; let args: (string | number | null)[];
-    if (input.action === "confirm") {
+    if (input.action === "cancel") {
+      if (!["pending","expired"].includes(row.status) || row.paidAt || row.reportedAt) throw new HttpError(409,"只能取消未反馈付款的订单，请刷新核查");
+      sql="UPDATE orders SET status='cancelled',updatedAt=? WHERE id=? AND status IN ('pending','expired') AND paidAt IS NULL AND reportedAt IS NULL"; args=[now,row.id];
+    } else if (input.action === "confirm") {
       if (!["pending", "reported", "expired"].includes(row.status)) throw new HttpError(409, "订单状态已更新，请刷新");
       const reference = input.reference ? str(input.reference, 100) : null; if (reference && reference.length < 6) throw new HttpError(400, "支付交易单号格式不正确");
       sql = "UPDATE orders SET status='processing',paidAt=?,reference=?,updatedAt=? WHERE id=? AND status=?"; args = [now, reference, now, row.id, row.status];
@@ -1177,9 +1180,9 @@ const worker = {
         const { row, token } = await getOrder(env, input);
         if (path.endsWith("/report")) {
           if (input.remarkConfirmed !== true) throw new HttpError(400, "请确认付款备注已填写订单码");
-          if (row.status === "pending" || row.status === "expired") {
+          if (row.status === "pending" || row.status === "expired" || row.status === "cancelled") {
             const now = Date.now();
-            const changed = await env.DB.prepare("UPDATE orders SET status='reported',reportedAt=?,updatedAt=? WHERE id=? AND status IN ('pending','expired')").bind(now, now, row.id).run();
+            const changed = await env.DB.prepare("UPDATE orders SET status='reported',reportedAt=?,updatedAt=? WHERE id=? AND status IN ('pending','expired','cancelled')").bind(now, now, row.id).run();
             if (changed.meta.changes) await queueOrderPush(env, row, "reported", ctx);
           }
           const updated = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(row.id).first<Row>();

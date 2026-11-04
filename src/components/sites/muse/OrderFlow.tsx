@@ -12,7 +12,7 @@ export type StoreOrder = OrderDetails & {
   stockIssue?: boolean;
   delivery?: { email: string; password: string; codeUrl: string } | { method: "email"; sentAt: number } | { method: "manual"; confirmedAt: number };
 };
-export type OrderStatus = "pending" | "reported" | "processing" | "complete" | "expired";
+export type OrderStatus = "pending" | "reported" | "processing" | "complete" | "expired" | "cancelled";
 export function orderLink(order: Pick<StoreOrder, "id" | "token">) {
   return `${window.location.origin}${process.env.NEXT_PUBLIC_BASE_PATH || ""}/#order=${encodeURIComponent(order.id)}&token=${encodeURIComponent(order.token)}`;
 }
@@ -39,7 +39,7 @@ export function OrderPayment({ order, onBack, onNotify, onOrderUpdate }: {
   const [copied, setCopied] = useState(false), [remark, setRemark] = useState(false), [qrOpen, setQrOpen] = useState(false), [reporting, setReporting] = useState(false);
   const inFlight = useRef(false), qrDialog = useRef<HTMLDialogElement>(null);
   const label = order.method === "wechat" ? "微信" : "支付宝", total = formatMoney(order.amountCents + order.feeCents);
-  const expired = order.status === "expired" || (order.status === "pending" && remaining === 0);
+  const expired = (order.status === "expired" || order.status === "cancelled") || (order.status === "pending" && remaining === 0);
   const canPay = order.status === "pending" && !expired;
   const countdown = `${Math.floor(remaining / 60).toString().padStart(2, "0")}:${(remaining % 60).toString().padStart(2, "0")}`;
   useEffect(() => { const timer = window.setInterval(() => setRemaining(Math.max(0, Math.ceil((order.expiresAt - Date.now()) / 1000))), 1000); return () => window.clearInterval(timer); }, [order.expiresAt]);
