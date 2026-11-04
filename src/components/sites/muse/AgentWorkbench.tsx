@@ -75,6 +75,8 @@ export function AgentWorkbench() {
   const [notice, setNotice] = useState("");
   const [balance, setBalance] = useState<Balance | null>(null);
   const [withdrawals, setWithdrawals] = useState<Withdrawal[]>([]);
+  const [prices,setPrices]=useState<{productKey:string;name:string;priceCents:number;category:string;commissionCents:number|null}[]>([]);
+  useEffect(()=>{if(!agent)return;let active=true;const load=()=>void agentRequest("/api/agent/prices").then(value=>{if(active)setPrices((value as {items:typeof prices}).items)}).catch(()=>{});load();const timer=window.setInterval(load,10000);return()=>{active=false;window.clearInterval(timer);};},[agent]);
   const [payoutMethod,setPayoutMethod]=useState<"alipay"|"wechat">("alipay"), [payoutImage,setPayoutImage]=useState<File|null>(null);
   const [withdrawalAmount, setWithdrawalAmount] = useState("");
   const [pendingWithdrawal, setPendingWithdrawal] = useState<PendingWithdrawal | null>(null);
@@ -193,6 +195,7 @@ export function AgentWorkbench() {
           <label className="agent-link-label" htmlFor="agent-link">你的推广链接</label><div className="agent-link-row"><input id="agent-link" readOnly value={`https://musetoken.store/?ref=${agent.referralCode}`} onFocus={event => event.currentTarget.select()} /><button className="agent-primary" type="button" onClick={() => void copyLink()}>复制链接</button></div>
           <p className="agent-hint">客户以后自行直接访问商店下单，订单将按自然流量处理。</p>
         </section>
+        <section className="agent-card"><div className="agent-card-heading"><div><span className="agent-eyebrow">推广商品</span><h2>商品价格与佣金</h2></div></div><p className="agent-hint">客户通过你的推广链接下单，每单佣金按下单时的规则计算；页面约每 10 秒更新。</p>{Object.entries(prices.reduce<Record<string,typeof prices>>((groups,item)=>{(groups[item.category] ||= []).push(item);return groups;},{})).map(([category,items])=><div key={category}><h3 className="agent-withdraw-title">{category}</h3><div className="agent-price-grid">{items.map(item=><article className="agent-price-item" key={item.productKey}><strong>{item.name}</strong><p>商品售价 {money(item.priceCents)}</p><p>每单佣金 <b>{item.commissionCents === null ? "店主尚未设置" : money(item.commissionCents)}</b></p></article>)}</div></div>)}</section>
         {balance && <section className="agent-card"><div className="agent-card-heading"><div><span className="agent-eyebrow">佣金与提现</span><h2>结算概览</h2></div><button type="button" className="agent-secondary" disabled={busy} onClick={() => void refreshOrders()}>刷新</button></div>
           <div className="agent-balances"><div><span>可申请提现</span><strong>{money(balance.availableCents)}</strong></div><div><span>待结算</span><strong>{money(balance.pendingCents)}</strong></div><div><span>提现处理中</span><strong>{money(balance.reservedCents)}</strong></div><div><span>已打款</span><strong>{money(balance.paidCents)}</strong></div></div>
           {!balance.hasHold && (balance.debtCents > 0 || balance.reserveShortfallCents > 0) && <p className="agent-error">佣金调整后{balance.debtCents > 0 ? `存在 ${money(balance.debtCents)} 待抵扣金额` : "提现预留款需要核查"}，请联系店主。</p>}

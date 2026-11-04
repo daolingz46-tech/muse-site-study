@@ -310,6 +310,11 @@ async function agentApi(env: Env, request: Request, path: string, ctx: Execution
   const agent=session && await env.DB.prepare("SELECT a.id,a.name,a.referralCode FROM agent_sessions s JOIN agents a ON a.id=s.agentId WHERE s.hash=? AND s.expiresAt>? AND a.status='active'").bind(await hash(session),Date.now()).first<{id:string;name:string;referralCode:string}>();
   if (!agent) throw new HttpError(401,"请登录代理工作台");
   if (path === "/api/agent/me" && request.method === "GET") return json({id:agent.id,name:agent.name,referralCode:agent.referralCode});
+  if (path === "/api/agent/prices" && request.method === "GET") {
+    const rules=await env.DB.prepare("SELECT productKey,amountCents FROM agent_commission_rules").all<{productKey:string;amountCents:number}>();
+    const items=agentProducts().map(p=>{const rule=rules.results.find(r=>r.productKey===p.productKey);return {...p,commissionCents:rule?.amountCents ?? null};});
+    return json({items},200,{"Cache-Control":"no-store"});
+  }
   if (path === "/api/agent/orders" && request.method === "GET") {
     const rows = await env.DB.prepare("SELECT o.code,o.title,o.status,o.createdAt,a.commissionCents,a.ruleVersion,CASE WHEN c.state='hold' THEN 'hold' WHEN c.state='refunded' THEN 'refunded' WHEN a.ruleVersion=0 THEN 'unconfigured' WHEN a.commissionCents>o.amountCents THEN 'review' WHEN o.status!='complete' OR o.paidAt IS NULL OR o.completedAt IS NULL THEN 'awaiting' WHEN ((MAX(o.paidAt,o.completedAt)+28800000)/86400000+1)*86400000-28800000>? THEN 'pending' ELSE 'matured' END AS commissionState FROM agent_order_attribution a JOIN orders o ON o.id=a.orderId LEFT JOIN commission_controls c ON c.orderId=a.orderId WHERE a.agentId=? ORDER BY o.createdAt DESC LIMIT 100").bind(Date.now(),agent.id).all();
     return json({agentId:agent.id,orders:rows.results},200,{"Cache-Control":"no-store"});
