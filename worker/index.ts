@@ -182,7 +182,7 @@ async function deliverPush(env: Env, subscription: PushSubscription, title: stri
   const payload = await buildPushPayload({ data: JSON.stringify({ title, body: bodyText, tag }), options: { ttl: 3600, urgency: "high" } }, subscription, {
     subject: "mailto:daolingz46@gmail.com", publicKey: env.PUSH_PUBLIC_KEY, privateKey: env.PUSH_PRIVATE_KEY,
   });
-  return fetch(subscription.endpoint, { ...payload, redirect: "error" });
+  return fetch(subscription.endpoint, { ...payload, redirect: "manual" });
 }
 async function queueOrderPush(env: Env, order: Row, eventType: "created" | "reported", ctx: ExecutionContextLike) {
   const now = Date.now();
@@ -684,7 +684,7 @@ async function admin(env: Env, request: Request, path: string) {
     try { payload=await buildPushPayload({data:JSON.stringify({title:"Muse 工作台测试提醒",body:"手机推送已连接，新订单会自动提醒。",tag:`test:${Date.now()}`}),options:{ttl:3600,urgency:"high"}},subscription,{subject:"mailto:daolingz46@gmail.com",publicKey:env.PUSH_PUBLIC_KEY!,privateKey:env.PUSH_PRIVATE_KEY!}); }
     catch { throw new HttpError(502,"推送加密或密钥配置异常（错误代码 PAYLOAD），请联系店主排查"); }
     let response:Response;
-    try { response=await fetch(subscription.endpoint,{...payload,redirect:"error"}); }
+    try { response=await fetch(subscription.endpoint,{...payload,redirect:"manual"}); }
     catch (error) {
       const message=error instanceof Error ? error.message.toLowerCase() : "";
       const detail=/redirect/.test(message)?"REDIRECT":/timed? ?out|timeout/.test(message)?"TIMEOUT":/dns|resolve/.test(message)?"DNS":/tls|ssl|certificate/.test(message)?"TLS":/network connection lost|disconnected|connection reset/.test(message)?"CONNECTION":/fetch|network/.test(message)?"FETCH":"OTHER";
