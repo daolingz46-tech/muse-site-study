@@ -567,6 +567,9 @@ test("订单、收款核实和交付的数据库流程", async t => {
     const refund={...hold,action:"refund",requestId:randomUUID()};
     assert.equal((await call("/api/admin/owner-commission-action",refund,ownerSession)).status,200);
     assert.equal((await call("/api/admin/owner-commission-action",refund,ownerSession)).status,200);
+    const afterRefund=(await call("/api/admin/agents",undefined,session)).data.agents.find(a=>a.id===created.data.id);assert.equal(afterRefund.completedOrderCount,0);assert.equal(afterRefund.refundedOrderCount,1);
+    assert.equal((await call("/api/admin/refunded-agent-orders")).status,401);
+    assert.ok((await call("/api/admin/refunded-agent-orders",undefined,session)).data.orders.some(o=>o.code===orders[0].data.code));
     const reversed=(await call("/api/agent/balance",undefined,login.cookie)).data;
     assert.equal(reversed.availableCents,0);assert.equal(reversed.debtCents,150);
     assert.equal((await call("/api/admin/owner-commission-action",{...refund,action:"release",requestId:randomUUID()},ownerSession)).status,409);

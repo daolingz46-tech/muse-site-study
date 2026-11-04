@@ -5,7 +5,7 @@ import { Eye, EyeOff } from "lucide-react";
 import { formatMoney } from "./catalog";
 import { storeApiUrl } from "./store-api";
 
-type Agent = { id: string; name: string; referralCode: string; status: "active" | "disabled"; orderCount: number; completedOrderCount: number };
+type Agent = { id: string; name: string; referralCode: string; status: "active" | "disabled"; orderCount: number; completedOrderCount: number; refundedOrderCount:number };
 type Rule = { productKey: string; amountCents: number; updatedAt: number };
 type Product = { productKey: string; name: string; priceCents: number; category: string };
 type AgentData = { agents: Agent[]; rules: Rule[]; products: Product[] };
@@ -27,6 +27,12 @@ async function ownerApi(path: string, input?: unknown): Promise<unknown> {
 function ownerDate(value: number | null) { return value ? new Intl.DateTimeFormat("zh-CN", { dateStyle: "short", timeStyle: "short", timeZone: "Asia/Shanghai" }).format(value) : "—"; }
 const withdrawalStatus: Record<string, string> = { pending: "待审核", approved: "已批准，待人工打款", paying: "打款处理中", paid: "已标记打款", rejected: "已拒绝", unknown: "结果待核查" };
 
+function RefundedOrders({api}:{api:Api}) {
+  const [rows,setRows]=useState<{code:string;title:string;agentName:string;amountCents:number;commissionCents:number;updatedAt:number}[]|null>(null),[page,setPage]=useState(0),[more,setMore]=useState(false),[error,setError]=useState("");
+  async function load(n:number){try {const r=await api(`refunded-agent-orders?page=${n}`) as {orders:typeof rows;hasMore:boolean};setRows(r.orders);setPage(n);setMore(r.hasMore);setError("");}catch(e){setError(e instanceof Error?e.message:"读取失败");}}
+  return <details className="wb-agent-orders" onToggle={e=>{if(e.currentTarget.open)void load(0)}}><summary>查看已冲正订单</summary><p>这里只记录佣金退款冲正，不代表系统已替客户完成退款。</p>{error && <p role="alert">{error}</p>}{rows?.map(r=><article className="wb-agent-order-detail" key={r.code}><strong>订单 {r.code} · {r.title}</strong><p>代理：{r.agentName} · 订单 ¥{formatMoney(r.amountCents)} · 已冲正佣金 ¥{formatMoney(r.commissionCents)}</p><p>冲正时间：{ownerDate(r.updatedAt)}</p></article>)}{rows && !rows.length && <p>暂无已冲正订单</p>}{rows && <div className="wb-withdrawal-actions"><button type="button" disabled={page===0} onClick={()=>void load(page-1)}>上一页</button><span>第 {page+1} 页</span><button type="button" disabled={!more} onClick={()=>void load(page+1)}>下一页</button><button type="button" onClick={()=>void load(page)}>刷新</button></div>}</details>;
+}
+
 function AgentOrders({ agent, api }: { agent:Agent; api:Api }) {
   const [rows,setRows]=useState<AgentOrderDetail[]|null>(null), [page,setPage]=useState(0), [more,setMore]=useState(false), [error,setError]=useState(""), [busy,setBusy]=useState(false);
   async function load(next:number) { setBusy(true); setError(""); try { const result=await api(`agent-orders?agentId=${encodeURIComponent(agent.id)}&page=${next}`) as {orders:AgentOrderDetail[];hasMore:boolean}; setRows(result.orders);setMore(result.hasMore);setPage(next); } catch(e) { setError(e instanceof Error?e.message:"读取订单失败"); } finally { setBusy(false); } }
@@ -34,7 +40,7 @@ function AgentOrders({ agent, api }: { agent:Agent; api:Api }) {
   const settlement:Record<string,string>={unconfigured:"下单时未设置佣金，需店主核查",review:"佣金需核查",awaiting:"等待核款及交付",pending:"待结算（T+1）",matured:"已到结算日",hold:"佣金已冻结",refunded:"佣金已冲正"};
   return <details className="wb-agent-orders" onToggle={e=>{if(e.currentTarget.open && rows===null && !busy) void load(0);}}><summary>查看该代理的订单</summary>
     {error && <p className="wb-error" role="alert">{error}</p>}{busy && <p>正在读取订单…</p>}{rows && !rows.length && <p>暂无订单</p>}
-    {rows?.map(row=><article className="wb-agent-order-detail" key={row.code}><strong>订单 {row.code} · {row.title}</strong><p>订单金额 ¥{formatMoney(row.amountCents)} · {states[row.status] || row.status}</p><p>客户：{row.contactEmail || row.target}</p><p>下单：{ownerDate(row.createdAt)} · 核款：{ownerDate(row.paidAt)} · 交付：{ownerDate(row.completedAt)}</p><p>佣金 ¥{formatMoney(row.commissionCents)} · {settlement[row.settlement] || "待核查"}{row.settlement === "pending" && row.availableAt ? ` · 预计 ${ownerDate(row.availableAt)} 可结算` : ""}</p></article>)}
+    {rows?.map(row=><article className="wb-agent-order-detail" key={row.code}><strong>订单 {row.code} · {row.title}</strong><p>订单金额 ¥{formatMoney(row.amountCents)} · {row.settlement === "refunded" ? "佣金已冲正（原订单已交付）" : states[row.status] || row.status}</p><p>客户：{row.contactEmail || row.target}</p><p>下单：{ownerDate(row.createdAt)} · 核款：{ownerDate(row.paidAt)} · 交付：{ownerDate(row.completedAt)}</p><p>佣金 ¥{formatMoney(row.commissionCents)} · {settlement[row.settlement] || "待核查"}{row.settlement === "pending" && row.availableAt ? ` · 预计 ${ownerDate(row.availableAt)} 可结算` : ""}</p></article>)}
     {rows && <div className="wb-withdrawal-actions"><button type="button" className="wb-action" disabled={busy||page===0} onClick={()=>void load(page-1)}>上一页</button><span>第 {page+1} 页</span><button type="button" className="wb-action" disabled={busy||!more} onClick={()=>void load(page+1)}>下一页</button><button type="button" className="wb-action" disabled={busy} onClick={()=>void load(page)}>刷新订单</button></div>}
   </details>;
 }
@@ -221,7 +227,8 @@ export function AgentManagement({ api }: { api: Api }) {
     {error && <p className="wb-error" role="alert">{error}</p>}{notice && <p className="wb-agent-success" role="status">{notice}</p>}
     {!data && !error && <p>正在加载代理信息…</p>}
     {data && <>
-      <div className="wb-agent-summary"><div><span>显示代理数</span><strong>{agents.length}</strong></div><div><span>显示启用数</span><strong>{agents.filter(a => a.status === "active").length}</strong></div><div><span>显示代理订单</span><strong>{agents.reduce((sum,a) => sum + (a.orderCount || 0), 0)}</strong></div><div><span>显示已完成</span><strong>{agents.reduce((sum,a) => sum + (a.completedOrderCount || 0), 0)}</strong></div></div>
+      <div className="wb-agent-summary"><div><span>显示代理数</span><strong>{agents.length}</strong></div><div><span>显示启用数</span><strong>{agents.filter(a => a.status === "active").length}</strong></div><div><span>显示代理订单</span><strong>{agents.reduce((sum,a) => sum + (a.orderCount || 0), 0)}</strong></div><div><span>显示已完成（未冲正）</span><strong>{agents.reduce((sum,a) => sum + (a.completedOrderCount || 0), 0)}</strong></div><div><span>显示已冲正</span><strong>{agents.reduce((sum,a)=>sum+(a.refundedOrderCount || 0),0)}</strong></div></div>
+      <RefundedOrders api={api}/>
       <p className="wb-agent-help">统计只包含当前列表中的代理，最多显示 200 位；订单数量不代表可提现金额。</p>
       <div className="wb-agent-section-title"><h3>代理列表</h3><button className="wb-primary" type="button" onClick={() => { setCreateOpen(!createOpen); setShowPassword(false); setError(""); }} disabled={busy}>{createOpen ? "取消创建" : "创建代理"}</button></div>
       {createOpen && <form className="wb-agent-create" onSubmit={create}>
@@ -233,7 +240,7 @@ export function AgentManagement({ api }: { api: Api }) {
       {!agents.length ? <p className="wb-agent-help">还没有代理，点击“创建代理”开始。</p> : <div className="wb-agent-list">{agents.map(agent => {
         const link = `https://musetoken.store/?ref=${encodeURIComponent(agent.referralCode)}`;
         return <article className="wb-agent-card" key={agent.id}><div className="wb-agent-card-heading"><div><strong>{agent.name}</strong><span className={agent.status === "active" ? "wb-agent-active" : "wb-agent-disabled"}>{agent.status === "active" ? "启用中" : "已停用"}</span></div><button className="wb-action" type="button" disabled={busy} onClick={() => void toggle(agent)}>{agent.status === "active" ? "停用" : "启用"}</button></div>
-          <p>归属订单 {agent.orderCount || 0} 笔 · 已完成 {agent.completedOrderCount || 0} 笔</p><label>推广链接<input readOnly value={link} onFocus={e => e.currentTarget.select()}/></label><div className="wb-agent-card-actions"><button className="wb-action" type="button" onClick={() => void copy(link)}>复制推广链接</button><details><summary>查看代理登录账号</summary><code>{agent.referralCode}</code></details></div><AgentOrders agent={agent} api={api}/></article>;
+          <p>归属订单 {agent.orderCount || 0} 笔 · 已完成 {agent.completedOrderCount || 0} 笔 · 已冲正 {agent.refundedOrderCount || 0} 笔</p><label>推广链接<input readOnly value={link} onFocus={e => e.currentTarget.select()}/></label><div className="wb-agent-card-actions"><button className="wb-action" type="button" onClick={() => void copy(link)}>复制推广链接</button><details><summary>查看代理登录账号</summary><code>{agent.referralCode}</code></details></div><AgentOrders agent={agent} api={api}/></article>;
       })}</div>}
       <WithdrawalManagement/>
       <div className="wb-agent-section-title"><h3>商品佣金设置</h3><span>统一规则 · 每笔订单</span></div>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import QRCode from "qrcode";
 import { Eye, EyeOff, MessageCircle, Plus } from "lucide-react";
 import { storeApiUrl } from "./store-api";
 import "./agent-workbench.css";
@@ -65,6 +66,8 @@ const withdrawalStatus: Record<string, string> = { pending: "待店主审核", a
 
 export function AgentWorkbench() {
   const [agent, setAgent] = useState<Agent | null>(null);
+  const [posterStyle,setPosterStyle]=useState<"blue"|"green">("blue"),[poster,setPoster]=useState("");
+  useEffect(()=>{if(!agent){setPoster("");return;}let active=true;async function make(){const canvas=document.createElement("canvas");canvas.width=720;canvas.height=900;const ctx=canvas.getContext("2d");if(!ctx)return;ctx.fillStyle=posterStyle==="blue"?"#163d79":"#12674d";ctx.fillRect(0,0,720,900);ctx.fillStyle="#fff";ctx.textAlign="center";ctx.font="bold 58px sans-serif";ctx.fillText("卡密大王",360,125);ctx.font="30px sans-serif";ctx.fillText("扫码访问专属推广商店",360,190);ctx.fillStyle="#fff";ctx.fillRect(110,245,500,500);const qr=document.createElement("canvas");await QRCode.toCanvas(qr,`https://musetoken.store/?ref=${agent!.referralCode}`,{width:460,margin:3,errorCorrectionLevel:"M"});ctx.drawImage(qr,130,265);ctx.fillStyle="#fff";ctx.font="28px sans-serif";ctx.fillText("长按保存图片 · 扫码进入",360,815);if(active)setPoster(canvas.toDataURL("image/png"));}void make();return()=>{active=false;};},[agent,posterStyle]);
   const [orders, setOrders] = useState<AgentOrder[]>([]);
   const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
@@ -196,6 +199,7 @@ export function AgentWorkbench() {
           <p className="agent-hint">客户以后自行直接访问商店下单，订单将按自然流量处理。</p>
         </section>
         <section className="agent-card"><div className="agent-card-heading"><div><span className="agent-eyebrow">推广商品</span><h2>商品价格与佣金</h2></div></div><p className="agent-hint">客户通过你的推广链接下单，每单佣金按下单时的规则计算；页面约每 10 秒更新。</p>{Object.entries(prices.reduce<Record<string,typeof prices>>((groups,item)=>{(groups[item.category] ||= []).push(item);return groups;},{})).map(([category,items])=><div key={category}><h3 className="agent-withdraw-title">{category}</h3><div className="agent-price-grid">{items.map(item=><article className="agent-price-item" key={item.productKey}><strong>{item.name}</strong><p>商品售价 {money(item.priceCents)}</p><p>每单佣金 <b>{item.commissionCents === null ? "店主尚未设置" : money(item.commissionCents)}</b></p></article>)}</div></div>)}</section>
+        <section className="agent-card"><h2>我的推广二维码</h2><p className="agent-hint">二维码对应你的专属推广链接，保存后可分享给客户。</p><div className="agent-poster-buttons"><button type="button" className="agent-secondary" aria-pressed={posterStyle==="blue"} onClick={()=>setPosterStyle("blue")}>蓝色款</button><button type="button" className="agent-secondary" aria-pressed={posterStyle==="green"} onClick={()=>setPosterStyle("green")}>绿色款</button></div>{poster && <><img className="agent-poster" src={poster} alt="你的专属推广二维码"/><p className="agent-hint">手机可长按图片保存，电脑可点击下载。</p><a className="agent-primary agent-poster-download" href={poster} download="推广二维码.png">保存推广图片</a></>}</section>
         {balance && <section className="agent-card"><div className="agent-card-heading"><div><span className="agent-eyebrow">佣金与提现</span><h2>结算概览</h2></div><button type="button" className="agent-secondary" disabled={busy} onClick={() => void refreshOrders()}>刷新</button></div>
           <div className="agent-balances"><div><span>可申请提现</span><strong>{money(balance.availableCents)}</strong></div><div><span>待结算</span><strong>{money(balance.pendingCents)}</strong></div><div><span>提现处理中</span><strong>{money(balance.reservedCents)}</strong></div><div><span>已打款</span><strong>{money(balance.paidCents)}</strong></div></div>
           {!balance.hasHold && (balance.debtCents > 0 || balance.reserveShortfallCents > 0) && <p className="agent-error">佣金调整后{balance.debtCents > 0 ? `存在 ${money(balance.debtCents)} 待抵扣金额` : "提现预留款需要核查"}，请联系店主。</p>}
