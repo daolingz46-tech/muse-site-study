@@ -115,8 +115,8 @@ export function Workbench() {
   useEffect(()=>{
     if(auth !== "ready") return;
     const audio=new Audio("/admin/order-alert.mp3"); audio.preload="auto"; alertAudio.current=audio;
-    let active=true;audio.volume=0;
-    void audio.play().then(()=>{audio.pause();audio.currentTime=0;audio.volume=1;if(active)setSoundEnabled(true);}).catch(()=>{audio.volume=1;if(active)setSoundEnabled(false);});
+    let active=true;
+    void audio.play().then(()=>{if(active)setSoundEnabled(true);}).catch(()=>{if(active){setSoundEnabled(false);setAlert("浏览器阻止自动播放，请点击顶部“点击开启订单提示音”并试听。");}});
     return ()=>{active=false;audio.pause();alertAudio.current=null;};
   },[auth]);
   const load = useCallback(async () => {
