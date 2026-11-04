@@ -1,0 +1,3 @@
+CREATE TABLE custom_products (id TEXT PRIMARY KEY,title TEXT NOT NULL,category TEXT NOT NULL,description TEXT NOT NULL,priceCents INTEGER NOT NULL,goodsNo TEXT NOT NULL DEFAULT '',instructions TEXT NOT NULL DEFAULT '',active INTEGER NOT NULL DEFAULT 0,createdAt INTEGER NOT NULL,updatedAt INTEGER NOT NULL);
+ALTER TABLE orders ADD COLUMN customGoodsNo TEXT;
+ALTER TABLE orders ADD COLUMN customInstructions TEXT;

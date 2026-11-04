@@ -409,3 +409,5 @@
 .muse-product-stage.is-mail .muse-logo-inner img,#tab-mail img{filter:brightness(0) saturate(100%) invert(25%) sepia(39%) saturate(1772%) hue-rotate(182deg) brightness(89%)}@media(max-width:650px){.muse-switch [role=tab]{font-size:11px;gap:3px;white-space:nowrap}.muse-switch [role=tab] img{display:none}}
 
 .muse-switch{grid-template-columns:repeat(5,1fr);width:500px}.muse-switch-indicator{width:calc((100% - 10px)/5)}.muse-switch-indicator.is-gmail{transform:translateX(400%)}@media(max-width:650px){.muse-switch{width:min(100%,350px)}.muse-switch-indicator{width:calc((100% - 8px)/5)}.muse-switch [role=tab]{font-size:10px}}
+
+.custom-category-title{font-size:16px;margin:20px 0 10px;color:#253b5e}

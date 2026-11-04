@@ -15,7 +15,7 @@ type Row = {
   product: "muse" | "muse-token" | "gpt"; supplierPlan: string | null; title: string; amountCents: number; target: string;
   method: "wechat" | "alipay"; status: string; createdAt: number; expiresAt: number;
   reportedAt: number | null; paidAt: number | null; completedAt: number | null;
-  reference: string | null; delivery: string | null; updatedAt: number; stockIssue: number; contactEmail: string | null;
+  reference: string | null; delivery: string | null; updatedAt: number; stockIssue: number; contactEmail: string | null; customGoodsNo:string|null; customInstructions:string|null;
 };
 class HttpError extends Error { constructor(public status: number, message: string) { super(message); } }
 const json = (data: unknown, status = 200, headers: Record<string, string> = {}) => Response.json(data, {
@@ -237,8 +237,10 @@ async function createOrder(env: Env, request: Request, input: Record<string, unk
   if (input.acceptedTerms !== true) throw new HttpError(400, "请先同意购买须知");
   if (input.method !== "wechat" && input.method !== "alipay") throw new HttpError(400, "请选择支付方式");
   let title: string, amount: number, target: string;
+  let custom: {id:string;title:string;priceCents:number;goodsNo:string;instructions:string;active:number}|null=null;
+  if (input.product === "gpt" && typeof input.planId === "string" && input.planId.startsWith("custom:")) { custom=await env.DB.prepare("SELECT id,title,priceCents,goodsNo,instructions,active FROM custom_products WHERE id=?").bind(input.planId.slice(7)).first(); if (!custom || !custom.active) { const prior=await env.DB.prepare("SELECT * FROM orders WHERE requestHash=? AND supplierPlan=?").bind(await hash(requestId),input.planId).first<Row>(); if (!prior) throw new HttpError(400,"商品已下架或不存在"); custom={id:input.planId.slice(7),title:prior.title,priceCents:prior.amountCents,goodsNo:prior.customGoodsNo || "",instructions:prior.customInstructions || "",active:0}; } }
   if (input.product === "muse") { if (input.planId !== undefined && !["basic", "warranty"].includes(String(input.planId))) throw new HttpError(400, "商品规格无效"); const basic = input.planId === "basic"; title = basic ? `${accountTitle} · 无七天质保` : input.planId === "warranty" ? `${accountTitle} · 7 天质保` : accountTitle; amount = basic ? 1400 : accountPriceCents; target = str(input.email, 254); if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(target)) throw new HttpError(400, "请填写有效邮箱"); }
-  else if (input.product === "gpt") { if (typeof input.planId !== "string" || !Object.hasOwn(GPT_SUPPLIER_PRODUCTS, input.planId)) throw new HttpError(400, "商品不存在"); const plan = GPT_SUPPLIER_PRODUCTS[input.planId as keyof typeof GPT_SUPPLIER_PRODUCTS]; title = plan.title; amount = plan.priceCents; target = str(input.email, 254); if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(target)) throw new HttpError(400, "请填写有效邮箱"); if (input.planId === "halfPriceTopup" && input.eligibleConfirmed !== true) throw new HttpError(400, "请确认账号具有半价资格"); }
+  else if (input.product === "gpt") { if (typeof input.planId !== "string" || (!custom && !Object.hasOwn(GPT_SUPPLIER_PRODUCTS, input.planId))) throw new HttpError(400, "商品不存在"); const plan = custom || GPT_SUPPLIER_PRODUCTS[input.planId as keyof typeof GPT_SUPPLIER_PRODUCTS]; title = plan.title; amount = plan.priceCents; target = str(input.email, 254); if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(target)) throw new HttpError(400, "请填写有效邮箱"); if (input.planId === "halfPriceTopup" && input.eligibleConfirmed !== true) throw new HttpError(400, "请确认账号具有半价资格"); }
   else if (input.product === "muse-token") { const plan = tokenPlans.find(p => p.id === input.planId); if (!plan) throw new HttpError(400, "充值档次无效"); amount = plan.amountCents; title = `Muse Token · ${plan.label}`; target = str(input.inviteCode); if (!target) throw new HttpError(400, "账号邀请码为必填项"); }
   else throw new HttpError(400, "商品不存在");
   const contactEmail = input.product === "muse-token" && input.email ? str(input.email, 254) : "";
@@ -248,6 +250,7 @@ async function createOrder(env: Env, request: Request, input: Record<string, unk
   const legacyInputHash = input.product === "muse" ? await hash(JSON.stringify([input.product, "Muse AI · 成品账号", amount, target, input.method])) : "";
   const matchesInput = async (row: Row) => {
     if (row.inputHash === inputHash || row.inputHash === legacyInputHash) return true;
+    if (custom && row.supplierPlan === input.planId) { const original=await hash(JSON.stringify([input.product,row.title,row.amountCents,target,input.method])); if (row.inputHash===original) return true; }
     const original = await hash(JSON.stringify(contactEmail ? [input.product, title, row.amountCents, target, input.method, contactEmail] : [input.product, title, row.amountCents, target, input.method]));
     const legacy = input.product === "muse" ? await hash(JSON.stringify([input.product, "Muse AI · 成品账号", row.amountCents, target, input.method])) : "";
     const oldTopup = input.product === "gpt" && input.planId === "philippinesTopup" ? await hash(JSON.stringify([input.product, "GPT · 菲律宾正价代充", row.amountCents, target, input.method])) : "";
@@ -269,7 +272,7 @@ async function createOrder(env: Env, request: Request, input: Record<string, unk
     if (referralCode && !/^[a-f0-9]{32}$/.test(referralCode)) throw new HttpError(400,"推广码格式无效");
     const productKey = input.product === "muse" ? (input.planId === "basic" ? "museAccountBasic" : "museAccount") : `${input.product}:${input.planId}`;
     const [result] = await env.DB.batch([
-      env.DB.prepare("INSERT OR IGNORE INTO orders(id,requestHash,inputHash,tokenHash,code,product,title,amountCents,target,method,createdAt,expiresAt,updatedAt,supplierPlan,contactEmail) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(id, requestHash, inputHash, await hash(token), code, input.product, title, amount, target, input.method, now, now + 15 * 60000, now, input.product === "gpt" ? String(input.planId) : input.product === "muse" ? (input.planId === "basic" ? "museBasic" : "museWarranty") : null, contactEmail || null),
+      env.DB.prepare("INSERT OR IGNORE INTO orders(id,requestHash,inputHash,tokenHash,code,product,title,amountCents,target,method,createdAt,expiresAt,updatedAt,supplierPlan,contactEmail,customGoodsNo,customInstructions) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(id, requestHash, inputHash, await hash(token), code, input.product, title, amount, target, input.method, now, now + 15 * 60000, now, input.product === "gpt" ? String(input.planId) : input.product === "muse" ? (input.planId === "basic" ? "museBasic" : "museWarranty") : null, contactEmail || null,custom?.goodsNo || null,custom?.instructions || null),
       env.DB.prepare("INSERT INTO agent_order_attribution(orderId,agentId,productKey,commissionCents,ruleVersion,createdAt) SELECT ?,a.id,?,COALESCE(r.amountCents,0),COALESCE(r.updatedAt,0),? FROM agents a LEFT JOIN agent_commission_rules r ON r.productKey=? WHERE a.referralCode=? AND a.status='active' AND changes()=1").bind(id,productKey,now,productKey,referralCode),
     ]);
     const row = await env.DB.prepare("SELECT * FROM orders WHERE requestHash=?").bind(requestHash).first<Row>();
@@ -494,6 +497,15 @@ async function admin(env: Env, request: Request, path: string) {
     throw new HttpError(404,"接口不存在");
   }
   if (path === "/api/admin/withdrawal-count" && request.method === "GET") { const row=await env.DB.prepare("SELECT COUNT(*) AS count FROM agent_withdrawals WHERE status='pending'").first<{count:number}>(); return json({count:row?.count || 0},200,{"Cache-Control":"no-store"}); }
+  if (path === "/api/admin/custom-products" && request.method === "GET") { const rows=await env.DB.prepare("SELECT id,title,category,description,priceCents,goodsNo,instructions,active FROM custom_products ORDER BY createdAt DESC").all(); return json({items:rows.results.map(r=>({...r,active:!!r.active}))}); }
+  if (path === "/api/admin/custom-products" && request.method === "POST") {
+    const input=await body(request), existingId=str(input.id,64), title=str(input.title,100), category=str(input.category,40), description=str(input.description,1200), goodsNo=str(input.goodsNo,30), instructions=str(input.instructions,2000), cents=input.priceCents;
+    if (!title || !category || !description || !Number.isSafeInteger(cents) || Number(cents)<1 || Number(cents)>100000000 || typeof input.active!=="boolean" || (goodsNo && !/^G[0-9]+$/.test(goodsNo)) || (existingId && !/^[a-f0-9-]{36}$/i.test(existingId))) throw new HttpError(400,"请检查商品名称、分类、介绍、售价和货源编号");
+    const id=existingId || crypto.randomUUID(), now=Date.now();
+    if (existingId) {const result=await env.DB.prepare("UPDATE custom_products SET title=?,category=?,description=?,priceCents=?,goodsNo=?,instructions=?,active=?,updatedAt=? WHERE id=?").bind(title,category,description,cents,goodsNo,instructions,input.active?1:0,now,id).run();if(!result.meta.changes) throw new HttpError(404,"商品不存在");}
+    else await env.DB.prepare("INSERT INTO custom_products(id,title,category,description,priceCents,goodsNo,instructions,active,createdAt,updatedAt) VALUES(?,?,?,?,?,?,?,?,?,?)").bind(id,title,category,description,cents,goodsNo,instructions,input.active?1:0,now,now).run();
+    return json({id,ok:true});
+  }
   if (path === "/api/admin/agents" && request.method === "GET") {
     const agents = await env.DB.prepare("SELECT a.id,a.name,a.referralCode,a.status,a.createdAt,COUNT(o.id) AS orderCount,COALESCE(SUM(CASE WHEN o.status='complete' THEN 1 ELSE 0 END),0) AS completedOrderCount FROM agents a LEFT JOIN agent_order_attribution x ON x.agentId=a.id LEFT JOIN orders o ON o.id=x.orderId GROUP BY a.id ORDER BY a.createdAt DESC LIMIT 200").all();
     const rules = await env.DB.prepare("SELECT productKey,amountCents,updatedAt FROM agent_commission_rules ORDER BY productKey").all();
@@ -717,8 +729,8 @@ async function admin(env: Env, request: Request, path: string) {
     const order = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(orderId).first<Row>();
     if (!order || !["muse", "gpt"].includes(order.product)) throw new HttpError(404, "订单不存在");
     const rows = await env.DB.prepare("SELECT id,name,mime,size,uploadedBytes FROM delivery_files WHERE orderId=? AND uploadedBytes=size ORDER BY createdAt").bind(orderId).all();
-    const goods = order.product === "gpt" ? inventoryProducts(order).map(value => value.slice(4)) : [];
-    return json({ files: rows.results, sources: goods.map(goodsNo => ({ goodsNo, instructions: goodsNo === "G88230690" ? gmailBackupGuide : goodsNo === "G30430004" ? gmailAccountGuide : goodsNo === "G94215456" ? plus15NewGuide : goodsNo === "G39595340" ? plusAccountGuide : goodsNo === "G42078548" ? freeAccountGuide : goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G88655555" ? qualificationGuide : "" })) });
+    const goods = order.product === "gpt" ? (order.supplierPlan?.startsWith("custom:") ? [order.customGoodsNo || "手工交付"] : inventoryProducts(order).map(value => value.slice(4))) : [];
+    return json({ files: rows.results, sources: goods.map(goodsNo => ({ goodsNo, instructions: order.supplierPlan?.startsWith("custom:") ? (order.customInstructions || "请填写交付说明") : goodsNo === "G88230690" ? gmailBackupGuide : goodsNo === "G30430004" ? gmailAccountGuide : goodsNo === "G94215456" ? plus15NewGuide : goodsNo === "G39595340" ? plusAccountGuide : goodsNo === "G42078548" ? freeAccountGuide : goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G88655555" ? qualificationGuide : "" })) });
   }
   if (path === "/api/admin/delivery-file/start" && request.method === "POST") {
     const input = await body(request), orderId = str(input.orderId, 64), name = str(input.name, 120).replace(/[\\/\x00-\x1f]/g, "_");
@@ -960,8 +972,9 @@ async function admin(env: Env, request: Request, path: string) {
     let instructions = "";
     if (order.product === "gpt" && !resend) {
       const goodsNo = str(input.goodsNo, 30);
+      if (order.supplierPlan?.startsWith("custom:")) { if (goodsNo !== (order.customGoodsNo || "手工交付")) throw new HttpError(400,"请选择订单对应的货源"); instructions=order.customInstructions || str(input.instructions,2000); } else {
       if (!inventoryProducts(order).includes(`gpt:${goodsNo}`)) throw new HttpError(400, "请选择此商品对应的实际采购货源");
-      instructions = goodsNo === "G88230690" ? gmailBackupGuide : goodsNo === "G30430004" ? gmailAccountGuide : goodsNo === "G94215456" ? plus15NewGuide : goodsNo === "G39595340" ? plusAccountGuide : goodsNo === "G42078548" ? freeAccountGuide : goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G88655555" ? qualificationGuide : str(input.instructions, 2000);
+      instructions = goodsNo === "G88230690" ? gmailBackupGuide : goodsNo === "G30430004" ? gmailAccountGuide : goodsNo === "G94215456" ? plus15NewGuide : goodsNo === "G39595340" ? plusAccountGuide : goodsNo === "G42078548" ? freeAccountGuide : goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G88655555" ? qualificationGuide : str(input.instructions, 2000); }
       if (!instructions) throw new HttpError(400, "请填写该货源的使用或兑换说明，不能使用其他商品的教程");
     }
     if (!hasEmailConfig(env)) throw new HttpError(503, "邮件服务尚未配置");
@@ -1099,6 +1112,7 @@ const worker = {
         return withCors(json({ stock: Object.fromEntries(entries) }));
       }
       if (path.startsWith("/api/admin/")) return withCors(await admin(env, request, path));
+      if (path === "/api/catalog/custom" && request.method === "GET") { const rows=await env.DB.prepare("SELECT id,title,category,description,priceCents FROM custom_products WHERE active=1 ORDER BY createdAt DESC").all(); return withCors(json({items:rows.results})); }
       if (path.startsWith("/api/agent/")) return withCors(await agentApi(env, request, path, ctx));
       if (path === "/api/visit" && request.method === "POST") {
         await limit(env, request, "visit", 60, 60);
