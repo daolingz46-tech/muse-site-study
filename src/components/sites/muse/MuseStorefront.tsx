@@ -445,7 +445,7 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
               {orderError && <p className="muse-error" role="alert">{orderError}</p>}
               <button className="muse-primary" type="submit" disabled={queryingOrder}>{queryingOrder ? "查询中…" : "查询订单"} <ArrowRight size={16}/></button>
             </form>
-            {orderSummary && <div className="muse-token-notice" role="status"><strong>订单码 {orderSummary.code} · {{ pending: "待付款", reported: "等待核实到账", processing: "已收款，处理中", complete: "订单已完成", expired: "订单已超时" }[orderSummary.status]}</strong><p>{orderSummary.title} · ¥{formatMoney(orderSummary.amountCents)}</p><p>成品账号卡密会发到下单邮箱；订单状态可在原下单浏览器或用完整订单编号查询。需要协助请联系 QQ：{supportQQ}。</p></div>}
+            {orderSummary && <div className="muse-token-notice" role="status"><strong>订单码 {orderSummary.code} · {{ pending: "待付款", reported: "等待核实到账", processing: "已收款，处理中", complete: "订单已完成", expired: "订单已超时", cancelled: "订单已取消" }[orderSummary.status]}</strong><p>{orderSummary.title} · ¥{formatMoney(orderSummary.amountCents)}</p><p>成品账号卡密会发到下单邮箱；订单状态可在原下单浏览器或用完整订单编号查询。需要协助请联系 QQ：{supportQQ}。</p></div>}
             {savedOrders.length > 0 ? <div className="muse-saved-orders"><h3>已保存的订单 · 无需复制</h3>{savedOrders.map(saved => <button key={saved.id} type="button" onClick={async () => { try { openOrder(await lookupStoreOrder(saved.id, saved.token)); } catch { setOrderError("订单暂时无法打开，请稍后重试"); } }}><ShoppingBag size={14}/><span>{saved.code} · {saved.title}</span><ArrowRight size={15}/></button>)}</div> : <RecentOrders orders={orders} onOpen={openOrder}/>}
           </>}
       </dialog>}
