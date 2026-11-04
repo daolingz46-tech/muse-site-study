@@ -828,4 +828,17 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.ok(!JSON.stringify(r.data).includes("inventory-private-test"));
   });
 
+  await t.test("自主商品上下架、价格及发货教程按订单保存",async()=>{
+    const draft={title:"测试商品",category:"测试系列",description:"测试介绍",priceCents:1234,goodsNo:"G12345678",instructions:"原教程",active:true};
+    assert.equal((await call("/api/admin/custom-products",draft)).status,401);
+    const saved=await call("/api/admin/custom-products",draft,session);assert.equal(saved.status,200);const id=saved.data.id;
+    const listing=await call("/api/catalog/custom");assert.equal(listing.data.items.find(x=>x.id===id).priceCents,1234);assert.ok(!JSON.stringify(listing.data).includes("原教程"));
+    const payload={product:"gpt",planId:`custom:${id}`,email:"custom-test@example.com",method:"alipay",acceptedTerms:true,requestId:randomUUID()};const order=await call("/api/orders",payload);assert.equal(order.status,201);assert.equal(order.data.amountCents,1234);
+    await call("/api/admin/custom-products",{...draft,id,priceCents:2000,instructions:"新教程",active:false},session);
+    assert.equal((await call("/api/orders",payload)).data.id,order.data.id);assert.equal((await call("/api/orders",{...payload,requestId:randomUUID()})).status,400);
+    await call("/api/admin/update",{id:order.data.id,action:"confirm"},session);
+    const before=supplierPurchases;assert.equal((await call("/api/admin/send-delivery",{id:order.data.id,card:"CUSTOM-CARD",goodsNo:"G12345678"},session)).status,200);assert.equal(supplierPurchases,before);
+    const mail=sentMessages.findLast(x=>x.to==="custom-test@example.com");assert.match(mail.text,/原教程/);assert.doesNotMatch(mail.text,/新教程/);
+  });
+
 });
