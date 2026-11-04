@@ -677,13 +677,17 @@ async function admin(env: Env, request: Request, path: string) {
     const endpoint = str((await body(request)).endpoint, 2048);
     const row = await env.DB.prepare("SELECT subscription FROM push_subscriptions WHERE endpoint=?").bind(endpoint).first<{ subscription: string }>();
     if (!row) throw new HttpError(404, "这台手机尚未开启推送");
-    try {
-      const subscription = pushSubscription(JSON.parse(row.subscription));
-      if (!subscription) throw new Error("invalid_subscription");
-      const response = await deliverPush(env, subscription, "Muse 工作台测试提醒", "手机推送已连接，新订单会自动提醒。", `test:${Date.now()}`);
-      if (!response.ok) throw new Error(`push_${response.status}`);
-      return json({ ok: true });
-    } catch { throw new HttpError(502, "测试推送未送达，请检查 iPhone 通知权限后重试"); }
+    let subscription: PushSubscription | null;
+    try { subscription=pushSubscription(JSON.parse(row.subscription)); } catch { subscription=null; }
+    if (!subscription) throw new HttpError(409,"推送订阅数据无效，请重新开启手机推送（错误代码 SUBSCRIPTION）");
+    let payload: Awaited<ReturnType<typeof buildPushPayload>>;
+    try { payload=await buildPushPayload({data:JSON.stringify({title:"Muse 工作台测试提醒",body:"手机推送已连接，新订单会自动提醒。",tag:`test:${Date.now()}`}),options:{ttl:3600,urgency:"high"}},subscription,{subject:"mailto:daolingz46@gmail.com",publicKey:env.PUSH_PUBLIC_KEY!,privateKey:env.PUSH_PRIVATE_KEY!}); }
+    catch { throw new HttpError(502,"推送加密或密钥配置异常（错误代码 PAYLOAD），请联系店主排查"); }
+    let response:Response;
+    try { response=await fetch(subscription.endpoint,{...payload,redirect:"error"}); }
+    catch { throw new HttpError(502,"无法连接苹果推送服务（错误代码 NETWORK），请联系店主排查"); }
+    if (!response.ok) throw new HttpError(502,`推送服务拒绝了请求（状态码 ${response.status}），请联系店主排查`);
+    return json({ ok: true });
   }
   if (path === "/api/admin/logout" && request.method === "POST") { await env.DB.prepare("DELETE FROM sessions WHERE hash=?").bind(await hash(adminSession(request))).run(); return json({ ok: true }, 200, { "Set-Cookie": cookieHeader(request, "", 0) }); }
   if (path === "/api/admin/orders" && request.method === "GET") {
