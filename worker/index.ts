@@ -507,9 +507,14 @@ async function admin(env: Env, request: Request, path: string) {
     return json({id,ok:true});
   }
   if (path === "/api/admin/agents" && request.method === "GET") {
-    const agents = await env.DB.prepare("SELECT a.id,a.name,a.referralCode,a.status,a.createdAt,COUNT(o.id) AS orderCount,COALESCE(SUM(CASE WHEN o.status='complete' THEN 1 ELSE 0 END),0) AS completedOrderCount FROM agents a LEFT JOIN agent_order_attribution x ON x.agentId=a.id LEFT JOIN orders o ON o.id=x.orderId GROUP BY a.id ORDER BY a.createdAt DESC LIMIT 200").all();
+    const agents = await env.DB.prepare("SELECT a.id,a.name,a.referralCode,a.status,a.createdAt,COUNT(o.id) AS orderCount,COALESCE(SUM(CASE WHEN o.status='complete' AND COALESCE(c.state,'active')!='refunded' THEN 1 ELSE 0 END),0) AS completedOrderCount,COALESCE(SUM(CASE WHEN c.state='refunded' THEN 1 ELSE 0 END),0) AS refundedOrderCount FROM agents a LEFT JOIN agent_order_attribution x ON x.agentId=a.id LEFT JOIN orders o ON o.id=x.orderId LEFT JOIN commission_controls c ON c.orderId=o.id GROUP BY a.id ORDER BY a.createdAt DESC LIMIT 200").all();
     const rules = await env.DB.prepare("SELECT productKey,amountCents,updatedAt FROM agent_commission_rules ORDER BY productKey").all();
     return json({agents:agents.results,rules:rules.results,products:agentProducts()});
+  }
+  if (path === "/api/admin/refunded-agent-orders" && request.method === "GET") {
+    const params=new URL(request.url).searchParams, page=Number(params.get("page") || 0); if(!Number.isSafeInteger(page)||page<0||page>10000) throw new HttpError(400,"页码无效");
+    const rows=await env.DB.prepare("SELECT o.code,o.title,o.amountCents,o.status,a.name AS agentName,c.updatedAt,x.commissionCents FROM agent_order_attribution x JOIN orders o ON o.id=x.orderId JOIN agents a ON a.id=x.agentId JOIN commission_controls c ON c.orderId=o.id WHERE c.state='refunded' ORDER BY c.updatedAt DESC,o.id DESC LIMIT 51 OFFSET ?").bind(page*50).all();
+    return json({orders:rows.results.slice(0,50),hasMore:rows.results.length>50},200,{"Cache-Control":"no-store"});
   }
   if (path === "/api/admin/agent-orders" && request.method === "GET") {
     const params = new URL(request.url).searchParams, agentId = params.get("agentId") || "", page = Number(params.get("page") || 0);
