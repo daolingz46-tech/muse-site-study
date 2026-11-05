@@ -1157,7 +1157,7 @@ const worker = {
         if (!env.SUPPLIER_APP_ID || !env.SUPPLIER_SECRET) return withCors(json({ stock: {} }));
         const supplierProducts: Array<[string, { goodsNo: string }]> = [...Object.entries(GPT_SUPPLIER_PRODUCTS).filter(([key]) => key !== "halfPriceAccount"), ["museAccount", MUSE_ACCOUNT_SUPPLIER]];
         const entries = await Promise.all(supplierProducts.map(async ([key,plan]) => {
-          try { for (const goodsNo of [plan.goodsNo,...(SUPPLIER_BACKUPS[key] || [])]) { const result = await supplierRequest({ appId: env.SUPPLIER_APP_ID!, secret: env.SUPPLIER_SECRET! }, "purchase", "quotePrice", { goods_no: goodsNo, quantity: 1 }) as {code:number;data?:{available_quantity?:number}}; const n = result.data?.available_quantity; if (result.code !== 1 || typeof n !== "number") return [key,null] as const; if (n > 0) return [key,true] as const; } return [key,false] as const; }
+          try { for (const goodsNo of [plan.goodsNo,...(SUPPLIER_BACKUPS[key] || [])]) { const result = await supplierRequest({ appId: env.SUPPLIER_APP_ID!, secret: env.SUPPLIER_SECRET! }, "purchase", "quotePrice", { goods_no: goodsNo, quantity: 1 }) as {code:number;msg?:string;message?:string;data?:{available_quantity?:number}}; const n = result.data?.available_quantity; if (result.code !== 1 || !result.data) { if (unavailableSupplierMessages.has(safeSupplierMessage(result.msg || result.message))) continue; return [key,null] as const; } if (typeof n !== "number") return [key,null] as const; if (n > 0) return [key,true] as const; } return [key,false] as const; }
           catch { return [key, null] as const; }
         }));
         return withCors(json({ stock: Object.fromEntries(entries) }));

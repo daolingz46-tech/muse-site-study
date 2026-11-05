@@ -472,8 +472,10 @@ test("订单、收款核实和交付的数据库流程", async t => {
     const failure=await call("/api/admin/supplier-preview",{id:blocked.id},session);
     assert.equal(failure.status,409);assert.match(failure.data.message,/G95786160/);assert.equal(supplierPurchases,before);
     assert.equal((await call("/api/admin/supplier-deliver",{id:blocked.id},session)).status,409);assert.equal(supplierPurchases,before);
+    assert.equal((await call("/api/availability")).data.stock.halfPriceAccountOneMonth,null);
     supplierQuoteErrors.set("G95786160",{code:0,msg:"商品已下架"});
     supplierQuoteErrors.set("G88655555",{code:0,msg:"库存不足"});
+    assert.equal((await call("/api/availability")).data.stock.halfPriceAccountOneMonth,true);
     const next=await make("last-supplier@example.com"),quote=await call("/api/admin/supplier-preview",{id:next.id},session);
     assert.equal(quote.status,200);assert.equal(quote.data.goodsNo,"G75777360");
     assert.equal((await call("/api/admin/supplier-deliver",{id:next.id,expectedGoodsNo:"G75777360",expectedCents:310},session)).status,200);
