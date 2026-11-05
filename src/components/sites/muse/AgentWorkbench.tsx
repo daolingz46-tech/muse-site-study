@@ -83,18 +83,19 @@ export function AgentWorkbench() {
   const [payoutMethod,setPayoutMethod]=useState<"alipay"|"wechat">("alipay"), [payoutImage,setPayoutImage]=useState<File|null>(null);
   const [pushEndpoint,setPushEndpoint]=useState("");
   const [pushBusy,setPushBusy]=useState(false);
+  const [pushMessage,setPushMessage]=useState<{text:string;error:boolean}|null>(null);
   useEffect(()=>{if(!agent || !("serviceWorker" in navigator))return;let active=true;void navigator.serviceWorker.getRegistration("/agent/").then(r=>r?.pushManager.getSubscription()).then(sub=>{if(active && sub){setPushEndpoint(sub.endpoint);void agentRequest("/api/agent/push-subscribe",{subscription:sub.toJSON()}).catch(()=>{});}});return()=>{active=false;};},[agent]);
   async function enablePush(){
-    if(pushBusy)return;setPushBusy(true);setError("");
+    if(pushBusy)return;setPushBusy(true);setPushMessage(null);
     try {
-      if(pushEndpoint){await agentRequest("/api/agent/push-test",{endpoint:pushEndpoint});setNotice("测试推送已提交，请查看手机通知。");return;}
+      if(pushEndpoint){await agentRequest("/api/agent/push-test",{endpoint:pushEndpoint});setPushMessage({text:"测试推送已提交，请查看手机通知。",error:false});return;}
       if(window.location.origin!=="https://musetoken.store" || !("serviceWorker" in navigator) || !("PushManager" in window) || typeof Notification==="undefined")throw new Error("iPhone 请使用 Safari 添加代理工作台到主屏幕，再从桌面打开并开启通知。");
       const permission=await Notification.requestPermission();if(permission!=="granted")throw new Error("请在手机设置中允许代理工作台发送通知。");
       const data=await agentRequest("/api/agent/push-key") as {publicKey:string};
       const bytes=Uint8Array.from(atob(data.publicKey.replace(/-/g,"+").replace(/_/g,"/")+"=".repeat((4-data.publicKey.length%4)%4)),c=>c.charCodeAt(0));
       const reg=await navigator.serviceWorker.register("/agent/sw.js",{scope:"/agent/"});const sub=await reg.pushManager.getSubscription() || await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:bytes});
-      await agentRequest("/api/agent/push-subscribe",{subscription:sub.toJSON()});setPushEndpoint(sub.endpoint);setNotice("手机推送已开启，有新代理订单时会提醒。");
-    }catch(cause){setError(errorMessage(cause));}finally{setPushBusy(false);}
+      await agentRequest("/api/agent/push-subscribe",{subscription:sub.toJSON()});setPushEndpoint(sub.endpoint);setPushMessage({text:"手机推送已开启，有新代理订单时会提醒。",error:false});
+    }catch(cause){setPushMessage({text:errorMessage(cause),error:true});}finally{setPushBusy(false);}
   }
   const [withdrawalAmount, setWithdrawalAmount] = useState("");
   const [pendingWithdrawal, setPendingWithdrawal] = useState<PendingWithdrawal | null>(null);
@@ -201,6 +202,15 @@ export function AgentWorkbench() {
   return <main className="agent-page">
     <div className="agent-shell">
       <header className="agent-header"><div><span className="agent-brand">卡密大王</span><h1>代理工作台</h1><p>推广链接与订单记录</p></div>{agent && <div><button type="button" className="agent-text-button" disabled={pushBusy} onClick={() => void enablePush()}>{pushBusy ? "连接中…" : pushEndpoint ? "测试手机推送" : "开启手机推送"}</button><button type="button" className="agent-text-button" disabled={busy} onClick={() => void logout()}>退出登录</button></div>}</header>
+      <details className="agent-push-guide">
+        <summary>手机推送设置教程 <span>iPhone / 安卓</span></summary>
+        <div className="agent-push-guide-content">
+          <section><h2>iPhone / iPad</h2><ol><li>请确认系统为 iOS / iPadOS 16.4 或更高版本。用 Safari 打开代理工作台。</li><li>点击浏览器的“分享”按钮，选择“添加到主屏幕”。</li><li>从主屏幕上的“代理工作台”图标打开，登录代理账号。</li><li>点击页面顶部“开启手机推送”，在系统弹窗中选择允许；再点击“测试手机推送”检查通知。</li></ol><p>如未收到，在手机“设置 → 通知 → 代理工作台”中检查通知权限，并检查专注模式和网络。</p></section>
+          <section><h2>安卓手机</h2><ol><li>使用 Chrome 浏览器打开代理工作台并登录。</li><li>点击页面顶部“开启手机推送”，在通知弹窗中选择允许；再点击“测试手机推送”检查通知。</li><li>如需桌面快捷入口，可在 Chrome 右上角菜单选择“添加到主屏幕”或“安装应用”；具体名称可能因手机不同而变化。</li></ol><p>如未收到，请在 Chrome 的“设置 → 网站设置 → 通知”中允许本站通知，同时检查手机的通知权限和网络。</p></section>
+          <p>只有通过你的推广链接产生的新订单会提醒。退出代理账号会关闭当前设备的订阅；下次登录后请重新开启。</p>
+        </div>
+      </details>
+      {agent && pushMessage && <p className={pushMessage.error ? "agent-error agent-push-message" : "agent-notice agent-push-message"} role={pushMessage.error ? "alert" : "status"}>{pushMessage.text}</p>}
       {loading ? <section className="agent-card"><p className="agent-muted">正在加载…</p></section> : !agent ? <section className="agent-card agent-login">
         <h2>登录代理工作台</h2><p className="agent-muted">请输入店主提供的代理编号和密码。</p>
         <form onSubmit={login}><label htmlFor="agent-code">代理编号</label><input id="agent-code" autoComplete="username" required value={code} onChange={event => setCode(event.target.value)} placeholder="输入代理编号" maxLength={32} />
