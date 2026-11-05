@@ -93,7 +93,7 @@ export function Workbench() {
   const [historyOrder, setHistoryOrder] = useState<AdminOrder | null>(null);
   const [timelineOrder, setTimelineOrder] = useState<AdminOrder | null>(null);
   const [catalog, setCatalog] = useState<CatalogProduct[]>([]);
-  const [catalogChoice,setCatalogChoice]=useState<CatalogProduct|null>(null), [catalogSources,setCatalogSources]=useState<{quantity:number;items:{goodsNo:string;quoteQuantity:number;name:string;priority:string;unitPrice:number|null;total:number|null;stock:number|null}[]}|null>(null), [catalogError,setCatalogError]=useState("");
+  const [catalogChoice,setCatalogChoice]=useState<CatalogProduct|null>(null), [catalogSources,setCatalogSources]=useState<{quantity:number;items:{goodsNo:string;quoteQuantity:number;name:string;priority:string;unitPrice:number|null;total:number|null;stock:number|null;quoteMessage?:string}[]}|null>(null), [catalogError,setCatalogError]=useState("");
   const catalogDialog=useRef<HTMLDialogElement>(null);
   useEffect(()=>{if(catalogChoice)catalogDialog.current?.showModal();},[catalogChoice]);
   function openCatalog(product:CatalogProduct){setCatalogChoice(product);setCatalogSources(null);setCatalogError("");void api("catalog-suppliers",{key:product.key}).then(setCatalogSources).catch(cause=>setCatalogError(cause instanceof Error?cause.message:"货源查询失败"));}
@@ -270,9 +270,9 @@ export function Workbench() {
     try {
       let quote: {goodsNo:string;supplierName:string;total:number;unitPrice?:number;quantity?:number;inventory?:boolean}|undefined;
       if (!order.supplierState) quote=await api("supplier-preview",{id:order.id});
-      const description=quote?.inventory ? `本次优先使用已导入库存；如果库存发生变化，系统将停止并要求重新确认。\n确认向 ${order.target} 发货？` : quote ? `货源商：${quote.supplierName}\n货源商品编号：${quote.goodsNo}\n采购总价：¥${quote.total.toFixed(2)}（含手续费）${quote.quantity === 3 ? "\n将采购 3 件：本单发 1 件，其余 2 件入库。" : ""}\n确认已核实收款并向 ${order.target} 发货？` : `该订单已有采购记录，将继续查询或发送已采购卡密。确认向 ${order.target} 发货？`;
+      const description=quote?.inventory ? `本次优先使用已导入库存\n货源商：${quote.supplierName}\n货源商品编号：${quote.goodsNo || "待核实"}\n如果库存发生变化，系统将停止并要求重新确认。\n确认向 ${order.target} 发货？` : quote ? `货源商：${quote.supplierName}\n货源商品编号：${quote.goodsNo}\n采购总价：¥${quote.total.toFixed(2)}（含手续费）${quote.quantity === 3 ? "\n将采购 3 件：本单发 1 件，其余 2 件入库。" : ""}\n确认已核实收款并向 ${order.target} 发货？` : `该订单已有采购记录，将继续查询或发送已采购卡密。确认向 ${order.target} 发货？`;
       if (!window.confirm(description)) return;
-      await api("supplier-deliver", { id: order.id, ...(quote?.inventory ? {expectedInventory:true} : quote ? {expectedGoodsNo:quote.goodsNo,expectedCents:Math.round(quote.total*100)} : {}) }); setSupplierFeedback({ orderId: order.id, kind: "success", message: "卡密邮件已提交发送。" }); await load();
+      await api("supplier-deliver", { id: order.id, ...(quote?.inventory ? {expectedInventory:true,expectedGoodsNo:quote.goodsNo} : quote ? {expectedGoodsNo:quote.goodsNo,expectedCents:Math.round(quote.total*100)} : {}) }); setSupplierFeedback({ orderId: order.id, kind: "success", message: "卡密邮件已提交发送。" }); await load();
     }
     catch (cause) { setSupplierFeedback({ orderId: order.id, kind: "error", message: cause instanceof ApiError ? cause.message : "连接中断，发货结果不明。请先刷新订单并核查采购记录，不要重复采购。" }); await load(); }
     finally { setSupplierBusy(""); }
