@@ -27,7 +27,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
     if (new URL(request.url).hostname === "www.16688.com.cn") {
       const path = new URL(request.url).pathname;
       const params = await request.json();
-      if (path.endsWith("/quotePrice")) return supplierQuoteErrors.has(params.goods_no) ? Response.json(supplierQuoteErrors.get(params.goods_no)) : Response.json({ code: 1, data: { balance_enough: supplierBalanceEnough, available_quantity: emptyGoods.has(params.goods_no) ? 0 : supplierStock, total_amount: params.goods_no === "G88230690" ? 12.61 : params.goods_no === "G30430004" ? 4.85 : params.goods_no === "G42078548" ? 0.05 : params.goods_no === "G85161614" ? params.quantity * 1.03 : params.goods_no === "G17614190" ? 58.5 : ["G95786160", "G88655555", "G75777360"].includes(params.goods_no) ? 3.10 : ["G37376813", "G43844575"].includes(params.goods_no) ? 4.12 : params.goods_no === "G39595340" ? 11.31 : params.goods_no === "G94215456" ? 40.65 : 110 } });
+      if (path.endsWith("/quotePrice")) return supplierQuoteErrors.has(params.goods_no) ? Response.json(supplierQuoteErrors.get(params.goods_no)) : Response.json({ code: 1, data: { balance_enough: supplierBalanceEnough, available_quantity: emptyGoods.has(params.goods_no) ? 0 : supplierStock, total_amount: params.goods_no === "G88230690" ? 12.61 : params.goods_no === "G30430004" ? 4.85 : params.goods_no === "G42078548" ? 0.05 : params.goods_no === "G85161614" ? params.quantity * 1.03 : params.goods_no === "G17614190" ? 58.5 : ["G95786160", "G88655555", "G75777360", "G63757710"].includes(params.goods_no) ? 3.10 : ["G37376813", "G43844575"].includes(params.goods_no) ? 4.12 : params.goods_no === "G39595340" ? 11.31 : params.goods_no === "G94215456" ? 40.65 : 110 } });
       if (path.endsWith("/create")) { supplierGoods = params.goods_no; supplierQuantity = params.quantity; supplierRemark = params.remark; supplierPurchases++; if (supplierTimeout) throw new Error("simulated network failure"); return Response.json({ code: 1, data: { trade_no: params.goods_no === "G88230690" ? "BATCH-16688" : "TEST-16688", total_amount: params.goods_no === "G88230690" ? 12.61 : params.goods_no === "G75777360" ? 3.27 : 3.10 } }); }
       if (path.endsWith("/query") && params.trade_no === "INVENTORY-ORDER") return Response.json({ code: 1, data: { goods_no: "G37376813", status: 4, cards: [{ code: "stock@example.com—pass--https://example.com/code" }], instruction: "说明" } });
       if (path.endsWith("/query") && params.trade_no === "BATCH-16688") return Response.json({code:1,data:{goods_no:"G88230690",status:4,total_amount:12.61,cards:[{code:"new-batch-a"},{code:"new-batch-b"},{code:"new-batch-c"}]}});
@@ -486,6 +486,18 @@ test("订单、收款核实和交付的数据库流程", async t => {
     supplierNoInstructions=false;supplierQuoteErrors.clear();supplierStock=null;
   });
 
+  await t.test("新增半价资格备选货源使用专属教程", async () => {
+    supplierStock=1;emptyGoods=new Set(["G95786160","G88655555","G75777360"]);
+    const o=(await call("/api/orders",{product:"gpt",planId:"halfPriceAccountOneMonth",email:"new-backup@example.com",method:"wechat",acceptedTerms:true,requestId:randomUUID()})).data;
+    await call("/api/admin/update",{id:o.id,action:"confirm"},session);
+    const quote=await call("/api/admin/supplier-preview",{id:o.id},session);assert.equal(quote.data.goodsNo,"G63757710");
+    const before=supplierPurchases;assert.equal((await call("/api/admin/supplier-deliver",{id:o.id,expectedGoodsNo:"G63757710",expectedCents:310},session)).status,200);
+    assert.equal(supplierGoods,"G63757710");assert.equal(supplierPurchases,before+1);
+    const mail=sentMessages.findLast(x=>x.to==="new-backup@example.com");assert.match(mail.text,/Dora Card/);assert.match(mail.text,/4361/);assert.match(mail.text,/Go 试用号/);
+    const cost=await db.prepare("SELECT goodsNo,supplierName,costCents FROM order_procurement_cost WHERE orderId=?").bind(o.id).first();assert.equal(cost.goodsNo,"G63757710");assert.equal(cost.costCents,310);
+    assert.equal((await call("/api/admin/supplier-deliver",{id:o.id},session)).status,409);assert.equal(supplierPurchases,before+1);
+    emptyGoods.clear();supplierStock=null;
+  });
   await t.test("代理仅管理员可创建，凭据不出现在管理列表中", async () => {
     await db.prepare("DELETE FROM rate_limits").run();
     const payload={name:"测试代理",password:"ExamplePassword-2026"};
@@ -680,7 +692,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
     await call("/api/admin/contact-buyer",{id:gpt.id,message:"这是沟通内容"},session);
     assert.equal((await call("/api/orders/lookup",gpt)).data.status,"processing");
     const options=await call(`/api/admin/delivery-files?orderId=${gpt.id}`,undefined,session);
-    assert.deepEqual(options.data.sources.map(s=>s.goodsNo),["G95786160","G88655555","G75777360"]);
+    assert.deepEqual(options.data.sources.map(s=>s.goodsNo),["G95786160","G88655555","G75777360","G63757710"]);
     assert.equal((await call("/api/admin/send-delivery",{...payload,goodsNo:"G37376813"},session)).status,400);
     assert.equal((await call("/api/admin/send-delivery",{...payload,goodsNo:"G75777360"},session)).status,400);
     assert.equal((await call("/api/admin/send-delivery",payload,session)).status,200);
@@ -751,7 +763,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
   await t.test("商品货源详情按档位询价且仅管理员可访问", async () => {
     assert.equal((await call("/api/admin/catalog-suppliers",{key:"halfPriceAccountOneMonth"})).status,401);
     const result=await call("/api/admin/catalog-suppliers",{key:"halfPriceAccountOneMonth"},session);
-    assert.equal(result.status,200);assert.deepEqual(result.data.items.map(x=>x.goodsNo),["G95786160","G88655555","G75777360"]);assert.equal(result.data.items[0].total,3.1);assert.equal(result.data.items[0].balanceEnough,true);
+    assert.equal(result.status,200);assert.deepEqual(result.data.items.map(x=>x.goodsNo),["G95786160","G88655555","G75777360","G63757710"]);assert.equal(result.data.items[0].total,3.1);assert.equal(result.data.items[0].balanceEnough,true);
     const token=await call("/api/admin/catalog-suppliers",{key:"token:300亿 Token"},session);
     assert.equal(token.status,410);
     assert.equal((await call("/api/admin/catalog-suppliers",{key:"not-valid"},session)).status,400);
