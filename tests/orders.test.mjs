@@ -925,4 +925,14 @@ test("订单、收款核实和交付的数据库流程", async t => {
     await call("/api/admin/update",{id:a.id,action:"confirm"},session);assert.equal((await call("/api/admin/update",{id:a.id,action:"cancel"},session)).status,409);
   });
 
+  await t.test("商品销量只增加后续已核实收款的对应订单",async()=>{
+    await db.prepare("DELETE FROM rate_limits").run();
+    const before=(await call("/api/catalog/sales")).data.counts;
+    const o=(await call("/api/orders",{product:"muse-token",planId:"300",inviteCode:"TEST-INVITE",method:"wechat",acceptedTerms:true,requestId:randomUUID()})).data;
+    let values=(await call("/api/catalog/sales")).data.counts;assert.equal(values["token:300"] || 0,before["token:300"] || 0);
+    await call("/api/admin/update",{id:o.id,action:"confirm"},session);
+    const response=await call("/api/catalog/sales");values=response.data.counts;assert.equal(values["token:300"],(before["token:300"] || 0)+1);
+    assert.equal(values["token:200"] || 0,before["token:200"] || 0);assert.doesNotMatch(JSON.stringify(response.data),/TEST-INVITE|example.com/);
+  });
+
 });

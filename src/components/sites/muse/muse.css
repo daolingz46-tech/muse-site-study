@@ -414,3 +414,5 @@
 
 /* Keep the multicolour Google mark independent from the Mail.com colour filter. */
 .muse-product-stage.is-gmail .muse-logo-inner img{filter:none}
+
+.muse-sales{display:inline-block;color:#65738a;font-size:11px;line-height:1.4;font-weight:500}

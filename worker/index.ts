@@ -1189,6 +1189,16 @@ const worker = {
         await env.DB.prepare("SELECT id FROM orders LIMIT 1").all();
         return withCors(json({ ok: true, service: "muse-store", checkedAt: Date.now() }));
       }
+      if (path === "/api/catalog/sales" && request.method === "GET") {
+        const rows=await env.DB.prepare("SELECT product,supplierPlan,title,COUNT(*) AS n FROM orders WHERE paidAt>=? AND status IN ('processing','complete') GROUP BY product,supplierPlan,title").bind(1793898022000).all<{product:string;supplierPlan:string|null;title:string;n:number}>();
+        const counts:Record<string,number>={};
+        for(const row of rows.results) {
+          const key=row.product === "muse" ? `muse:${row.supplierPlan === "museWarranty" ? "warranty" : "basic"}` : row.product === "muse-token" ? tokenPlans.find(p=>row.title===`Muse Token · ${p.label}`)?.id : row.product === "gpt" && row.supplierPlan ? `gpt:${row.supplierPlan}` : undefined;
+          const fullKey=row.product === "muse-token" && key ? `token:${key}` : key;
+          if(fullKey)counts[fullKey]=(counts[fullKey] || 0)+row.n;
+        }
+        return withCors(json({counts},200,{"Cache-Control":"no-store"}));
+      }
       if (path === "/api/referral" && request.method === "GET") {
         const code = url.searchParams.get("code") || "";
         if (!/^[a-f0-9]{32}$/.test(code)) return withCors(json({ valid:false }));
