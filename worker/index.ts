@@ -190,6 +190,23 @@ async function queueOrderPush(env: Env, order: Row, eventType: "created" | "repo
     .bind(order.id, eventType, now, now).run();
   if (env.PUSH_PUBLIC_KEY && env.PUSH_PRIVATE_KEY) ctx.waitUntil(sendOrderPushes(env));
 }
+async function queueAgentPush(env: Env, order: Row, ctx: ExecutionContextLike) {
+  const now=Date.now();
+  await env.DB.prepare("INSERT OR IGNORE INTO agent_push_outbox(orderId,agentId,endpoint,nextAttemptAt,createdAt) SELECT ?,a.agentId,s.endpoint,?,? FROM agent_order_attribution a JOIN agent_push_subscriptions s ON s.agentId=a.agentId WHERE a.orderId=?").bind(order.id,now,now,order.id).run();
+  if (env.PUSH_PUBLIC_KEY && env.PUSH_PRIVATE_KEY) ctx.waitUntil(sendAgentPushes(env));
+}
+async function sendAgentPushes(env: Env) {
+  if (!env.PUSH_PUBLIC_KEY || !env.PUSH_PRIVATE_KEY) return;
+  const now=Date.now();
+  const pending=await env.DB.prepare("SELECT p.orderId,p.agentId,p.endpoint,p.attempts,s.subscription,o.code FROM agent_push_outbox p JOIN agent_push_subscriptions s ON s.endpoint=p.endpoint AND s.agentId=p.agentId JOIN agent_order_attribution a ON a.orderId=p.orderId AND a.agentId=p.agentId JOIN agents ag ON ag.id=p.agentId AND ag.status='active' JOIN orders o ON o.id=p.orderId WHERE p.sentAt IS NULL AND p.nextAttemptAt<=? ORDER BY p.createdAt LIMIT 10").bind(now).all<{orderId:string;agentId:string;endpoint:string;attempts:number;subscription:string;code:string}>();
+  for(const item of pending.results) {
+    const claimed=await env.DB.prepare("UPDATE agent_push_outbox SET attempts=attempts+1,nextAttemptAt=? WHERE orderId=? AND agentId=? AND endpoint=? AND sentAt IS NULL AND nextAttemptAt<=?").bind(now+60000,item.orderId,item.agentId,item.endpoint,now).run();if(!claimed.meta.changes)continue;
+    try { const sub=pushSubscription(JSON.parse(item.subscription));if(!sub)throw new Error("invalid_subscription");const res=await deliverPush(env,sub,"代理订单提醒",`您有一笔新订单：${item.code}。`,`agent:${item.orderId}`);
+      if(res.status===404||res.status===410) await env.DB.batch([env.DB.prepare("DELETE FROM agent_push_subscriptions WHERE endpoint=? AND agentId=?").bind(item.endpoint,item.agentId),env.DB.prepare("DELETE FROM agent_push_outbox WHERE endpoint=? AND agentId=?").bind(item.endpoint,item.agentId)]);
+      else if(res.ok) await env.DB.prepare("UPDATE agent_push_outbox SET sentAt=? WHERE orderId=? AND agentId=? AND endpoint=?").bind(Date.now(),item.orderId,item.agentId,item.endpoint).run(); else throw new Error("push_failed");
+    } catch {await env.DB.prepare("UPDATE agent_push_outbox SET nextAttemptAt=? WHERE orderId=? AND agentId=? AND endpoint=? AND sentAt IS NULL").bind(Date.now()+Math.min(3600000,15000*2**Math.min(item.attempts,8)),item.orderId,item.agentId,item.endpoint).run();}
+  }
+}
 async function sendOrderPushes(env: Env) {
   if (!env.PUSH_PUBLIC_KEY || !env.PUSH_PRIVATE_KEY) return;
   const now = Date.now();
@@ -276,7 +293,7 @@ async function createOrder(env: Env, request: Request, input: Record<string, unk
       env.DB.prepare("INSERT INTO agent_order_attribution(orderId,agentId,productKey,commissionCents,ruleVersion,createdAt) SELECT ?,a.id,?,COALESCE(r.amountCents,0),COALESCE(r.updatedAt,0),? FROM agents a LEFT JOIN agent_commission_rules r ON r.productKey=? WHERE a.referralCode=? AND a.status='active' AND changes()=1").bind(id,productKey,now,productKey,referralCode),
     ]);
     const row = await env.DB.prepare("SELECT * FROM orders WHERE requestHash=?").bind(requestHash).first<Row>();
-    if (row) { if (!await matchesInput(row)) throw new HttpError(409, "订单内容已改变，请重新下单"); await queueOrderEmail(env, row, "created", ctx); if (result.meta.changes) await queueOrderPush(env, row, "created", ctx); return json(publicOrder(row, token), result.meta.changes ? 201 : 200); }
+    if (row) { if (!await matchesInput(row)) throw new HttpError(409, "订单内容已改变，请重新下单"); await queueOrderEmail(env, row, "created", ctx); if (result.meta.changes) { await queueOrderPush(env, row, "created", ctx); await queueAgentPush(env,row,ctx); } return json(publicOrder(row, token), result.meta.changes ? 201 : 200); }
   }
   throw new HttpError(503, "当前订单较多，请稍后再试或联系支持");
 }
@@ -312,6 +329,22 @@ async function agentApi(env: Env, request: Request, path: string, ctx: Execution
   const session=request.headers.get("Cookie")?.match(/(?:^|;\s*)agent_session=([a-f0-9]{64})(?:;|$)/)?.[1] || "";
   const agent=session && await env.DB.prepare("SELECT a.id,a.name,a.referralCode FROM agent_sessions s JOIN agents a ON a.id=s.agentId WHERE s.hash=? AND s.expiresAt>? AND a.status='active'").bind(await hash(session),Date.now()).first<{id:string;name:string;referralCode:string}>();
   if (!agent) throw new HttpError(401,"请登录代理工作台");
+  if (path === "/api/agent/push-key" && request.method === "GET") { if (!env.PUSH_PUBLIC_KEY || !env.PUSH_PRIVATE_KEY) throw new HttpError(503,"手机推送尚未配置"); return json({publicKey:env.PUSH_PUBLIC_KEY}); }
+  if (path === "/api/agent/push-subscribe" && request.method === "POST") {
+    const sub=pushSubscription((await body(request)).subscription);if(!sub)throw new HttpError(400,"手机推送订阅无效");
+    const existing=await env.DB.prepare("SELECT agentId FROM agent_push_subscriptions WHERE endpoint=?").bind(sub.endpoint).first<{agentId:string}>();
+    if(existing && existing.agentId!==agent.id)throw new HttpError(409,"此设备已关联其他代理，请先退出并解除通知订阅");
+    await env.DB.prepare("INSERT INTO agent_push_subscriptions(endpoint,agentId,subscription,createdAt) VALUES(?,?,?,?) ON CONFLICT(endpoint) DO UPDATE SET subscription=excluded.subscription WHERE agentId=excluded.agentId").bind(sub.endpoint,agent.id,JSON.stringify(sub),Date.now()).run();return json({ok:true});
+  }
+  if (path === "/api/agent/push-unsubscribe" && request.method === "POST") {
+    const endpoint=str((await body(request)).endpoint,2048);await env.DB.batch([env.DB.prepare("DELETE FROM agent_push_subscriptions WHERE endpoint=? AND agentId=?").bind(endpoint,agent.id),env.DB.prepare("DELETE FROM agent_push_outbox WHERE endpoint=? AND agentId=?").bind(endpoint,agent.id)]);return json({ok:true});
+  }
+  if (path === "/api/agent/push-test" && request.method === "POST") {
+    await limit(env,request,"agent-push-test",10,3600);const endpoint=str((await body(request)).endpoint,2048);
+    const row=await env.DB.prepare("SELECT subscription FROM agent_push_subscriptions WHERE endpoint=? AND agentId=?").bind(endpoint,agent.id).first<{subscription:string}>();if(!row)throw new HttpError(404,"请先开启手机推送");
+    let sub:PushSubscription|null=null;try{sub=pushSubscription(JSON.parse(row.subscription));}catch{} if(!sub)throw new HttpError(409,"推送订阅无效，请重新开启");
+    try{const res=await deliverPush(env,sub,"代理工作台测试提醒","手机推送已连接。",`agent-test:${Date.now()}`);if(!res.ok)throw new Error("push_failed");}catch{throw new HttpError(502,"测试推送未送达，请检查网络或通知设置");}return json({ok:true});
+  }
   if (path === "/api/agent/me" && request.method === "GET") return json({id:agent.id,name:agent.name,referralCode:agent.referralCode});
   if (path === "/api/agent/prices" && request.method === "GET") {
     const rules=await env.DB.prepare("SELECT productKey,amountCents FROM agent_commission_rules").all<{productKey:string;amountCents:number}>();
@@ -1246,6 +1279,6 @@ const worker = {
       return withCors(json({ message: "订单服务暂时不可用，请稍后重试" }, 500));
     }
   },
-  async scheduled(_event: unknown, env: Env) { await expire(env); await sendOrderEmails(env); await sendWithdrawalNotices(env); await sendOrderPushes(env); },
+  async scheduled(_event: unknown, env: Env) { await expire(env); await sendOrderEmails(env); await sendWithdrawalNotices(env); await sendOrderPushes(env); await sendAgentPushes(env); },
 };
 export default worker;

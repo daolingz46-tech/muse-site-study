@@ -81,6 +81,21 @@ export function AgentWorkbench() {
   const [prices,setPrices]=useState<{productKey:string;name:string;priceCents:number;category:string;commissionCents:number|null}[]>([]);
   useEffect(()=>{if(!agent)return;let active=true;const load=()=>void agentRequest("/api/agent/prices").then(value=>{if(active)setPrices((value as {items:typeof prices}).items)}).catch(()=>{});load();const timer=window.setInterval(load,10000);return()=>{active=false;window.clearInterval(timer);};},[agent]);
   const [payoutMethod,setPayoutMethod]=useState<"alipay"|"wechat">("alipay"), [payoutImage,setPayoutImage]=useState<File|null>(null);
+  const [pushEndpoint,setPushEndpoint]=useState("");
+  const [pushBusy,setPushBusy]=useState(false);
+  useEffect(()=>{if(!agent || !("serviceWorker" in navigator))return;let active=true;void navigator.serviceWorker.getRegistration("/agent/").then(r=>r?.pushManager.getSubscription()).then(sub=>{if(active && sub){setPushEndpoint(sub.endpoint);void agentRequest("/api/agent/push-subscribe",{subscription:sub.toJSON()}).catch(()=>{});}});return()=>{active=false;};},[agent]);
+  async function enablePush(){
+    if(pushBusy)return;setPushBusy(true);setError("");
+    try {
+      if(pushEndpoint){await agentRequest("/api/agent/push-test",{endpoint:pushEndpoint});setNotice("测试推送已提交，请查看手机通知。");return;}
+      if(window.location.origin!=="https://musetoken.store" || !("serviceWorker" in navigator) || !("PushManager" in window) || typeof Notification==="undefined")throw new Error("iPhone 请使用 Safari 添加代理工作台到主屏幕，再从桌面打开并开启通知。");
+      const permission=await Notification.requestPermission();if(permission!=="granted")throw new Error("请在手机设置中允许代理工作台发送通知。");
+      const data=await agentRequest("/api/agent/push-key") as {publicKey:string};
+      const bytes=Uint8Array.from(atob(data.publicKey.replace(/-/g,"+").replace(/_/g,"/")+"=".repeat((4-data.publicKey.length%4)%4)),c=>c.charCodeAt(0));
+      const reg=await navigator.serviceWorker.register("/agent/sw.js",{scope:"/agent/"});const sub=await reg.pushManager.getSubscription() || await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:bytes});
+      await agentRequest("/api/agent/push-subscribe",{subscription:sub.toJSON()});setPushEndpoint(sub.endpoint);setNotice("手机推送已开启，有新代理订单时会提醒。");
+    }catch(cause){setError(errorMessage(cause));}finally{setPushBusy(false);}
+  }
   const [withdrawalAmount, setWithdrawalAmount] = useState("");
   const [pendingWithdrawal, setPendingWithdrawal] = useState<PendingWithdrawal | null>(null);
   const withdrawalInFlight = useRef(false);
@@ -125,7 +140,7 @@ export function AgentWorkbench() {
   async function logout() {
     if (busy) return;
     setBusy(true); setError("");
-    try { await agentRequest("/api/agent/logout", {}); setAgent(null); setOrders([]); setBalance(null); setWithdrawals([]); setPendingWithdrawal(null); setPassword(""); setNotice(""); }
+    try { if(pushEndpoint){await agentRequest("/api/agent/push-unsubscribe",{endpoint:pushEndpoint});const reg=await navigator.serviceWorker.getRegistration("/agent/");const sub=await reg?.pushManager.getSubscription();await sub?.unsubscribe();setPushEndpoint("");} await agentRequest("/api/agent/logout", {}); setAgent(null); setOrders([]); setBalance(null); setWithdrawals([]); setPendingWithdrawal(null); setPassword(""); setNotice(""); }
     catch (cause) {
       if (cause instanceof AgentRequestError && cause.status === 401) { setAgent(null); setOrders([]); setBalance(null); setWithdrawals([]); setPendingWithdrawal(null); setPassword(""); setNotice(""); }
       else setError(errorMessage(cause));
@@ -185,7 +200,7 @@ export function AgentWorkbench() {
 
   return <main className="agent-page">
     <div className="agent-shell">
-      <header className="agent-header"><div><span className="agent-brand">卡密大王</span><h1>代理工作台</h1><p>推广链接与订单记录</p></div>{agent && <button type="button" className="agent-text-button" disabled={busy} onClick={() => void logout()}>退出登录</button>}</header>
+      <header className="agent-header"><div><span className="agent-brand">卡密大王</span><h1>代理工作台</h1><p>推广链接与订单记录</p></div>{agent && <div><button type="button" className="agent-text-button" disabled={pushBusy} onClick={() => void enablePush()}>{pushBusy ? "连接中…" : pushEndpoint ? "测试手机推送" : "开启手机推送"}</button><button type="button" className="agent-text-button" disabled={busy} onClick={() => void logout()}>退出登录</button></div>}</header>
       {loading ? <section className="agent-card"><p className="agent-muted">正在加载…</p></section> : !agent ? <section className="agent-card agent-login">
         <h2>登录代理工作台</h2><p className="agent-muted">请输入店主提供的代理编号和密码。</p>
         <form onSubmit={login}><label htmlFor="agent-code">代理编号</label><input id="agent-code" autoComplete="username" required value={code} onChange={event => setCode(event.target.value)} placeholder="输入代理编号" maxLength={32} />
