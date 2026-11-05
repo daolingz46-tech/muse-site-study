@@ -524,8 +524,12 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal((await call("/api/admin/agents",undefined,login.cookie)).status,401);
     assert.equal((await call(`/api/referral?code=${created.data.referralCode}`)).data.valid,true);
     assert.equal((await call("/api/referral?code=invalid")).data.valid,false);
+    const subscription={endpoint:"https://fcm.googleapis.com/fcm/send/agent-test",keys:{auth:"abcdefghijklmnop",p256dh:"a".repeat(87)}};
+    assert.equal((await call("/api/agent/push-subscribe",{subscription})).status,401);
+    assert.equal((await call("/api/agent/push-subscribe",{subscription},login.cookie)).status,200);
     const checkout={product:"muse",email:"referral@example.com",method:"wechat",acceptedTerms:true,requestId:randomUUID(),referralCode:created.data.referralCode};
     const orders=await Promise.all([call("/api/orders",checkout),call("/api/orders",checkout)]);assert.equal(orders[0].data.id,orders[1].data.id);
+    const pushed=(await db.prepare("SELECT agentId,endpoint FROM agent_push_outbox WHERE orderId=?").bind(orders[0].data.id).all()).results;assert.equal(pushed.length,1);assert.equal(pushed[0].agentId,created.data.id);
     const attribution=await db.prepare("SELECT * FROM agent_order_attribution WHERE orderId=?").bind(orders[0].data.id).first();assert.equal(attribution.agentId,created.data.id);assert.equal(attribution.commissionCents,200);
     assert.equal((await call("/api/agent/orders")).status,401);
     const agentOrders=await call("/api/agent/orders",undefined,login.cookie);assert.equal(agentOrders.status,200);
@@ -533,6 +537,8 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.doesNotMatch(JSON.stringify(agentOrders.data),/referral@example.com|tokenHash|passwordHash/);
     const second=await call("/api/admin/agent-create",{name:"另一位代理",password:"AnotherPassword-2026"},ownerSession);
     const secondLogin=await call("/api/agent/login",{code:second.data.referralCode,password:"AnotherPassword-2026"});
+    assert.equal((await call("/api/agent/push-subscribe",{subscription},secondLogin.cookie)).status,409);
+    assert.equal((await call("/api/agent/push-test",{endpoint:subscription.endpoint},secondLogin.cookie)).status,404);
     const secondOrders=await call("/api/agent/orders",undefined,secondLogin.cookie);
     assert.equal(secondOrders.data.orders.length,0);
     const unset=(await call("/api/orders",{product:"muse-token",planId:"100",inviteCode:"TEST",email:"new@example.com",method:"wechat",acceptedTerms:true,requestId:randomUUID(),referralCode:second.data.referralCode})).data;
