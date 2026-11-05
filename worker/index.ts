@@ -651,11 +651,11 @@ async function admin(env: Env, request: Request, path: string) {
     if (!goods.length || !Number.isInteger(quantity) || quantity < 1) throw new HttpError(400,"商品不存在");
     const items = await Promise.all(goods.map(async (goodsNo,index) => {
       const quoteQuantity = goodsNo === "G88230690" ? 3 : quantity;
-      const entry = {goodsNo, quoteQuantity, name:supplierNames[goodsNo] || "名称待核实", priority:index === 0 ? "首选" : `备用 ${index}`, unitPrice:null as number|null, total:null as number|null, stock:null as number|null, quoteCode:null as number|null, quoteMessage:""};
+      const entry = {goodsNo, quoteQuantity, name:supplierNames[goodsNo] || "名称待核实", priority:index === 0 ? "首选" : `备用 ${index}`, unitPrice:null as number|null, total:null as number|null, stock:null as number|null, balanceEnough:null as boolean|null, quoteCode:null as number|null, quoteMessage:""};
       if (!env.SUPPLIER_APP_ID || !env.SUPPLIER_SECRET) return entry;
-      try { const result = await supplierRequest({appId:env.SUPPLIER_APP_ID,secret:env.SUPPLIER_SECRET},"purchase","quotePrice",{goods_no:goodsNo,quantity:quoteQuantity}) as {code:number;msg?:string;message?:string;data?:{unit_price?:number;total_amount?:number;available_quantity?:number}}; if(result.code !== 1 || !result.data) return {...entry,quoteCode:typeof result.code === "number" ? result.code : null,quoteMessage:safeSupplierMessage(result.msg || result.message)};
-        const unit=result.data.unit_price, total=result.data.total_amount, stock=result.data.available_quantity;
-        return {...entry,unitPrice:typeof unit === "number" && Number.isFinite(unit) && unit >= 0 ? unit : null,total:typeof total === "number" && Number.isFinite(total) && total >= 0 ? total : null,stock:typeof stock === "number" && Number.isFinite(stock) && stock >= 0 ? stock : null};
+      try { const result = await supplierRequest({appId:env.SUPPLIER_APP_ID,secret:env.SUPPLIER_SECRET},"purchase","quotePrice",{goods_no:goodsNo,quantity:quoteQuantity}) as {code:number;msg?:string;message?:string;data?:{unit_price?:number;total_amount?:number;available_quantity?:number;balance_enough?:boolean}}; if(result.code !== 1 || !result.data) return {...entry,quoteCode:typeof result.code === "number" ? result.code : null,quoteMessage:safeSupplierMessage(result.msg || result.message)};
+        const unit=result.data.unit_price, total=result.data.total_amount, stock=result.data.available_quantity, balanceEnough=result.data.balance_enough;
+        return {...entry,unitPrice:typeof unit === "number" && Number.isFinite(unit) && unit >= 0 ? unit : null,total:typeof total === "number" && Number.isFinite(total) && total >= 0 ? total : null,stock:typeof stock === "number" && Number.isFinite(stock) && stock >= 0 ? stock : null,balanceEnough:typeof balanceEnough === "boolean" ? balanceEnough : null};
       } catch { return entry; }
     }));
     return json({quantity,items});
