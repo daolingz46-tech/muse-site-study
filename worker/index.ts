@@ -409,7 +409,7 @@ async function eligibleInventoryProducts(env: Env, order: Row): Promise<string[]
   if (result.code !== 1 || typeof result.data?.available_quantity !== "number") throw new HttpError(409,"无法确认首选货源库存，未切换备选货源。");
   return result.data.available_quantity === 0 ? [primary,backup] : [primary];
 }
-const supplierNames: Record<string,string> = {G30430004:"ai小头",G88230690:"AI贝贝",G24324524:"AI源头",G94215456:"692972690@qq.com",G53967132:"332297567@qq.com",G42078548:"692972690@qq.com",G95786160:"huaiyesu",G88655555:"lzz_ai小铺",G75777360:"原货源商（名称待核实）",G63757710:"692972690@qq.com",G17614190:"AI源头",G37376813:"阿度AI账号批发",G43844575:"小白ai一手货源"};
+const supplierNames: Record<string,string> = {G30430004:"ai小头",G88230690:"AI贝贝",G24324524:"AI源头",G94215456:"692972690@qq.com",G53967132:"332297567@qq.com",G42078548:"692972690@qq.com",G95786160:"huaiyesu",G88655555:"lzz_ai小铺",G75777360:"原货源商（名称待核实）",G82369242:"AI成品号源头",G63757710:"692972690@qq.com",G17614190:"AI源头",G37376813:"阿度AI账号批发",G43844575:"小白ai一手货源"};
 function safeSupplierMessage(value: unknown): string {
   if (typeof value !== "string") return "";
   const message=value.trim();
@@ -455,6 +455,11 @@ const supplier637Guide = `本商品是 Plus 半价资格账号，不含 Plus 订
 2. 点击 Upgrade to Plus（升级 Plus），在官方支付页面查看半价优惠。
 3. 准备官方支持的支付卡并确保余额充足。供货商建议可使用 Dora Card（https://www.dora-card.com/login），选卡时尽量选择 4361 号段；也可自行选择其他有额度的卡。
 4. 仅在官方支付页面填写卡号、有效期和 CVV，确认订阅并检查状态。供货商只保证账号具备优惠资格，不保证支付一定成功；商品不含接码服务。`;
+const vietnamPlusGuide = `越南实卡 Plus 个人独享成品号，供货商提供 30 天质保。交付格式为账号 | 密码 | 2FA 原始密钥，竖线是分隔符，不要一起输入。
+1. 打开 ChatGPT 官方登录网页，在邮箱输入框输入账号，不要选择 Google 或 iCloud 登录；再输入密码。
+2. 使用自己的验证器或供货商提供的 https://2fa.fun/index.html 根据 2FA 原始密钥生成验证码，输入验证码完成登录。请妥善保管密钥。
+3. 按供货商要求在货源采购后 1 小时内修改 2FA，并在账号安全的活动会话中移除其他设备。遇到邮箱验证或无法修改时不要退出账号，及时联系店主。
+账号使用一次性 Gmail 注册，该邮箱无法辅助后续修改或找回；不含接码服务，使用需要手机验证码的功能时需自行接码。禁止反代使用。质保期间符合条件的异常按照货源规则处理；供应商对免费换号时段的描述存在差异，请联系店主核实。`;
 const visaTopupGuide = `GPT Plus 正规代充：为自己的账号充值，不是成品账号。账号必须处于 Free 免费版，不能覆盖 Go、Plus 或 Pro 等已有订阅。请按照以下卡密附带的兑换教程操作。供货商说明充值成功后提供 30 天订阅质保，封号不在质保范围；如有问题请联系店主。`;
 const philippinesSupplierGuide = `菲律宾渠道 GPT Plus 代充，账号须为 Free 状态，不能覆盖已有订阅。订阅异常掉落或失效（非账号自身原因）时，请联系店主并提供订单信息，按供货商售后规则处理。封号或账号风控问题不在该供货商售后范围内。`;
 const halfPriceTopupGuide = `本商品为菲律宾渠道 Plus 一个月半价代充，使用前请先确认账号有半价资格。\n账号须为 Free 状态，不能覆盖已有订阅。新号及老号均可使用，具体以账号资格为准。\n可参考资格查询文档：https://docs.qq.com/doc/DY2plWm9pdVhXb0Fs\n供货商说明提供 30 天订阅质保；封号不在其质保范围。请保留订单信息，遇到问题及时联系店主。`;
@@ -800,7 +805,7 @@ async function admin(env: Env, request: Request, path: string) {
     if (!order || !["muse", "gpt"].includes(order.product)) throw new HttpError(404, "订单不存在");
     const rows = await env.DB.prepare("SELECT id,name,mime,size,uploadedBytes FROM delivery_files WHERE orderId=? AND uploadedBytes=size ORDER BY createdAt").bind(orderId).all();
     const goods = order.product === "gpt" ? (order.supplierPlan?.startsWith("custom:") ? [order.customGoodsNo || "手工交付"] : inventoryProducts(order).map(value => value.slice(4))) : [];
-    return json({ files: rows.results, sources: goods.map(goodsNo => ({ goodsNo, instructions: order.supplierPlan?.startsWith("custom:") ? (order.customInstructions || "请填写交付说明") : goodsNo === "G88230690" ? gmailBackupGuide : goodsNo === "G30430004" ? gmailAccountGuide : goodsNo === "G94215456" ? plus15NewGuide : goodsNo === "G39595340" ? plusAccountGuide : goodsNo === "G42078548" ? freeAccountGuide : goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G63757710" ? supplier637Guide : goodsNo === "G88655555" ? qualificationGuide : "" })) });
+    return json({ files: rows.results, sources: goods.map(goodsNo => ({ goodsNo, instructions: order.supplierPlan?.startsWith("custom:") ? (order.customInstructions || "请填写交付说明") : goodsNo === "G88230690" ? gmailBackupGuide : goodsNo === "G30430004" ? gmailAccountGuide : goodsNo === "G82369242" ? vietnamPlusGuide : goodsNo === "G94215456" ? plus15NewGuide : goodsNo === "G39595340" ? plusAccountGuide : goodsNo === "G42078548" ? freeAccountGuide : goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G63757710" ? supplier637Guide : goodsNo === "G88655555" ? qualificationGuide : "" })) });
   }
   if (path === "/api/admin/delivery-file/start" && request.method === "POST") {
     const input = await body(request), orderId = str(input.orderId, 64), name = str(input.name, 120).replace(/[\\/\x00-\x1f]/g, "_");
@@ -874,7 +879,7 @@ async function admin(env: Env, request: Request, path: string) {
       const used = await env.DB.prepare("SELECT orderId FROM supplier_fulfillment WHERE card=? LIMIT 1").bind(card).first();
       if (used) continue;
       const rawInstruction=typeof data.instruction === "string" ? data.instruction.trim() : "";
-      const instructions=goodsNo === "G24433963" ? "这是 Mail.com 邮箱账号，交付格式为邮箱和密码。请前往 https://www.mail.com/ 登录。" : goodsNo === "G88230690" ? [gmailBackupGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G30430004" ? [gmailAccountGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G94215456" ? [plus15NewGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G39595340" ? [plusAccountGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G42078548" ? freeAccountGuide : goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G63757710" ? supplier637Guide : goodsNo === "G88655555" ? qualificationGuide : goodsNo === "G17614190" ? [halfPriceTopupGuide,rawInstruction || "（兑换说明未提供）"].join("\n\n") : goodsNo === "G24324524" ? [visaTopupGuide,rawInstruction || "（兑换说明未提供）"].join("\n\n") : goodsNo === "G53967132" ? [philippinesSupplierGuide,rawInstruction || "（兑换说明未提供）"].join("\n\n") : goodsNo === "G19335525" ? rawInstruction || "（兑换说明未提供）" : rawInstruction;
+      const instructions=goodsNo === "G24433963" ? "这是 Mail.com 邮箱账号，交付格式为邮箱和密码。请前往 https://www.mail.com/ 登录。" : goodsNo === "G88230690" ? [gmailBackupGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G30430004" ? [gmailAccountGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G82369242" ? vietnamPlusGuide : goodsNo === "G94215456" ? [plus15NewGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G39595340" ? [plusAccountGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G42078548" ? freeAccountGuide : goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G63757710" ? supplier637Guide : goodsNo === "G88655555" ? qualificationGuide : goodsNo === "G17614190" ? [halfPriceTopupGuide,rawInstruction || "（兑换说明未提供）"].join("\n\n") : goodsNo === "G24324524" ? [visaTopupGuide,rawInstruction || "（兑换说明未提供）"].join("\n\n") : goodsNo === "G53967132" ? [philippinesSupplierGuide,rawInstruction || "（兑换说明未提供）"].join("\n\n") : goodsNo === "G19335525" ? rawInstruction || "（兑换说明未提供）" : rawInstruction;
       const saved = await env.DB.prepare("INSERT OR IGNORE INTO inventory_cards(id,product,card,cardHash,tradeNo,instruction,createdAt) VALUES(?,?,?,?,?,?,?)").bind(crypto.randomUUID(), product, card, await hash(card), tradeNo, instructions, Date.now()).run();
       added += saved.meta.changes;
     }
@@ -1016,10 +1021,10 @@ async function admin(env: Env, request: Request, path: string) {
       const queriedSource=typeof result.data.goods_no === "string" ? result.data.goods_no : "";
       if (recordedSource && queriedSource && recordedSource !== queriedSource) throw new HttpError(409,"货源编号与采购记录不一致，请核查后再发货。");
       const goodsNo=queriedSource || recordedSource;
-      if (["halfPriceAccountOneMonth","halfPriceTopup","philippinesTopup"].includes(order.supplierPlan || "") && !goodsNo) throw new HttpError(409,"无法确认这笔采购的货源编号，请核查后再发货。");
+      if (["halfPriceAccountOneMonth","halfPriceTopup","philippinesTopup","vietnamPlus30"].includes(order.supplierPlan || "") && !goodsNo) throw new HttpError(409,"无法确认这笔采购的货源编号，请核查后再发货。");
       const rawInstruction=typeof result.data.instruction === "string" ? result.data.instruction.trim() : "";
       if (["G17614190","G24324524","G53967132","G19335525","G75777360"].includes(goodsNo) && !rawInstruction) throw new HttpError(409,"货源未返回专属教程，已采购，请核查教程后再发货，勿重复采购。");
-      const instruction = goodsNo === "G88230690" ? [gmailBackupGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G30430004" ? [gmailAccountGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G94215456" ? [plus15NewGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G39595340" ? [plusAccountGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G42078548" ? freeAccountGuide : goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G63757710" ? supplier637Guide : goodsNo === "G88655555" ? qualificationGuide : goodsNo === "G17614190" ? [halfPriceTopupGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G24324524" ? [visaTopupGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G53967132" ? [philippinesSupplierGuide,rawInstruction].filter(Boolean).join("\n\n") : rawInstruction || fallback;
+      const instruction = goodsNo === "G88230690" ? [gmailBackupGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G30430004" ? [gmailAccountGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G82369242" ? vietnamPlusGuide : goodsNo === "G94215456" ? [plus15NewGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G39595340" ? [plusAccountGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G42078548" ? freeAccountGuide : goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G63757710" ? supplier637Guide : goodsNo === "G88655555" ? qualificationGuide : goodsNo === "G17614190" ? [halfPriceTopupGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G24324524" ? [visaTopupGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G53967132" ? [philippinesSupplierGuide,rawInstruction].filter(Boolean).join("\n\n") : rawInstruction || fallback;
       const saved = await env.DB.prepare("UPDATE supplier_fulfillment SET state='ready',card=?,instruction=?,updatedAt=? WHERE orderId=? AND state='awaiting'").bind(card, instruction, Date.now(), id).run();
       if (!saved.meta.changes) throw new HttpError(409, "订单正在处理，请刷新");
       task = { ...task, state: "ready", card, instruction };
@@ -1060,7 +1065,7 @@ async function admin(env: Env, request: Request, path: string) {
       const goodsNo = str(input.goodsNo, 30);
       if (order.supplierPlan?.startsWith("custom:")) { if (goodsNo !== (order.customGoodsNo || "手工交付")) throw new HttpError(400,"请选择订单对应的货源"); instructions=order.customInstructions || str(input.instructions,2000); } else {
       if (!inventoryProducts(order).includes(`gpt:${goodsNo}`)) throw new HttpError(400, "请选择此商品对应的实际采购货源");
-      instructions = goodsNo === "G88230690" ? gmailBackupGuide : goodsNo === "G30430004" ? gmailAccountGuide : goodsNo === "G94215456" ? plus15NewGuide : goodsNo === "G39595340" ? plusAccountGuide : goodsNo === "G42078548" ? freeAccountGuide : goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G63757710" ? supplier637Guide : goodsNo === "G88655555" ? qualificationGuide : str(input.instructions, 2000); }
+      instructions = goodsNo === "G88230690" ? gmailBackupGuide : goodsNo === "G30430004" ? gmailAccountGuide : goodsNo === "G82369242" ? vietnamPlusGuide : goodsNo === "G94215456" ? plus15NewGuide : goodsNo === "G39595340" ? plusAccountGuide : goodsNo === "G42078548" ? freeAccountGuide : goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G63757710" ? supplier637Guide : goodsNo === "G88655555" ? qualificationGuide : str(input.instructions, 2000); }
       if (!instructions) throw new HttpError(400, "请填写该货源的使用或兑换说明，不能使用其他商品的教程");
     }
     if (!hasEmailConfig(env)) throw new HttpError(503, "邮件服务尚未配置");
