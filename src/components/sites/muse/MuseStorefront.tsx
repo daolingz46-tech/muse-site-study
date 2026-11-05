@@ -324,10 +324,10 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
       </header>
 
       <main className="muse-product-layout" id="muse-product-panel" role="tabpanel" aria-labelledby={`tab-${product}`}>
-        <section className={`muse-product-stage ${product === "mail" ? "is-mail" : ""}`} aria-label={product === "gmail" ? "Gmail" : product === "mail" ? "Mail.com" : product === "gpt" ? "GPT" : product === "muse" ? "Muse AI" : "Muse Token"} onDragStart={event => event.preventDefault()} onMouseDown={event => event.preventDefault()}>
+        <section className={`muse-product-stage ${product === "mail" ? "is-mail" : product === "gmail" ? "is-gmail" : ""}`} aria-label={product === "gmail" ? "Gmail" : product === "mail" ? "Mail.com" : product === "gpt" ? "GPT" : product === "muse" ? "Muse AI" : "Muse Token"} onDragStart={event => event.preventDefault()} onMouseDown={event => event.preventDefault()}>
           <div className="muse-stage-halo" />
           <div className="muse-logo-composition">
-            <span className="muse-logo-inner"><Image src={assetBase + (product === "gmail" ? "/sites/muse/google-g.png" : product === "mail" ? "/sites/muse/mail-com.svg" : product === "gpt" ? "/sites/muse/openai-mark.svg" : "/sites/muse/muse-logo.svg")} fill sizes="(max-width: 650px) 158px, 354px" alt="" loading="eager" draggable={false} /></span>
+            <span className="muse-logo-inner"><Image key={product} src={assetBase + (product === "gmail" ? "/sites/muse/google-g.png" : product === "mail" ? "/sites/muse/mail-com.svg" : product === "gpt" ? "/sites/muse/openai-mark.svg" : "/sites/muse/muse-logo.svg")} fill sizes="(max-width: 650px) 158px, 354px" alt="" loading="eager" draggable={false} /></span>
           </div>
           <div className="muse-stage-caption" key={product}>
             <strong>{product === "gmail" ? "Gmail" : product === "mail" ? "Mail.com" : product === "gpt" ? "GPT" : product === "muse" ? "Muse AI" : "Muse Token"}</strong>

@@ -411,3 +411,6 @@
 .muse-switch{grid-template-columns:repeat(5,1fr);width:500px}.muse-switch-indicator{width:calc((100% - 10px)/5)}.muse-switch-indicator.is-gmail{transform:translateX(400%)}@media(max-width:650px){.muse-switch{width:min(100%,350px)}.muse-switch-indicator{width:calc((100% - 8px)/5)}.muse-switch [role=tab]{font-size:10px}}
 
 .custom-category-title{font-size:16px;margin:20px 0 10px;color:#253b5e}
+
+/* Keep the multicolour Google mark independent from the Mail.com colour filter. */
+.muse-product-stage.is-gmail .muse-logo-inner img{filter:none}
