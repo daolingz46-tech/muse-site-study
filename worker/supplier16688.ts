@@ -1,6 +1,6 @@
 /** Server-side 16688 Open API client. Never expose credentials to the browser. */
 export type SupplierCredentials = { appId: string; secret: string };
-export const MUSE_BASIC_SUPPLIER = { goodsNo: "G43844575", priceCents: 1400 } as const;
+export const MUSE_BASIC_SUPPLIER = { goodsNo: "G66668406", priceCents: 1400 } as const;
 export const MUSE_ACCOUNT_SUPPLIER = { goodsNo: "G37376813", priceCents: 1800 } as const;
 export const GPT_SUPPLIER_PRODUCTS = {
   gmailAccount: { goodsNo: "G30430004", priceCents: 1580, title: "Gmail · 谷歌邮箱成品号" },
@@ -15,7 +15,7 @@ export const GPT_SUPPLIER_PRODUCTS = {
   plus15Day: { goodsNo: "G94215456", priceCents: 6900, title: "GPT · Plus 老号（15 天质保）" },
 } as const;
 // Only compatible account products are eligible; unknown or failing quotes never trigger fallback.
-export const SUPPLIER_BACKUPS: Record<string, readonly string[]> = { gmailAccount: ["G88230690"], halfPriceAccountOneMonth: ["G88655555", "G75777360", "G63757710"], philippinesTopup: ["G53967132", "G19335525"] };
+export const SUPPLIER_BACKUPS: Record<string, readonly string[]> = { museBasic: ["G43844575"], gmailAccount: ["G88230690"], halfPriceAccountOneMonth: ["G88655555", "G75777360", "G63757710"], philippinesTopup: ["G53967132", "G19335525"] };
 type Parameter = string | number | boolean | null | Parameter[] | { [key: string]: Parameter };
 
 function ordered(value: Parameter): Parameter {
