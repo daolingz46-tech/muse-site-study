@@ -419,7 +419,7 @@ const unavailableSupplierMessages = new Set(["商品已下架","该商品已下�
 async function chooseSupplier(env: Env, order: Row, primary: string) {
   const candidates = [primary, ...(order.supplierPlan ? SUPPLIER_BACKUPS[order.supplierPlan] || [] : [])];
   for (const goodsNo of candidates) {
-    const quantity = goodsNo === "G88230690" ? 3 : 1;
+    const quantity = 1;
     let quote: { code:number; msg?:string; message?:string; data?: { total_amount?:number; unit_price?:number; available_quantity?:number; balance_enough?:boolean } };
     try { quote = await supplierRequest({appId:env.SUPPLIER_APP_ID!,secret:env.SUPPLIER_SECRET!},"purchase","quotePrice",{goods_no:goodsNo,quantity}) as typeof quote; }
     catch { throw new HttpError(502,"货源询价失败，未执行采购；请稍后重试。"); }
@@ -707,7 +707,7 @@ async function admin(env: Env, request: Request, path: string) {
     else if (Object.hasOwn(GPT_SUPPLIER_PRODUCTS,key) && key !== "halfPriceAccount") { const plan = GPT_SUPPLIER_PRODUCTS[key as keyof typeof GPT_SUPPLIER_PRODUCTS]; goods = [plan.goodsNo, ...(SUPPLIER_BACKUPS[key] || [])]; }
     if (!goods.length || !Number.isInteger(quantity) || quantity < 1) throw new HttpError(400,"商品不存在");
     const items = await Promise.all(goods.map(async (goodsNo,index) => {
-      const quoteQuantity = goodsNo === "G88230690" ? 3 : quantity;
+      const quoteQuantity = quantity;
       const entry = {goodsNo, quoteQuantity, name:supplierNames[goodsNo] || "名称待核实", priority:index === 0 ? "首选" : `备用 ${index}`, unitPrice:null as number|null, total:null as number|null, stock:null as number|null, balanceEnough:null as boolean|null, quoteCode:null as number|null, quoteMessage:""};
       if (!env.SUPPLIER_APP_ID || !env.SUPPLIER_SECRET) return entry;
       try { const result = await supplierRequest({appId:env.SUPPLIER_APP_ID,secret:env.SUPPLIER_SECRET},"purchase","quotePrice",{goods_no:goodsNo,quantity:quoteQuantity}) as {code:number;msg?:string;message?:string;data?:{unit_price?:number;total_amount?:number;available_quantity?:number;balance_enough?:boolean}}; if(result.code !== 1 || !result.data) return {...entry,quoteCode:typeof result.code === "number" ? result.code : null,quoteMessage:safeSupplierMessage(result.msg || result.message)};
@@ -982,7 +982,8 @@ async function admin(env: Env, request: Request, path: string) {
       try { selected=await chooseSupplier(env,order,plan.goodsNo); }
       catch(error) { if (error instanceof HttpError && error.message.includes("均缺货")) await env.DB.prepare("UPDATE orders SET stockIssue=1,updatedAt=? WHERE id=? AND status='processing'").bind(Date.now(),id).run(); throw error; }
       if (input.expectedGoodsNo !== undefined && (input.expectedGoodsNo !== selected.goodsNo || input.expectedCents !== Math.round(selected.total*100))) throw new HttpError(409,"货源或价格已变化，请重新询价确认，未执行采购。");
-      const claimed = await env.DB.prepare("INSERT OR IGNORE INTO supplier_fulfillment(orderId,state,instruction,updatedAt) SELECT ?,'purchasing',?,? WHERE NOT EXISTS (SELECT 1 FROM delivery_emails WHERE orderId=?)").bind(id, `source:${selected.goodsNo}`, Date.now(), id).run();
+      const sourceMarker = selected.goodsNo === "G88230690" ? "single:G88230690" : `source:${selected.goodsNo}`;
+      const claimed = await env.DB.prepare("INSERT OR IGNORE INTO supplier_fulfillment(orderId,state,instruction,updatedAt) SELECT ?,'purchasing',?,? WHERE NOT EXISTS (SELECT 1 FROM delivery_emails WHERE orderId=?)").bind(id, sourceMarker, Date.now(), id).run();
       if (!claimed.meta.changes) throw new HttpError(409, "该订单或备选货源采购正在处理中，请先核查采购记录，勿重复采购");
       await env.DB.prepare("UPDATE orders SET stockIssue=0 WHERE id=?").bind(id).run();
       let purchase: SupplierResult;
@@ -997,7 +998,7 @@ async function admin(env: Env, request: Request, path: string) {
         env.DB.prepare("UPDATE supplier_fulfillment SET state='awaiting',tradeNo=?,batchCostCents=?,updatedAt=? WHERE orderId=?").bind(purchase.data.trade_no,selected.quantity > 1 && Number.isFinite(actual) && actual > 0 ? Math.round(actual*100) : null,Date.now(),id),
         env.DB.prepare("INSERT OR IGNORE INTO order_procurement_cost(orderId,goodsNo,supplierName,costCents,source,updatedAt) VALUES(?,?,?,?, 'supplier',?)").bind(id,selected.goodsNo,selected.supplierName,selected.quantity === 1 && Number.isFinite(actual) && actual > 0 ? Math.round(actual*100) : null,Date.now()),
       ]);
-      task = { state: "awaiting", tradeNo: purchase.data.trade_no, card: null, instruction: `source:${selected.goodsNo}` };
+      task = { state: "awaiting", tradeNo: purchase.data.trade_no, card: null, instruction: sourceMarker };
     }
     if (task.state === "awaiting" && task.tradeNo) {
       let result: SupplierResult;
@@ -1009,6 +1010,7 @@ async function admin(env: Env, request: Request, path: string) {
       const cards = Array.isArray(result.data.cards) ? result.data.cards : [];
       const card = cards.map(value => typeof value === "object" && value !== null && "code" in value ? String(value.code) : "").filter(Boolean).join("\n");
       if (!card) throw new HttpError(409, "货源未返回卡密，请核查采购订单");
+      if (task.instruction === "single:G88230690" && cards.filter(value => typeof value === "object" && value !== null && "code" in value && String(value.code).trim()).length !== 1) throw new HttpError(409,"采购返回的卡密数量不为一份，请核查采购记录，勿重复采购。");
       if (task.instruction === "source:G88230690") {
         const goods = typeof result.data.goods_no === "string" ? result.data.goods_no : "G88230690";
         if (goods !== "G88230690") throw new HttpError(409,"采购货源编号不一致，请核查采购单，勿重复采购。");
@@ -1033,7 +1035,7 @@ async function admin(env: Env, request: Request, path: string) {
         if (!task || task.state !== "ready" || !task.card) throw new HttpError(409,"批量库存正在处理或需要核查，请刷新订单，勿重复采购。");
       } else {
       const fallback = order.product === "muse" ? "请使用美国 IP 登录 Muse，通过验证码获取地址查看验证码；账号自带 10 亿 Token。请检查首次登录并换绑自己的邮箱。" : order.supplierPlan === "plus15Day" ? "请输入账号及密码登录，将 2FA 密钥输入 https://2fa.fun/ 或 https://2fa.live/ 获取验证码。供货商提供 15 天质保，请勿换绑、修改密码或 2FA，否则不再提供质保。" : order.supplierPlan === "plusAccount" ? "请在购买后 20 分钟内完成兑换并检查首次登录。验证码获取地址：https://2fa.vip/。售后规则请联系货源商确认。" : order.supplierPlan === "halfPriceAccount" || order.supplierPlan === "halfPriceAccountOneMonth" ? `账号资料格式：账号、密码和 2FA。验证码获取地址：https://2fa.run/（备用：https://2fa.fun/）。该账号包含${order.supplierPlan === "halfPriceAccount" ? "两个月" : "一个月"}半价资格，不包含 Plus 订阅。` : "请访问 https://shuwang.space/ ，使用收到的卡密按网站说明自行充值；发货并不代表充值已经完成。";
-      const recordedSource=task.instruction?.match(/^source:(G\d+)$/)?.[1] || "";
+      const recordedSource=task.instruction?.match(/^(?:source|single):(G\d+)$/)?.[1] || "";
       const queriedSource=typeof result.data.goods_no === "string" ? result.data.goods_no : "";
       if (recordedSource && queriedSource && recordedSource !== queriedSource) throw new HttpError(409,"货源编号与采购记录不一致，请核查后再发货。");
       const goodsNo=queriedSource || recordedSource;
@@ -1226,7 +1228,7 @@ const worker = {
         if (!env.SUPPLIER_APP_ID || !env.SUPPLIER_SECRET) return withCors(json({ stock: {} }));
         const supplierProducts: Array<[string, { goodsNo: string }]> = [...Object.entries(GPT_SUPPLIER_PRODUCTS).filter(([key]) => key !== "halfPriceAccount"), ["museAccount", MUSE_ACCOUNT_SUPPLIER]];
         const entries = await Promise.all(supplierProducts.map(async ([key,plan]) => {
-          try { for (const goodsNo of [plan.goodsNo,...(SUPPLIER_BACKUPS[key] || [])]) { const result = await supplierRequest({ appId: env.SUPPLIER_APP_ID!, secret: env.SUPPLIER_SECRET! }, "purchase", "quotePrice", { goods_no: goodsNo, quantity: 1 }) as {code:number;msg?:string;message?:string;data?:{available_quantity?:number}}; const n = result.data?.available_quantity; if (result.code !== 1 || !result.data) { if (unavailableSupplierMessages.has(safeSupplierMessage(result.msg || result.message))) continue; return [key,null] as const; } if (typeof n !== "number") return [key,null] as const; if (n >= (goodsNo === "G88230690" ? 3 : 1)) return [key,true] as const; } return [key,false] as const; }
+          try { for (const goodsNo of [plan.goodsNo,...(SUPPLIER_BACKUPS[key] || [])]) { const result = await supplierRequest({ appId: env.SUPPLIER_APP_ID!, secret: env.SUPPLIER_SECRET! }, "purchase", "quotePrice", { goods_no: goodsNo, quantity: 1 }) as {code:number;msg?:string;message?:string;data?:{available_quantity?:number}}; const n = result.data?.available_quantity; if (result.code !== 1 || !result.data) { if (unavailableSupplierMessages.has(safeSupplierMessage(result.msg || result.message))) continue; return [key,null] as const; } if (typeof n !== "number") return [key,null] as const; if (n >= 1) return [key,true] as const; } return [key,false] as const; }
           catch { return [key, null] as const; }
         }));
         return withCors(json({ stock: Object.fromEntries(entries) }));
