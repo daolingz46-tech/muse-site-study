@@ -430,7 +430,8 @@ async function chooseSupplier(env: Env, order: Row, primary: string) {
     }
     if (quote.data.available_quantity === 0) continue;
     if (isMuseToken300(order) && (typeof quote.data.available_quantity !== "number" || quote.data.available_quantity < 1)) throw new HttpError(409,"货源库存未确认，未执行采购。");
-    if (quantity > 1 && (typeof quote.data.available_quantity !== "number" || quote.data.available_quantity < quantity)) throw new HttpError(409,"备选货源不足三件或库存未确认，未执行采购。");
+    if (quantity > 1 && typeof quote.data.available_quantity === "number" && quote.data.available_quantity < quantity) continue;
+    if (quantity > 1 && typeof quote.data.available_quantity !== "number") throw new HttpError(409,"备选货源库存未确认，未执行采购。");
     const total=Number(quote.data.total_amount);
     if (!Number.isFinite(total) || total <= 0) throw new HttpError(409,"货源价格未确认，未执行采购。");
     if (quote.data.balance_enough !== true) throw new HttpError(409,`运营钱包余额不足，本次需 ¥${total.toFixed(2)}（含手续费）。`);
@@ -1222,7 +1223,7 @@ const worker = {
         if (!env.SUPPLIER_APP_ID || !env.SUPPLIER_SECRET) return withCors(json({ stock: {} }));
         const supplierProducts: Array<[string, { goodsNo: string }]> = [...Object.entries(GPT_SUPPLIER_PRODUCTS).filter(([key]) => key !== "halfPriceAccount"), ["museAccount", MUSE_ACCOUNT_SUPPLIER]];
         const entries = await Promise.all(supplierProducts.map(async ([key,plan]) => {
-          try { for (const goodsNo of [plan.goodsNo,...(SUPPLIER_BACKUPS[key] || [])]) { const result = await supplierRequest({ appId: env.SUPPLIER_APP_ID!, secret: env.SUPPLIER_SECRET! }, "purchase", "quotePrice", { goods_no: goodsNo, quantity: 1 }) as {code:number;msg?:string;message?:string;data?:{available_quantity?:number}}; const n = result.data?.available_quantity; if (result.code !== 1 || !result.data) { if (unavailableSupplierMessages.has(safeSupplierMessage(result.msg || result.message))) continue; return [key,null] as const; } if (typeof n !== "number") return [key,null] as const; if (n > 0) return [key,true] as const; } return [key,false] as const; }
+          try { for (const goodsNo of [plan.goodsNo,...(SUPPLIER_BACKUPS[key] || [])]) { const result = await supplierRequest({ appId: env.SUPPLIER_APP_ID!, secret: env.SUPPLIER_SECRET! }, "purchase", "quotePrice", { goods_no: goodsNo, quantity: 1 }) as {code:number;msg?:string;message?:string;data?:{available_quantity?:number}}; const n = result.data?.available_quantity; if (result.code !== 1 || !result.data) { if (unavailableSupplierMessages.has(safeSupplierMessage(result.msg || result.message))) continue; return [key,null] as const; } if (typeof n !== "number") return [key,null] as const; if (n >= (goodsNo === "G88230690" ? 3 : 1)) return [key,true] as const; } return [key,false] as const; }
           catch { return [key, null] as const; }
         }));
         return withCors(json({ stock: Object.fromEntries(entries) }));

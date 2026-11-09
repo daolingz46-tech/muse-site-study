@@ -483,7 +483,13 @@ test("订单、收款核实和交付的数据库流程", async t => {
     const noGuide=await make("missing-guide@example.com");supplierNoInstructions=true;
     assert.equal((await call("/api/admin/supplier-deliver",{id:noGuide.id,expectedGoodsNo:"G75777360",expectedCents:310},session)).status,409);
     assert.equal((await call("/api/admin/supplier-deliver",{id:noGuide.id},session)).status,409);assert.equal(supplierPurchases,before+2);assert.ok(!sentMessages.some(x=>x.to==="missing-guide@example.com"));
-    supplierNoInstructions=false;supplierQuoteErrors.clear();supplierStock=null;
+    supplierNoInstructions=false;
+    supplierQuoteErrors.set("G75777360",{code:0,msg:"货源商品不存在或已下架"});
+    const fourth=await make("fourth-supplier@example.com"), fourthQuote=await call("/api/admin/supplier-preview",{id:fourth.id},session);
+    assert.equal(fourthQuote.status,200);assert.equal(fourthQuote.data.goodsNo,"G63757710");
+    assert.equal((await call("/api/admin/supplier-deliver",{id:fourth.id,expectedGoodsNo:"G63757710",expectedCents:310},session)).status,200);
+    assert.equal(supplierGoods,"G63757710");
+    supplierQuoteErrors.clear();supplierStock=null;
   });
 
   await t.test("新增半价资格备选货源使用专属教程", async () => {
