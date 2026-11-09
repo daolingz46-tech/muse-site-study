@@ -929,8 +929,8 @@ async function admin(env: Env, request: Request, path: string) {
     if (!order || (!["gpt","muse"].includes(order.product) && !isMuseToken300(order)) || order.status !== "processing") throw new HttpError(409,"请先核实收款并选择订单。");
     if (!env.SUPPLIER_APP_ID || !env.SUPPLIER_SECRET) throw new HttpError(503,"货源接口凭证尚未配置");
     if (await env.DB.prepare("SELECT orderId FROM supplier_fulfillment WHERE orderId=?").bind(order.id).first()) throw new HttpError(409,"已有采购记录，请刷新订单后继续查询。");
-    const products=await fulfillmentInventoryProducts(env,order);
-    for (const product of input.directPurchase === true ? [] : products) {
+    const products=input.directPurchase === true ? [] : await fulfillmentInventoryProducts(env,order);
+    for (const product of products) {
       const item=await env.DB.prepare("SELECT product,instruction FROM inventory_cards WHERE product=? AND orderId IS NULL ORDER BY createdAt,id LIMIT 1").bind(product).first<{product:string;instruction:string|null}>();
       if (!item) continue;
       if (item.product === "gpt:G75777360" && !item.instruction?.trim()) throw new HttpError(409,"备选货源 G75777360 的库存缺少专属教程，请先核查后再发货。");
@@ -956,7 +956,7 @@ async function admin(env: Env, request: Request, path: string) {
     type SupplierResult = { code: number; msg?: string; data?: Record<string, unknown> };
     let task = await env.DB.prepare("SELECT state,tradeNo,card,instruction FROM supplier_fulfillment WHERE orderId=?").bind(id).first<{ state: string; tradeNo: string | null; card: string | null; instruction: string | null }>();
     if (!task) {
-      let products=await fulfillmentInventoryProducts(env,order);
+      let products=input.directPurchase === true ? [] : await fulfillmentInventoryProducts(env,order);
       if (input.directPurchase === true && !task) {
         if (typeof input.expectedGoodsNo !== "string" || typeof input.expectedCents !== "number") throw new HttpError(409,"请先确认采购货源和价格；未执行采购。");
         products=[];
