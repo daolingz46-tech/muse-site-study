@@ -15,7 +15,7 @@ export const GPT_SUPPLIER_PRODUCTS = {
   plus15Day: { goodsNo: "G94215456", priceCents: 6900, title: "GPT · Plus 老号（15 天质保）" },
 } as const;
 // Only compatible account products are eligible; unknown or failing quotes never trigger fallback.
-export const SUPPLIER_BACKUPS: Record<string, readonly string[]> = { museBasic: ["G43844575"], gmailAccount: ["G88230690"], halfPriceAccountOneMonth: ["G88655555", "G75777360", "G63757710"], philippinesTopup: ["G24324524", "G19335525"] };
+export const SUPPLIER_BACKUPS: Record<string, readonly string[]> = { museBasic: ["G43844575"], gmailAccount: ["G88230690"], halfPriceAccountOneMonth: ["G88655555", "G75777360", "G63757710"], philippinesTopup: ["G24324524", "G19335525", "G98503368"] };
 type Parameter = string | number | boolean | null | Parameter[] | { [key: string]: Parameter };
 
 function ordered(value: Parameter): Parameter {
