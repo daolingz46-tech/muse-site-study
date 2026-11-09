@@ -775,7 +775,7 @@ async function admin(env: Env, request: Request, path: string) {
     const url = new URL(request.url); const search = str(url.searchParams.get("q")); const status = str(url.searchParams.get("status"), 20); const page = Math.max(0, Math.min(100000, Number(url.searchParams.get("page")) || 0));
     const where = "WHERE (?='' OR code=? OR id=? OR target LIKE ? ESCAPE '\\') AND (?='' OR status=?)";
     const values = [search, search, search, `%${search.replace(/[\\%_]/g, "\\$&")}%`, status, status];
-    const rows = await env.DB.prepare(`SELECT id,code,product,title,amountCents,target,contactEmail,method,status,createdAt,expiresAt,reportedAt,paidAt,completedAt,reference,updatedAt,(SELECT sentAt FROM delivery_emails WHERE orderId=orders.id) AS emailSentAt,(SELECT sendCount FROM delivery_emails WHERE orderId=orders.id) AS emailSendCount,(SELECT state FROM supplier_fulfillment WHERE orderId=orders.id) AS supplierState,(SELECT tradeNo FROM supplier_fulfillment WHERE orderId=orders.id) AS supplierTradeNo,(SELECT goodsNo FROM order_procurement_cost WHERE orderId=orders.id) AS costGoodsNo,(SELECT supplierName FROM order_procurement_cost WHERE orderId=orders.id) AS costSupplierName,(SELECT costCents FROM order_procurement_cost WHERE orderId=orders.id) AS costCents,(SELECT source FROM order_procurement_cost WHERE orderId=orders.id) AS costSource FROM orders ${where} ORDER BY createdAt DESC LIMIT 50 OFFSET ?`).bind(...values, page * 50).all();
+    const rows = await env.DB.prepare(`SELECT id,code,product,title,amountCents,target,contactEmail,supplierPlan,method,status,createdAt,expiresAt,reportedAt,paidAt,completedAt,reference,updatedAt,(SELECT sentAt FROM delivery_emails WHERE orderId=orders.id) AS emailSentAt,(SELECT sendCount FROM delivery_emails WHERE orderId=orders.id) AS emailSendCount,(SELECT state FROM supplier_fulfillment WHERE orderId=orders.id) AS supplierState,(SELECT tradeNo FROM supplier_fulfillment WHERE orderId=orders.id) AS supplierTradeNo,(SELECT goodsNo FROM order_procurement_cost WHERE orderId=orders.id) AS costGoodsNo,(SELECT supplierName FROM order_procurement_cost WHERE orderId=orders.id) AS costSupplierName,(SELECT costCents FROM order_procurement_cost WHERE orderId=orders.id) AS costCents,(SELECT source FROM order_procurement_cost WHERE orderId=orders.id) AS costSource FROM orders ${where} ORDER BY createdAt DESC LIMIT 50 OFFSET ?`).bind(...values, page * 50).all();
     const count = await env.DB.prepare(`SELECT COUNT(*) AS total FROM orders ${where}`).bind(...values).first();
     const summary = await env.DB.prepare("SELECT COUNT(*) AS total, COALESCE(SUM(status='reported'),0) AS awaiting, COALESCE(SUM(status='processing'),0) AS processing, COALESCE(SUM(status='complete'),0) AS completed, COALESCE(SUM(CASE WHEN paidAt IS NOT NULL THEN amountCents ELSE 0 END),0) AS revenueCents, COALESCE(SUM(CASE WHEN paidAt>=? THEN amountCents ELSE 0 END),0) AS todayCents FROM orders").bind(Math.floor((Date.now() + 8 * 3600000) / 86400000) * 86400000 - 8 * 3600000).first();
     return json({ orders: rows.results, count, summary, page });
@@ -930,7 +930,7 @@ async function admin(env: Env, request: Request, path: string) {
     if (!env.SUPPLIER_APP_ID || !env.SUPPLIER_SECRET) throw new HttpError(503,"货源接口凭证尚未配置");
     if (await env.DB.prepare("SELECT orderId FROM supplier_fulfillment WHERE orderId=?").bind(order.id).first()) throw new HttpError(409,"已有采购记录，请刷新订单后继续查询。");
     const products=await fulfillmentInventoryProducts(env,order);
-    for (const product of products) {
+    for (const product of input.directPurchase === true ? [] : products) {
       const item=await env.DB.prepare("SELECT product,instruction FROM inventory_cards WHERE product=? AND orderId IS NULL ORDER BY createdAt,id LIMIT 1").bind(product).first<{product:string;instruction:string|null}>();
       if (!item) continue;
       if (item.product === "gpt:G75777360" && !item.instruction?.trim()) throw new HttpError(409,"备选货源 G75777360 的库存缺少专属教程，请先核查后再发货。");
@@ -957,7 +957,10 @@ async function admin(env: Env, request: Request, path: string) {
     let task = await env.DB.prepare("SELECT state,tradeNo,card,instruction FROM supplier_fulfillment WHERE orderId=?").bind(id).first<{ state: string; tradeNo: string | null; card: string | null; instruction: string | null }>();
     if (!task) {
       let products=await fulfillmentInventoryProducts(env,order);
-      if (input.expectedInventory === true && typeof input.expectedGoodsNo === "string") {
+      if (input.directPurchase === true && !task) {
+        if (typeof input.expectedGoodsNo !== "string" || typeof input.expectedCents !== "number") throw new HttpError(409,"请先确认采购货源和价格；未执行采购。");
+        products=[];
+      } else if (input.expectedInventory === true && typeof input.expectedGoodsNo === "string") {
         products=products.filter(product => inventoryGoodsNo(product) === input.expectedGoodsNo);
         if (!products.length) throw new HttpError(409,"确认的库存货源与订单不匹配，请重新确认；未执行采购。");
       } else if (input.expectedGoodsNo !== undefined && input.expectedInventory !== true) {

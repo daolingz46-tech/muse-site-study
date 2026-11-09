@@ -342,6 +342,31 @@ test("订单、收款核实和交付的数据库流程", async t => {
     const history=sentMessages.findLast(x=>x.to==="old-plus@example.com");assert.match(history.text,/旧货源说明/);assert.doesNotMatch(history.text,/部分账号重置次数以实际库存为准/);
   });
 
+  await t.test("直接采购跳过本地库存，并保持核款、询价和重复采购保护", async () => {
+    await db.prepare("DELETE FROM rate_limits").run();
+    const account = (await call("/api/orders", { product: "muse", planId: "warranty", email: "direct-buyer@example.com", method: "alipay", acceptedTerms: true, requestId: randomUUID() })).data;
+    await db.prepare("INSERT INTO inventory_cards(id,product,card,cardHash,tradeNo,createdAt) VALUES(?,?,?,?,?,?)").bind("direct-test", "muse-7day", "direct-stock", "direct-hash", "direct-stock-order", Date.now()).run();
+    const before = supplierPurchases;
+    assert.equal((await call("/api/admin/supplier-preview", { id: account.id, directPurchase: true }, session)).status, 409);
+    await call("/api/admin/update", { id: account.id, action: "confirm" }, session);
+    assert.equal((await call("/api/admin/supplier-preview", { id: account.id }, session)).data.inventory, true);
+    emptyGoods.add("G37376813");
+    assert.equal((await call("/api/admin/supplier-preview", { id: account.id, directPurchase: true }, session)).status, 409);
+    assert.equal(supplierPurchases, before);
+    emptyGoods.delete("G37376813");
+    const quote = (await call("/api/admin/supplier-preview", { id: account.id, directPurchase: true }, session)).data;
+    assert.equal(quote.goodsNo, "G37376813");
+    assert.equal((await call("/api/admin/supplier-deliver", { id: account.id, directPurchase: true }, session)).status, 409);
+    const payload = { id: account.id, directPurchase: true, expectedGoodsNo: quote.goodsNo, expectedCents: Math.round(quote.total * 100) };
+    assert.equal((await call("/api/admin/supplier-deliver", { ...payload, expectedCents: 1 }, session)).status, 409);
+    assert.equal((await call("/api/admin/supplier-deliver", payload, session)).status, 200);
+    assert.equal(supplierPurchases, before + 1);
+    assert.equal((await db.prepare("SELECT orderId FROM inventory_cards WHERE id=?").bind("direct-test").first()).orderId, null);
+    assert.equal((await call("/api/admin/supplier-deliver", payload, session)).status, 409);
+    assert.equal(supplierPurchases, before + 1);
+    await db.prepare("DELETE FROM inventory_cards WHERE id=?").bind("direct-test").run();
+  });
+
   await t.test("导入已购库存后优先发货，重复导入和发货不重复使用", async () => {
     await db.prepare("DELETE FROM rate_limits").run();
     assert.equal((await call("/api/admin/inventory-import", { tradeNo: "INVENTORY-ORDER" })).status, 401);
