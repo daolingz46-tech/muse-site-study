@@ -24,6 +24,13 @@ type TutorialBlock = { type: "text"; content: string } | { type: "image"; url: s
 type Tutorial = { title: string; blocks: TutorialBlock[]; updatedAt: number | null };
 type DeliveryFile = { id: string; name: string; mime: string; size: number; uploadedBytes: number };
 type CatalogProduct = { key: string; category: string; title: string; supplier: string | null; sales: number };
+type StockItem = { goodsNo:string; name:string; priority:string; stock:number|null; quoteQuantity:number; quoteMessage?:string };
+type StockResults = Record<string, StockItem[] | null>;
+const missingStockMessages = new Set(["商品已下架","该商品已下架","商品不存在","该商品不存在","商品不存在或已下架","货源商品不存在或已下架","商品已售罄","该商品已售罄","库存不足","商品库存不足","商品无库存","商品已删除"]);
+function stockState(item:StockItem): "missing" | "unknown" | "available" {
+  if (typeof item.stock === "number") return item.stock < item.quoteQuantity ? "missing" : "available";
+  return missingStockMessages.has(item.quoteMessage || "") ? "missing" : "unknown";
+}
 const catalogIcons: Record<string, string> = { GPT: "/sites/muse/openai-mark.svg", Muse: "/sites/muse/muse-logo.svg", "Muse Token": "/sites/muse/muse-logo.svg" };
 const labels: Record<string, string> = { pending: "待付款", reported: "待核实到账", processing: "待交付", complete: "已完成", expired: "已超时", cancelled:"已取消" };
 const visitSourceLabels: Record<string, string> = { direct: "直接访问", wechat: "微信", search: "搜索引擎", social: "社交平台", external: "其他网站" };
@@ -93,6 +100,34 @@ export function Workbench() {
   const [historyOrder, setHistoryOrder] = useState<AdminOrder | null>(null);
   const [timelineOrder, setTimelineOrder] = useState<AdminOrder | null>(null);
   const [catalog, setCatalog] = useState<CatalogProduct[]>([]);
+  const [stockResults,setStockResults] = useState<StockResults>({});
+  const [stockBusy,setStockBusy] = useState(false);
+  const [stockCheckedAt,setStockCheckedAt] = useState<number|null>(null);
+  const stockRunning=useRef(false),stockDay=useRef("");
+  const refreshStock = useCallback(async () => {
+    if (stockRunning.current) return;
+    stockRunning.current=true; setStockBusy(true);
+    try {
+      const data: {products:CatalogProduct[]} = await api("catalog");
+      setCatalog(data.products);
+      const entries=await Promise.all(data.products.filter(item=>item.supplier).map(async item=>{
+        try { const result: {items:StockItem[]} = await api("catalog-suppliers",{key:item.key}); return [item.key,Array.isArray(result.items) && result.items.length ? result.items : null] as const; }
+        catch { return [item.key,null] as const; }
+      }));
+      setStockResults(Object.fromEntries(entries)); setStockCheckedAt(Date.now());
+      stockDay.current=new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Shanghai",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
+    } catch { setStockResults({}); setStockCheckedAt(null); }
+    finally { stockRunning.current=false; setStockBusy(false); }
+  }, []);
+  useEffect(() => {
+    if (auth !== "ready") return;
+    void refreshStock();
+    const timer=window.setInterval(()=>{
+      const day=new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Shanghai",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
+      if (stockDay.current && stockDay.current !== day) void refreshStock();
+    },60000);
+    return ()=>window.clearInterval(timer);
+  }, [auth,refreshStock]);
   const [catalogChoice,setCatalogChoice]=useState<CatalogProduct|null>(null), [catalogSources,setCatalogSources]=useState<{quantity:number;items:{goodsNo:string;quoteQuantity:number;name:string;priority:string;unitPrice:number|null;total:number|null;stock:number|null;quoteMessage?:string;balanceEnough?:boolean|null}[]}|null>(null), [catalogError,setCatalogError]=useState("");
   const catalogDialog=useRef<HTMLDialogElement>(null);
   useEffect(()=>{if(catalogChoice)catalogDialog.current?.showModal();},[catalogChoice]);
@@ -378,7 +413,10 @@ export function Workbench() {
     <nav className="wb-workspace-nav" aria-label="管理工作台"><Link className="active" aria-current="page" href="/admin/">订单工作台</Link><a href="/admin/agents/">代理管理{pendingPayouts>0 && <span className="wb-payout-badge">提现 {pendingPayouts}</span>}</a></nav>
     <ProductManager api={api}/>
     <InventoryManager version={inventoryVersion} onChange={() => setInventoryVersion(v => v + 1)}/>
-    <section className="wb-visitors"><div className="wb-visitor-heading"><div><h2>商品销量与货源</h2><p>销量按已核实收款订单统计；未配置编号的商品保留人工管理。</p></div></div>{Array.from(new Set(catalog.map(item => item.category))).map(category => <div className="wb-catalog-group" key={category}><h3>{category}</h3><div className="wb-catalog">{catalog.filter(item => item.category === category).map(item => <article className="wb-catalog-card" key={item.title}>{catalogIcons[category] ? <Image className="wb-catalog-icon" src={catalogIcons[category]} alt="" width={42} height={42}/> : <span className="wb-catalog-icon wb-catalog-fallback" aria-hidden="true">{category.slice(0, 1)}</span>}<div className="wb-catalog-details"><strong>{item.title.replace(/^(GPT|Muse AI|Muse Token)\s*·\s*/, "")}</strong><span>销量 {item.sales}</span>{item.category === "Muse Token" ? <span>手工充值</span> : <><span>货源编号：{item.supplier || "未配置"}</span><button type="button" className="wb-catalog-source" onClick={() => openCatalog(item)}>查看货源 ›</button></>}</div></article>)}</div></div>)}</section>
+    <section className="wb-visitors"><div className="wb-visitor-heading"><div><h2>商品销量与货源</h2><p>每次打开工作台自动检查，跨天后再次检查；显示货源库存，本地库存请在库存管理中查看。{stockCheckedAt ? ` 最近检查：${date(stockCheckedAt)}` : " 尚未完成检查。"}</p></div><button type="button" className="wb-action" disabled={stockBusy} onClick={()=>void refreshStock()}><RefreshCw size={15}/>{stockBusy ? "正在刷新货源…" : "刷新货源库存"}</button></div>{Array.from(new Set(catalog.map(item => item.category))).map(category => {
+      const products=catalog.filter(item=>item.category===category), sources=products.flatMap(item=>stockResults[item.key] || []), missing=sources.filter(item=>stockState(item)==="missing").length, unknown=products.filter(item=>item.supplier && (!stockResults[item.key] || stockResults[item.key]?.some(source=>stockState(source)==="unknown"))).length;
+      return <div className="wb-catalog-group" key={category}><h3>{category} {missing > 0 && <span className="wb-stock-missing">⚠ {missing} 个货源缺货</span>} {unknown > 0 && <span className="wb-stock-unknown">{stockBusy ? "检查中" : "部分未确认"}</span>}</h3><div className="wb-catalog">{products.map(item => <article className="wb-catalog-card" key={item.key}>{catalogIcons[category] ? <Image className="wb-catalog-icon" src={catalogIcons[category]} alt="" width={42} height={42}/> : <span className="wb-catalog-icon wb-catalog-fallback" aria-hidden="true">{category.slice(0, 1)}</span>}<div className="wb-catalog-details"><strong>{item.title.replace(/^(GPT|Muse AI|Muse Token)\s*·\s*/, "")}</strong><span>销量 {item.sales}</span>{!item.supplier ? <span>手工充值</span> : <><span>货源编号：{item.supplier}</span>{stockResults[item.key] ? stockResults[item.key]!.map(source=><span className={`wb-stock-${stockState(source)}`} key={source.goodsNo}>{stockState(source)==="missing" ? "⚠ " : ""}{source.priority} {source.goodsNo}：{stockState(source)==="missing" ? "缺货" : stockState(source)==="unknown" ? "未确认" : `有货 ${source.stock} 件`}</span>) : <span className="wb-stock-unknown">{stockBusy ? "检查中…" : "库存未确认，请刷新"}</span>}<button type="button" className="wb-catalog-source" onClick={() => openCatalog(item)}>查看货源 ›</button></>}</div></article>)}</div></div>;
+    })}</section>
     <section className="wb-visitors"><div className="wb-visitor-heading"><div><h2>访客数据</h2><p>匿名统计访问次数，不记录访客姓名、联系方式或完整来源网址。</p></div><div className="wb-visitor-stats"><span>今日 <b>{visits?.summary.today ?? "—"}</b></span><span>近 7 天 <b>{visits?.summary.last7Days ?? "—"}</b></span><span>累计 <b>{visits?.summary.total ?? "—"}</b></span></div></div><div className="wb-visit-list"><div className="wb-visit-row wb-visit-head"><span>访问时间</span><span>页面</span><span>来源</span><span>设备</span></div>{visits?.recent.map(visit => <div className="wb-visit-row" key={visit.id}><span>{date(visit.createdAt)}</span><span>{visit.page === "/" ? "商店首页" : visit.page}</span><span>{visitSourceLabels[visit.source] || "其他网站"}</span><span>{visitDeviceLabels[visit.device] || "电脑"}</span></div>)}{visits && visits.recent.length === 0 && <p className="wb-visit-empty">还没有访客记录；访客打开商店后会自动统计。</p>}</div></section>
     {tutorial && <TutorialEditor key={tutorial.updatedAt ?? "new"} tutorial={tutorial} onSaved={setTutorial}/>}
     <section className="wb-order-section"><div className="wb-toolbar"><h2>订单列表</h2><div><button onClick={() => void load()}><RefreshCw size={15}/>刷新</button><button onClick={exportCsv} disabled={!result?.orders.length}><Download size={15}/>导出当前页</button></div></div>

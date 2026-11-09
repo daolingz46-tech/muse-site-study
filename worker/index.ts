@@ -685,7 +685,9 @@ async function admin(env: Env, request: Request, path: string) {
   }
   if (path === "/api/admin/catalog" && request.method === "GET") {
     const sales = await env.DB.prepare("SELECT product,title,supplierPlan,COUNT(*) AS sales FROM orders WHERE paidAt IS NOT NULL GROUP BY product,title,supplierPlan").all<{product:string;title:string;supplierPlan:string|null;sales:number}>();
+    const customStock = await env.DB.prepare("SELECT id,title,category,goodsNo FROM custom_products WHERE active=1 ORDER BY createdAt DESC").all<{id:string;title:string;category:string;goodsNo:string}>();
     const products = [
+      ...customStock.results.filter(p=>p.goodsNo).map(p=>({key:`custom:${p.id}`,category:p.category || "其他商品",title:p.title,supplier:p.goodsNo,sales:sales.results.filter(x=>x.product === "gpt" && x.supplierPlan === `custom:${p.id}`).reduce((n,x)=>n+x.sales,0)})),
       { key:"museWarranty", category: "Muse", title: `${accountTitle} · 7 天质保`, supplier: MUSE_ACCOUNT_SUPPLIER.goodsNo, sales: sales.results.filter(x => x.product === "muse" && x.supplierPlan === "museWarranty").reduce((n,x) => n + x.sales,0) },
       { key:"museBasic", category: "Muse", title: `${accountTitle} · 基础款`, supplier: MUSE_BASIC_SUPPLIER.goodsNo, sales: sales.results.filter(x => x.product === "muse" && x.supplierPlan !== "museWarranty").reduce((n,x) => n + x.sales,0) },
       ...tokenPlans.map(p => ({ key:`token:${p.label}`, category: "Muse Token", title: `Muse Token · ${p.label}`, supplier: p.id === "300" ? museToken300Supplier.goodsNo : null, sales: sales.results.filter(x => x.product === "muse-token" && x.title === `Muse Token · ${p.label}`).reduce((n,x) => n + x.sales,0) })),
@@ -696,7 +698,8 @@ async function admin(env: Env, request: Request, path: string) {
   if (path === "/api/admin/catalog-suppliers" && request.method === "POST") {
     const key = str((await body(request)).key, 80);
     let goods: readonly string[] = [], quantity = 1;
-    if (key === "mailCom") { goods = ["G24433963"]; quantity = 10; }
+    if (key.startsWith("custom:")) { const custom=await env.DB.prepare("SELECT goodsNo FROM custom_products WHERE id=? AND active=1").bind(key.slice(7)).first<{goodsNo:string}>(); if (custom?.goodsNo) goods=[custom.goodsNo]; }
+    else if (key === "mailCom") { goods = ["G24433963"]; quantity = 10; }
     else if (key === "museWarranty") goods = [MUSE_ACCOUNT_SUPPLIER.goodsNo];
     else if (key === "museBasic") goods = [MUSE_BASIC_SUPPLIER.goodsNo,...(SUPPLIER_BACKUPS.museBasic || [])];
     else if (key === "token:300亿 Token") goods = [museToken300Supplier.goodsNo];

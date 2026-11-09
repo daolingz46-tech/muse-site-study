@@ -821,6 +821,10 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal((await call("/api/admin/catalog-suppliers",{key:"halfPriceAccountOneMonth"})).status,401);
     const result=await call("/api/admin/catalog-suppliers",{key:"halfPriceAccountOneMonth"},session);
     assert.equal(result.status,200);assert.deepEqual(result.data.items.map(x=>x.goodsNo),["G95786160","G88655555","G75777360","G63757710"]);assert.equal(result.data.items[0].total,3.1);assert.equal(result.data.items[0].balanceEnough,true);
+    await db.prepare("INSERT INTO custom_products(id,title,category,description,priceCents,goodsNo,instructions,active,createdAt,updatedAt) VALUES(?,?,?,?,?,?,?,?,?,?)").bind("stock-custom-test","测试货源","测试类目","测试",300,"G12345678","说明",1,Date.now(),Date.now()).run();
+    const customCatalog=await call("/api/admin/catalog",undefined,session);assert.equal(customCatalog.data.products.find(x=>x.key==="custom:stock-custom-test").supplier,"G12345678");
+    const customQuote=await call("/api/admin/catalog-suppliers",{key:"custom:stock-custom-test"},session);assert.equal(customQuote.status,200);assert.equal(customQuote.data.items[0].goodsNo,"G12345678");
+    await db.prepare("DELETE FROM custom_products WHERE id=?").bind("stock-custom-test").run();
     const token=await call("/api/admin/catalog-suppliers",{key:"token:300亿 Token"},session);
     assert.equal(token.status,200);assert.equal(token.data.items[0].goodsNo,"G55108222");
     assert.equal((await call("/api/admin/catalog-suppliers",{key:"not-valid"},session)).status,400);
