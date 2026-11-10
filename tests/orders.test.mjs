@@ -573,6 +573,8 @@ test("订单、收款核实和交付的数据库流程", async t => {
     const orders=await Promise.all([call("/api/orders",checkout),call("/api/orders",checkout)]);assert.equal(orders[0].data.id,orders[1].data.id);
     const pushed=(await db.prepare("SELECT agentId,endpoint FROM agent_push_outbox WHERE orderId=?").bind(orders[0].data.id).all()).results;assert.equal(pushed.length,1);assert.equal(pushed[0].agentId,created.data.id);
     const attribution=await db.prepare("SELECT * FROM agent_order_attribution WHERE orderId=?").bind(orders[0].data.id).first();assert.equal(attribution.agentId,created.data.id);assert.equal(attribution.commissionCents,200);
+    const adminOrder=(await call(`/api/admin/orders?q=${orders[0].data.code}`,undefined,session)).data.orders.find(o=>o.id===orders[0].data.id);
+    assert.equal(adminOrder.agentId,created.data.id);assert.equal(adminOrder.agentName,"测试代理");assert.equal(adminOrder.commissionCents,200);assert.ok(adminOrder.commissionRuleVersion>0);
     assert.equal((await call("/api/agent/orders")).status,401);
     const agentOrders=await call("/api/agent/orders",undefined,login.cookie);assert.equal(agentOrders.status,200);
     assert.ok(agentOrders.data.orders.some(order=>order.code===orders[0].data.code));
