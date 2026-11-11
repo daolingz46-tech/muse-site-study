@@ -104,7 +104,7 @@ export function Workbench() {
   const [stockResults,setStockResults] = useState<StockResults>({});
   const [stockBusy,setStockBusy] = useState(false);
   const [stockCheckedAt,setStockCheckedAt] = useState<number|null>(null);
-  const stockRunning=useRef(false),stockDay=useRef("");
+  const stockRunning=useRef(false);
   const refreshStock = useCallback(async () => {
     if (stockRunning.current) return;
     stockRunning.current=true; setStockBusy(true);
@@ -116,18 +116,16 @@ export function Workbench() {
         catch { return [item.key,null] as const; }
       }));
       setStockResults(Object.fromEntries(entries)); setStockCheckedAt(Date.now());
-      stockDay.current=new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Shanghai",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
     } catch { setStockResults({}); setStockCheckedAt(null); }
     finally { stockRunning.current=false; setStockBusy(false); }
   }, []);
   useEffect(() => {
     if (auth !== "ready") return;
     void refreshStock();
-    const timer=window.setInterval(()=>{
-      const day=new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Shanghai",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
-      if (stockDay.current && stockDay.current !== day) void refreshStock();
-    },60000);
-    return ()=>window.clearInterval(timer);
+    const refreshWhenVisible = () => { if (document.visibilityState === "visible") void refreshStock(); };
+    const timer=window.setInterval(refreshWhenVisible,60000);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", refreshWhenVisible); };
   }, [auth,refreshStock]);
   const [catalogChoice,setCatalogChoice]=useState<CatalogProduct|null>(null), [catalogSources,setCatalogSources]=useState<{quantity:number;items:{goodsNo:string;quoteQuantity:number;name:string;priority:string;unitPrice:number|null;total:number|null;stock:number|null;quoteMessage?:string;balanceEnough?:boolean|null}[]}|null>(null), [catalogError,setCatalogError]=useState("");
   const catalogDialog=useRef<HTMLDialogElement>(null);
@@ -414,7 +412,7 @@ export function Workbench() {
     <nav className="wb-workspace-nav" aria-label="管理工作台"><Link className="active" aria-current="page" href="/admin/">订单工作台</Link><a href="/admin/agents/">代理管理{pendingPayouts>0 && <span className="wb-payout-badge">提现 {pendingPayouts}</span>}</a></nav>
     <ProductManager api={api}/>
     <InventoryManager version={inventoryVersion} onChange={() => setInventoryVersion(v => v + 1)}/>
-    <section className="wb-visitors"><div className="wb-visitor-heading"><div><h2>商品销量与货源</h2><p>每次打开工作台自动检查，跨天后再次检查；显示货源库存，本地库存请在库存管理中查看。{stockCheckedAt ? ` 最近检查：${date(stockCheckedAt)}` : " 尚未完成检查。"}</p></div><button type="button" className="wb-action" disabled={stockBusy} onClick={()=>void refreshStock()}><RefreshCw size={15}/>{stockBusy ? "正在刷新货源…" : "刷新货源库存"}</button></div>{Array.from(new Set(catalog.map(item => item.category))).map(category => {
+    <section className="wb-visitors"><div className="wb-visitor-heading"><div><h2>商品销量与货源</h2><p>工作台打开时约每分钟自动检查，切回页面时也会刷新；显示货源库存，本地库存请在库存管理中查看。{stockCheckedAt ? ` 最近检查：${date(stockCheckedAt)}` : " 尚未完成检查。"}</p></div><button type="button" className="wb-action" disabled={stockBusy} onClick={()=>void refreshStock()}><RefreshCw size={15}/>{stockBusy ? "正在刷新货源…" : "刷新货源库存"}</button></div>{Array.from(new Set(catalog.map(item => item.category))).map(category => {
       const products=catalog.filter(item=>item.category===category), sources=products.flatMap(item=>stockResults[item.key] || []), missing=sources.filter(item=>stockState(item)==="missing").length, unknown=products.filter(item=>item.supplier && (!stockResults[item.key] || stockResults[item.key]?.some(source=>stockState(source)==="unknown"))).length;
       return <div className="wb-catalog-group" key={category}><h3>{category} {missing > 0 && <span className="wb-stock-missing">⚠ {missing} 个货源缺货</span>} {unknown > 0 && <span className="wb-stock-unknown">{stockBusy ? "检查中" : "部分未确认"}</span>}</h3><div className="wb-catalog">{products.map(item => <article className="wb-catalog-card" key={item.key}>{catalogIcons[category] ? <Image className="wb-catalog-icon" src={catalogIcons[category]} alt="" width={42} height={42}/> : <span className="wb-catalog-icon wb-catalog-fallback" aria-hidden="true">{category.slice(0, 1)}</span>}<div className="wb-catalog-details"><strong>{item.title.replace(/^(GPT|Muse AI|Muse Token)\s*·\s*/, "")}</strong><span>销量 {item.sales}</span>{!item.supplier ? <span>手工充值</span> : <><span>货源编号：{item.supplier}</span>{stockResults[item.key] ? stockResults[item.key]!.map(source=><span className={`wb-stock-${stockState(source)}`} key={source.goodsNo}>{stockState(source)==="missing" ? "⚠ " : ""}{source.priority} {source.goodsNo}：{stockState(source)==="missing" ? "缺货" : stockState(source)==="unknown" ? "未确认" : `有货 ${source.stock} 件`}</span>) : <span className="wb-stock-unknown">{stockBusy ? "检查中…" : "库存未确认，请刷新"}</span>}<button type="button" className="wb-catalog-source" onClick={() => openCatalog(item)}>查看货源 ›</button></>}</div></article>)}</div></div>;
     })}</section>
