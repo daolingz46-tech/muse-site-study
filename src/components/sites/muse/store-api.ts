@@ -26,7 +26,7 @@ function readOrder(value: unknown): StoreOrder {
     || typeof value.title !== "string" || !Number.isSafeInteger(value.amountCents) || Number(value.amountCents) <= 0
     || !Number.isSafeInteger(value.feeCents) || Number(value.feeCents) < 0
     || typeof value.expiresAt !== "number" || !Number.isFinite(value.expiresAt)
-    || !["pending", "reported", "processing", "complete", "expired"].includes(String(value.status))
+    || !["pending", "reported", "processing", "complete", "expired", "cancelled"].includes(String(value.status))
     || !["alipay", "wechat"].includes(String(value.method))
     || (value.product !== "muse" && value.product !== "muse-token" && value.product !== "gpt")
     || (value.product !== "muse-token" && typeof value.email !== "string")
@@ -40,6 +40,7 @@ function readOrder(value: unknown): StoreOrder {
   if (value.delivery !== undefined && (!isRecord(value.delivery)
     || (value.delivery.method === "email"
       ? typeof value.delivery.sentAt !== "number"
+      : value.delivery.method === "manual" ? typeof value.delivery.confirmedAt !== "number"
       : typeof value.delivery.email !== "string" || typeof value.delivery.password !== "string"
         || typeof value.delivery.codeUrl !== "string"))) {
     throw new Error("交付资料返回异常，请联系支持。");
@@ -86,6 +87,6 @@ export async function findStoreOrder(identifier: string): Promise<OrderSummary |
   if (!response.ok) throw new Error(isRecord(value) && typeof value.message === "string" ? value.message : "查询失败，请稍后重试");
   if (!isRecord(value)) throw new Error("订单查询返回异常");
   if (value.kind === "full") return { kind: "full", order: readOrder(value.order) };
-  if (value.kind !== "summary" || value.code !== identifier || typeof value.title !== "string" || !Number.isSafeInteger(value.amountCents) || !["pending", "reported", "processing", "complete", "expired"].includes(String(value.status))) throw new Error("订单查询返回异常");
+  if (value.kind !== "summary" || value.code !== identifier || typeof value.title !== "string" || !Number.isSafeInteger(value.amountCents) || !["pending", "reported", "processing", "complete", "expired", "cancelled"].includes(String(value.status))) throw new Error("订单查询返回异常");
   return value as OrderSummary;
 }

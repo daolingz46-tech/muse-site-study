@@ -14,3 +14,18 @@
 .agent-balances div { background:#edf3fb; border-color:#c4d1e1; }
 .agent-orders, .agent-order { border-color:#d8e0ec; }
 .agent-empty { background:#edf3fb; }
+.agent-password-field { position:relative; }
+.agent-password-field input { padding-right:52px; }
+.agent-password-field button { position:absolute; top:50%; right:5px; transform:translateY(-50%); display:grid; place-items:center; width:42px; height:40px; border:0; border-radius:8px; background:transparent; color:#39547a; }
+.agent-password-field button:hover { background:#e3ebf8; }
+.agent-password-field button:focus-visible { outline:3px solid #91adff; outline-offset:2px; }
+
+.agent-withdraw select,.agent-withdraw input[type=file]{display:block;max-width:100%;margin:0 0 14px;padding:10px;border:1px solid #bfd0e7;border-radius:8px;background:#fff}.agent-withdraw label:not(:first-child){margin-top:14px}
+
+.agent-payout-label{display:block;font-weight:700;font-size:14px;margin:16px 0 9px}.agent-payout-methods{display:flex;gap:10px;flex-wrap:wrap}.agent-payout-method{display:flex;align-items:center;gap:10px;min-width:150px;padding:10px 14px;border:1px solid #c6d5e9;border-radius:10px;background:white;color:#213a60;cursor:pointer}.agent-payout-method.selected{border:2px solid #2762bb;background:#f0f6ff}.agent-payout-method small{margin-left:8px;color:#3166b5}.agent-payment-logo{width:32px;height:32px;display:grid;place-items:center;border-radius:7px;color:white;font-weight:700;font-size:22px}.agent-payment-logo.alipay{background:#1677ff}.agent-payment-logo.wechat{background:#07c160}.agent-withdraw .agent-upload-box{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;width:min(100%,220px);min-height:125px;padding:16px;border:1.5px dashed #8daedb;border-radius:12px;background:#f7faff;color:#275590;text-align:center;cursor:pointer;overflow-wrap:anywhere}.agent-upload-box small{color:#697f9e;font-weight:400}.agent-upload-box input[type=file]{position:absolute;width:1px;height:1px;opacity:0;margin:0;padding:0}.agent-upload-box:focus-within{outline:3px solid #91b7ff}.agent-upload-box.disabled{opacity:.6;cursor:not-allowed}
+
+.agent-price-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}.agent-price-item{padding:14px;border:1px solid #cddcf0;border-radius:10px;background:#f7faff}.agent-price-item p{margin:8px 0 0;color:#526784}.agent-price-item b{color:#176642}
+
+.agent-poster{display:block;width:min(100%,280px);height:auto;border-radius:12px;margin:14px 0}.agent-poster-buttons{display:flex;gap:8px}.agent-poster-buttons [aria-pressed=true]{outline:2px solid #3267bd}.agent-poster-download{display:inline-block;text-decoration:none}
+
+.agent-push-guide{margin:-12px 0 18px;border:1px solid #becbdd;border-radius:12px;background:#fff;color:#28476f;font-size:14px}.agent-push-guide summary{cursor:pointer;padding:11px 15px;font-weight:700}.agent-push-guide summary span{margin-left:7px;color:#64758d;font-size:12px;font-weight:400}.agent-push-guide-content{padding:0 18px 12px;color:#354c6b;line-height:1.65}.agent-push-guide-content section{padding-top:4px}.agent-push-guide-content h2{font-size:15px;margin:8px 0}.agent-push-guide-content ol{padding-left:22px;margin:6px 0}.agent-push-guide-content li{padding:2px 0}.agent-push-guide-content p{font-size:13px;margin:8px 0}.agent-push-message{margin:-8px 0 16px}

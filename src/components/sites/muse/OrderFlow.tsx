@@ -10,9 +10,9 @@ export type StoreOrder = OrderDetails & {
   method: "alipay" | "wechat"; expiresAt: number; status: OrderStatus;
   reportedAt?: number | null; qrImageUrl?: string;
   stockIssue?: boolean;
-  delivery?: { email: string; password: string; codeUrl: string } | { method: "email"; sentAt: number };
+  delivery?: { email: string; password: string; codeUrl: string } | { method: "email"; sentAt: number } | { method: "manual"; confirmedAt: number };
 };
-export type OrderStatus = "pending" | "reported" | "processing" | "complete" | "expired";
+export type OrderStatus = "pending" | "reported" | "processing" | "complete" | "expired" | "cancelled";
 export function orderLink(order: Pick<StoreOrder, "id" | "token">) {
   return `${window.location.origin}${process.env.NEXT_PUBLIC_BASE_PATH || ""}/#order=${encodeURIComponent(order.id)}&token=${encodeURIComponent(order.token)}`;
 }
@@ -39,7 +39,7 @@ export function OrderPayment({ order, onBack, onNotify, onOrderUpdate }: {
   const [copied, setCopied] = useState(false), [remark, setRemark] = useState(false), [qrOpen, setQrOpen] = useState(false), [reporting, setReporting] = useState(false);
   const inFlight = useRef(false), qrDialog = useRef<HTMLDialogElement>(null);
   const label = order.method === "wechat" ? "微信" : "支付宝", total = formatMoney(order.amountCents + order.feeCents);
-  const expired = order.status === "expired" || (order.status === "pending" && remaining === 0);
+  const expired = (order.status === "expired" || order.status === "cancelled") || (order.status === "pending" && remaining === 0);
   const canPay = order.status === "pending" && !expired;
   const countdown = `${Math.floor(remaining / 60).toString().padStart(2, "0")}:${(remaining % 60).toString().padStart(2, "0")}`;
   useEffect(() => { const timer = window.setInterval(() => setRemaining(Math.max(0, Math.ceil((order.expiresAt - Date.now()) / 1000))), 1000); return () => window.clearInterval(timer); }, [order.expiresAt]);
@@ -81,7 +81,7 @@ export function OrderPayment({ order, onBack, onNotify, onOrderUpdate }: {
       {!copied && <small>第 1 步：先复制订单码，再勾选确认。</small>}
     </div>}
     {canPay && <><button className="muse-primary" type="button" disabled={!copied || !remark} onClick={() => setQrOpen(true)}>第 2 步：打开{label}收款码 <ArrowRight size={16}/></button><p className="muse-payment-countdown"><Clock3 size={15}/> 请在 <strong>{countdown}</strong> 内付款</p></>}
-    {!canPay && <div className="muse-status-message">{order.status === "reported" ? <><Clock3/><p>你已反馈付款，店主正在核对收款记录。确认后会更新此订单，请勿重复付款。</p></> : order.status === "processing" ? <><RefreshCw/><p>{order.product === "muse-token" ? "正在为填写的邀请码充值，通常 10 分钟内到账，拥挤时可能需要 30 分钟。" : order.product === "gpt" ? "店主正在处理订单，发货后卡密将发送到下单邮箱。" : "店主正在准备成品账号，完成后会发到下单邮箱。"}</p></> : order.status === "complete" ? <><CircleCheck/><p>{order.product === "muse-token" ? "充值已完成，请登录你的账号查看余额。" : order.delivery && "method" in order.delivery ? "卡密和使用教程已发到下单邮箱，请检查收件箱及垃圾邮件。" : "交付资料如下，请妥善保存。"}</p></> : <><Clock3/><p>付款时间已结束。若已付款，请反馈给店主核查；尚未付款请重新下单。</p></>}</div>}
+    {!canPay && <div className="muse-status-message">{order.status === "reported" ? <><Clock3/><p>你已反馈付款，店主正在核对收款记录。确认后会更新此订单，请勿重复付款。</p></> : order.status === "processing" ? <><RefreshCw/><p>{order.product === "muse-token" ? (order.title === "Muse Token · 300亿 Token" ? "店主正在处理订单，卡密、兑换链接和使用说明将发送到下单邮箱。" : "正在为填写的邀请码充值，通常 10 分钟内到账，拥挤时可能需要 30 分钟。") : order.product === "gpt" ? "店主正在处理订单，发货后卡密将发送到下单邮箱。" : "店主正在准备成品账号，完成后会发到下单邮箱。"}</p></> : order.status === "complete" ? <><CircleCheck/><p>{order.product === "muse-token" && !(order.delivery && "method" in order.delivery && order.delivery.method === "email") ? "充值已完成，请登录你的账号查看余额。" : order.delivery && "method" in order.delivery ? "卡密和使用教程已发到下单邮箱，请检查收件箱及垃圾邮件。" : "交付资料如下，请妥善保存。"}</p></> : <><Clock3/><p>付款时间已结束。若已付款，请反馈给店主核查；尚未付款请重新下单。</p></>}</div>}
     {order.status === "complete" && order.delivery && "email" in order.delivery && <div className="muse-delivery-fields">{[["账号邮箱", order.delivery.email], ["密码", order.delivery.password], ["接码链接", order.delivery.codeUrl]].map(([name, value]) => <div key={name}><span>{name}</span><div><code>{value}</code><button type="button" aria-label={`复制${name}`} onClick={() => void copy(value)}><Copy size={14}/></button></div></div>)}</div>}
     {order.stockIssue && order.status === "processing" && <div className="muse-token-notice" role="status"><strong>商品暂时缺货</strong><p>店主正在处理，请留意邮箱中的通知或联系店主。</p></div>}
     <dl className="muse-payment-details"><div><dt>4 位订单码</dt><dd><b>{order.code}</b></dd></div><div><dt>订单号</dt><dd>{order.id}</dd></div><div><dt>{order.product === "muse-token" ? "账号邀请码" : "收件邮箱"}</dt><dd>{order.product === "muse-token" ? order.inviteCode : order.email}</dd></div><div><dt>支付方式</dt><dd>{label}</dd></div><div><dt>金额</dt><dd>¥{total}</dd></div></dl>

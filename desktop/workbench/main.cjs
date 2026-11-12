@@ -7,7 +7,7 @@ const STORE_URL = "https://musetoken.store/";
 function isAdminUrl(value) {
   try {
     const url = new URL(value);
-    return url.origin === new URL(ADMIN_URL).origin && url.pathname === new URL(ADMIN_URL).pathname;
+    return url.origin === new URL(ADMIN_URL).origin && ["/admin", "/admin/", "/admin/agents", "/admin/agents/"].includes(url.pathname);
   } catch {
     return false;
   }

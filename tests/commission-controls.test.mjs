@@ -13,7 +13,9 @@ function fixture() {
   sqlite.exec("PRAGMA foreign_keys=ON; CREATE TABLE orders(id TEXT PRIMARY KEY,status TEXT,paidAt INTEGER,completedAt INTEGER,amountCents INTEGER NOT NULL);");
   sqlite.exec(readFileSync(new URL("../migrations/0013_agent_foundation.sql", import.meta.url), "utf8"));
   sqlite.exec(readFileSync(new URL("../migrations/0020_commission_controls.sql", import.meta.url), "utf8"));
+  sqlite.exec(readFileSync(new URL("../migrations/0023_agent_payout_details.sql", import.meta.url), "utf8"));
   sqlite.prepare("INSERT INTO agents VALUES(?,? ,?,'active',?)").run("agent", "测试代理", "a".repeat(32), 1);
+  sqlite.prepare("INSERT INTO agent_payout_codes VALUES(?,?,'alipay','image/png','test',?)").run("payout-code", "agent", 1);
   class Statement {
     constructor(query) { this.query = query; this.values = []; }
     bind(...values) { this.values = values; return this; }
@@ -37,7 +39,7 @@ function fixture() {
     return id;
   }
   function action(orderId, action, operationId = randomUUID()) { return { orderId, action, operationId, reason: "订单核查测试", now }; }
-  function reserve(id, cents) { return db.batch([commissionReconciliation(db, "agent", now), withdrawalReservation(db, "agent", id, cents, now)]); }
+  function reserve(id, cents) { return db.batch([commissionReconciliation(db, "agent", now), withdrawalReservation(db, "agent", id, cents, now, "payout-code")]); }
   return { db, sqlite, now, order, action, reserve };
 }
 

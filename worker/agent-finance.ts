@@ -26,11 +26,11 @@ export async function agentBalance(db: D1Database, agentId: string, now: number)
 }
 
 /** A single INSERT reserves funds atomically, including concurrent requests. */
-export function withdrawalReservation(db: D1Database, agentId: string, id: string, cents: number, now: number) {
-  return db.prepare(`INSERT OR IGNORE INTO agent_withdrawals(id,agentId,amountCents,status,requestedAt,updatedAt)
-    SELECT ?,?,?,'pending',?,? WHERE ? <=
+export function withdrawalReservation(db: D1Database, agentId: string, id: string, cents: number, now: number, payoutCodeId: string) {
+  return db.prepare(`INSERT OR IGNORE INTO agent_withdrawals(id,agentId,amountCents,status,requestedAt,updatedAt,payoutCodeId)
+    SELECT ?,?,?,'pending',?,?,? WHERE EXISTS(SELECT 1 FROM agent_payout_codes WHERE id=? AND agentId=?) AND ? <=
       COALESCE((SELECT SUM(amountCents) FROM agent_ledger WHERE agentId=? AND availableAt<=? AND kind IN ('commission','adjustment')),0)
       - COALESCE((SELECT SUM(amountCents) FROM agent_withdrawals WHERE agentId=? AND status IN ('pending','approved','paying','unknown','paid')),0)
       AND NOT EXISTS(SELECT 1 FROM agent_order_attribution a JOIN commission_controls c ON c.orderId=a.orderId WHERE a.agentId=? AND c.state='hold')`)
-    .bind(id,agentId,cents,now,now,cents,agentId,now,agentId,agentId);
+    .bind(id,agentId,cents,now,now,payoutCodeId,payoutCodeId,agentId,cents,agentId,now,agentId,agentId);
 }

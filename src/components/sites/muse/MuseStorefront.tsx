@@ -11,13 +11,13 @@ import { importSavedOrders, readSavedOrders, saveOrder, type SavedOrder } from "
 import { isDirectVisit, rememberReferral, storedReferralCode } from "./referral";
 import "./muse.css";
 
-type Product = "muse" | "muse-token" | "gpt";
+type Product = "muse" | "muse-token" | "gpt" | "mail" | "gmail";
 type Dialog = "terms" | "orders" | "support" | "request" | null;
 type Step = "details" | "notice" | "payment";
 type PaymentMethod = "alipay" | "wechat";
 
 const terms = [
-  { title: "仅质保首次登录", body: "24 小时内仅保障首次登录，首次登录成功后质保失效。首次登录有问题，请保留订单号和截图联系支持。" },
+  { title: "7 天质保", body: "7 天内封号，可以免费换号；请在 8 小时内首次登录验证。有问题请保留订单号和截图联系支持。" },
   { title: "商品内容", body: `${formatMoney(accountPriceCents)} 元包含 1 个 Muse AI 成品账号及该账号的 10 亿 Token，无需另购此额度。` },
   { title: "邮箱交付", body: "店主确认收款后准备成品账号卡密，发送到你填写的邮箱，请核对邮箱地址。" },
   { title: "登录后立即更换邮箱", body: "登录需使用美国 IP；首次登录成功后，请立即在 Muse 内更换为自己的邮箱，并删除旧邮箱。" },
@@ -25,11 +25,13 @@ const terms = [
 const assetBase = process.env.NEXT_PUBLIC_BASE_PATH || "";
 const canonicalStore = "https://musetoken.store/";
 const gptPlans = [
-  { id: "halfPriceAccountOneMonth", label: "1个月半价资格账号", amountCents: 1500, type: "资格", details: ["资格期限：1个月，不是45天", "不含 Plus 订阅", "可换绑邮箱"] },
-  { id: "halfPriceTopup", label: "一个月半价代充", amountCents: 7500, type: "代充", details: ["需已有半价资格账号", "充值一个月 Plus"] },
-  { id: "philippinesTopup", label: "菲律宾正价代充", amountCents: 12800, type: "代充", details: ["菲律宾渠道", "卡密自助充值到自己的账号"] },
-  { id: "plusAccount", label: "Plus 成品账号", amountCents: 2000, type: "成品", details: ["账号、密码及 2FA", "20 分钟内兑换并检查", "售后时限须确认"] },
-  { id: "plus15Day", label: "Plus 老号 · 15 天质保", amountCents: 7200, type: "成品", details: ["剩余有效期约 20–26 天", "供货商提供 15 天质保", "勿换绑、改密码或 2FA"] },
+  { id: "halfPriceAccountOneMonth", label: "1个月半价资格账号", amountCents: 1500, type: "资格", details: ["资格期限：1个月，不是45天", "不含 Plus 订阅", "可换绑邮箱", "1 小时内首次登录质保"] },
+  { id: "halfPriceTopup", label: "一个月半价代充", amountCents: 7500, type: "代充", details: ["需已有半价资格，账号须为 Free", "菲律宾渠道 · 一个月 Plus", "订阅 30 天质保（不保封号）"] },
+  { id: "philippinesTopup", label: "GPT Plus 代充", amountCents: 12800, type: "代充", details: ["正规代充", "订阅质保按货源规则处理", "账号须为 Free 状态"] },
+  { id: "plusAccount", label: "Plus 成品账号", amountCents: 4000, type: "成品", details: ["账号、密码及 2FA", "购买后 20 分钟内兑换并检查", "仅保首次登录，售后时限请核对"] },
+  { id: "vietnamPlus30", label: "越南实卡 Plus · 30 天质保", amountCents: 9500, type: "成品", details: ["个人独享 · 已开通 Plus", "越南实卡 · 30 天质保", "一次性邮箱无法找回", "货源采购后 1 小时内修改 2FA"] },
+  { id: "plus15Day", label: "Plus 老号 · 15 天质保", amountCents: 6900, type: "成品", details: ["标称带 2 张重置卡，数量以实际为准", "剩余有效期约 20–26 天", "供货商提供 15 天质保", "勿换绑、改密码或 2FA"] },
+  { id: "freeAccount", label: "GPT 白号 · 可换绑", amountCents: 500, type: "白号", details: ["Free 空账号，不含 Plus", "没有半价资格", "可换绑邮箱", "1 小时内首次登录质保"] },
 ] as const;
 
 export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: Product }) {
@@ -39,19 +41,26 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
   const [email, setEmail] = useState("");
   const [inviteCode, setInviteCode] = useState("");
   const [tokenPlanId, setTokenPlanId] = useState<string>(tokenPlans[0].id);
+  const [musePlanId, setMusePlanId] = useState<"basic" | "warranty">("warranty");
+  const [salesCounts,setSalesCounts]=useState<Record<string,number>>({});
+  useEffect(()=>{let active=true;const refresh=()=>void fetch(storeApiUrl("/api/catalog/sales"),{cache:"no-store"}).then(r=>r.ok?r.json():null).then(data=>{if(active && data?.counts && typeof data.counts === "object")setSalesCounts(data.counts);}).catch(()=>{});refresh();const timer=window.setInterval(refresh,30000);return()=>{active=false;window.clearInterval(timer);};},[]);
+  function salesLabel(key:string,base:"minimum"|"mail"|"gmail"|"exact"|"current"="minimum") { const n=Math.max(0,Number(salesCounts[key])||0); return key==="gpt:halfPriceTopup" ? `销量 ${69+n}` : key==="gpt:philippinesTopup" ? `销量 ${82+n}` : base==="mail" ? `销量 ${57+n}` : base==="gmail" ? `销量 ${89+n}` : base==="exact" ? `销量 ${76+n}` : base==="current" ? `销量 ${n}` : `销量 ${100+n}+`; }
   const [gptPlanId, setGptPlanId] = useState<string>(gptPlans[0].id);
+  const [customProducts,setCustomProducts]=useState<{id:string;title:string;category:string;description:string;priceCents:number}[]>([]);
+  useEffect(()=>{let active=true;const load=()=>fetch(storeApiUrl("/api/catalog/custom"),{cache:"no-store"}).then(r=>r.ok?r.json():null).then(data=>{if(active && Array.isArray(data?.items))setCustomProducts(data.items)}).catch(()=>{});void load();const timer=window.setInterval(load,30000);return()=>{active=false;window.clearInterval(timer)};},[]);
   const [eligibleConfirmed, setEligibleConfirmed] = useState(false);
   const [stock, setStock] = useState<Record<string, boolean | null>>({});
   const [requestText, setRequestText] = useState("");
   const [requestBusy, setRequestBusy] = useState(false);
   const [requestError, setRequestError] = useState("");
   const requestId = useRef("");
+  const customProduct = customProducts.find(item => `custom:${item.id}` === gptPlanId);
   const gptPlan = gptPlans.find(plan => plan.id === gptPlanId) || gptPlans[0];
   const selectedTokenPlan = tokenPlans.find(plan => plan.id === tokenPlanId) || tokenPlans[0];
   const isToken = product === "muse-token";
-  const productTitle = product === "gpt" ? `GPT · ${gptPlan.label}` : isToken ? `Muse Token · ${selectedTokenPlan.label}` : accountTitle;
-  const purchaseTerms = product === "gpt" ? gptPlanId === "plus15Day" ? [{ title: "账号有效期", body: "Plus 老号，供货商说明剩余有效期约 20–26 天，实际以账号显示为准；续费或重置次数不保证。" }, { title: "质保与操作限制", body: "供货商提供 15 天质保，质保期内账号失效按其规则处理；无库存可补时可能按剩余质保天数退款。请勿换绑、修改密码或 2FA，否则不再提供质保。" }, { title: "首次登录与使用", body: "供货商说明：发货后 1 小时内首次登录失效可免费更换；使用 1 天内出现降智可申请更换一次，更换后效果不保证。" }, { title: "售后联系", body: "供货商售后时间 11:00–23:00；请联系 692972690@qq.com 咨询处理。" }] : gptPlanId === "plusAccount" ? [{ title: "成品账号", body: "交付账号、密码和 2FA。订阅剩余时间以账号实际显示为准。" }, { title: "时效与售后", body: "请在购买后 20 分钟内完成兑换并检查首次登录；上游对首登售后时限有不同说明，请购买前向售后确认具体范围。" }, { title: "售后联系", body: "如有首次登录问题，请直接联系货源商邮箱 692972690@qq.com，保留北京时间和登录过程录屏。" }] : gptPlanId === "halfPriceAccountOneMonth" ? [{ title: "商品内容", body: "半价资格期限为 1 个月，不是 45 天；账号可更换绑定邮箱。本商品不包含 Plus 订阅，需另行充值。" }, { title: "交付方式", body: "店主核实收款后通过邮箱发送账号资料，请仔细核对收件邮箱。" }] : gptPlanId === "halfPriceTopup" ? [{ title: "使用条件", body: "需先拥有一个月半价资格账号；没有半价资格的账号无法使用。" }, { title: "交付方式", body: "核实收款后通过邮箱发送充值卡密，请按说明自助兑换。" }] : [{ title: "商品内容", body: "菲律宾渠道正价代充，提供卡密供你为自己的账号自助充值。" }, { title: "交付方式", body: "核实收款后通过邮箱发送充值卡密和使用说明，发货不等于充值已完成。" }] : isToken ? tokenTerms : terms;
-  const amountCents = product === "gpt" ? gptPlan.amountCents : isToken ? selectedTokenPlan.amountCents : accountPriceCents;
+  const productTitle = product === "gmail" ? "Gmail · 谷歌邮箱成品号" : product === "mail" ? "Mail.com · 邮箱账号" : product === "gpt" ? (customProduct?.title || `GPT · ${gptPlan.label}`) : isToken ? `Muse Token · ${selectedTokenPlan.label}` : accountTitle;
+  const purchaseTerms = product === "gpt" && customProduct ? [{title:"商品说明",body:customProduct.description},{title:"交付方式",body:"核实收款后通过邮箱交付，请仔细核对收件邮箱。"}] : product === "gmail" ? [{title:"商品内容",body:"Gmail 邮箱成品号，仅保障邮箱收件正常。注册时间及地区以实际账号为准。"},{title:"首次登录及售后",body:"请收到后尽快检查。部分货源要求采购后 5 分钟内检查，登录后不售后；库存账号交付时该期限可能已经结束。请妥善更新账号安全资料，如有问题及时联系店主。"}] : product === "mail" ? [{title:"商品内容",body:"Mail.com 邮箱账号，交付内容为邮箱与密码；请先确认你会使用 Mail.com 邮箱。"},{title:"交付与售后",body:"核实收款后通过邮件交付；若库存暂时不足，店主将联系你安排人工发货或售后。"}] : product === "gpt" ? gptPlanId === "vietnamPlus30" ? [{title:"商品内容",body:"越南实卡 Plus 个人独享成品号，已开通订阅，供货商提供 30 天质保。账号为一次性邮箱注册，邮箱无法用于后续找回或修改操作。"},{title:"质保与注意事项",body:"质保期间符合规则的掉线或封号按货源规则处理。供货商对免费换号及第 7 天界限的文字存在不同表述，具体以售后核实为准；禁止使用反代。账号不含接码，需自行接码。"},{title:"首次使用",body:"按货源要求在货源采购后 1 小时内修改 2FA，并在账号安全设置中移除其他设备会话。库存账号交付时该时限可能已过，请及时联系店主核实。如遇邮箱验证或无法修改，请不要退出账号，及时联系店主。"}] : gptPlanId === "freeAccount" ? [{title:"商品内容",body:"GPT Free 白号，未开通 Plus，也没有半价资格；支持换绑邮箱。账号、密码及双重验证信息将发至收件邮箱。"},{title:"使用与售后",body:"请在收到后 1 小时内首次登录检查。此商品不含接码服务，如有问题请联系店主。"}] : gptPlanId === "plus15Day" ? [{ title: "账号有效期", body: "Plus 老号，供货商说明剩余有效期约 20–26 天，实际以账号显示为准；标称带 2 张重置卡；供货商说明部分账号的重置次数以实际库存为准，续费不保证。" }, { title: "质保与操作限制", body: "供货商提供 15 天质保，质保期内账号失效按其规则处理；无库存可补时可能按剩余质保天数退款。请勿换绑、修改密码或 2FA，否则不再提供质保。" }, { title: "首次登录与使用", body: "供货商说明：发货后 1 小时内首次登录失效可免费更换；使用 1 天内出现降智可申请更换一次，更换后效果不保证。" }, { title: "售后联系", body: "供货商售后时间 11:00–23:00；请联系 692972690@qq.com 咨询处理。" }] : gptPlanId === "plusAccount" ? [{ title: "成品账号", body: "交付账号、密码和 2FA。订阅剩余时间以账号实际显示为准。" }, { title: "时效与售后", body: "请在购买后 20 分钟内完成兑换并检查首次登录。货源说明仅处理首次无法登录的问题；对 20 分钟与 30 分钟时限的表述不一致，请以更短的 20 分钟为准并及时联系售后确认。" }, { title: "售后联系", body: "如有首次登录问题，请直接联系货源商邮箱 692972690@qq.com，保留北京时间和登录过程录屏。" }] : gptPlanId === "halfPriceAccountOneMonth" ? [{ title: "商品内容", body: "半价资格期限为 1 个月，不是 45 天；账号可更换绑定邮箱。本商品不包含 Plus 订阅，需另行充值。请在 1 小时内首次登录检查；优惠需在电脑端查看。" }, { title: "交付方式", body: "店主核实收款后通过邮箱发送账号资料，请仔细核对收件邮箱。" }] : gptPlanId === "halfPriceTopup" ? [{ title: "使用条件", body: "需先确认账号具有半价资格，账号须为 Free 状态，不能覆盖已有订阅；没有半价资格的账号无法使用。" }, { title: "交付方式", body: "核实收款后通过邮箱发送充值卡密，请按邮件中的货源专属说明操作。供货商提供 30 天订阅质保，不保封号。" }] : [{ title: "商品内容", body: "GPT Plus 正规代充，为自己的账号充值；账号须为 Free 免费版，不能覆盖 Go、Plus 或 Pro 等已有订阅。" }, { title: "交付与售后", body: "核实收款后发送卡密及对应说明；订阅异常掉落或失效可按供货商售后规则处理，账号封禁或风控不在售后范围。" }] : isToken ? tokenTerms : musePlanId === "basic" ? [{ title: "质保说明", body: "本款没有 7 天质保。首选货源仅保障 1 小时内首次登录成功，登录成功后不再提供退换；备用货源按其首登规则处理。收到后请立即检查。" }, { title: "商品内容", body: "14 元包含 1 个 Muse AI 成品账号及该账号的 10 亿 Token。" }, { title: "邮箱交付", body: "店主确认收款后，将账号资料发送到你填写的邮箱。" }, { title: "账号资料修改", body: "首次登录后请先不要修改邮箱、密码或其他账号资料。首选货源要求稳定使用 7 天后再考虑修改；如由备用货源交付，其要求首次登录后立即换绑。实际货源和对应操作请以交付邮件为准，如有疑问先联系店主。" }] : terms;
+  const amountCents = product === "gmail" ? 1580 : product === "mail" ? 500 : product === "gpt" ? (customProduct?.priceCents ?? gptPlan.amountCents) : isToken ? selectedTokenPlan.amountCents : musePlanId === "basic" ? 1400 : accountPriceCents;
   const feeCents = 0;
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("alipay");
   const [accepted, setAccepted] = useState(false);
@@ -176,7 +185,7 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
 
   function submitDetails(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if ((product === "gpt" && stock[gptPlanId] === false) || (product === "muse" && stock.museAccount === false)) { setError("该商品暂时缺货，请选择其他商品"); return; }
+    if (product === "gpt" && gptPlanId.startsWith("custom:") && !customProduct) { setError("该商品已下架，请重新选择商品。"); return; }
     if (product === "gpt" && gptPlanId === "halfPriceTopup" && !eligibleConfirmed) { setError("请确认账号具有半价资格"); return; }
     if (isToken && !inviteCode.trim()) {
       setError("请填写需要充值的账号邀请码");
@@ -211,7 +220,7 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
         if (!referralVerified) throw new Error("推广链接暂时无法验证，请检查网络后重试。");
         let referralCode = temporaryReferral.current;
         if (!referralCode) { try { referralCode = storedReferralCode(sessionStorage); } catch { /* Storage may be disabled. */ } }
-        const order = await createStoreOrder({ product, referralCode, planId: isToken ? tokenPlanId : product === "gpt" ? gptPlanId : undefined, eligibleConfirmed,
+        const order = await createStoreOrder({ product: product === "gmail" || product === "mail" ? "gpt" : product, referralCode, planId: product === "gmail" ? "gmailAccount" : product === "mail" ? "mailCom" : isToken ? tokenPlanId : product === "gpt" ? gptPlanId : musePlanId, eligibleConfirmed,
           email: email.trim(), inviteCode: isToken ? inviteCode.trim() : undefined,
           method: paymentMethod, acceptedTerms: true }, orderRequestRef.current);
         setOrders(previous => [order, ...previous.filter(item => item.id !== order.id)]);
@@ -289,16 +298,16 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
           <span>{storeName}</span>
         </Link>
         <div className="muse-switch" role="tablist" aria-label="商品">
-          <span className={`muse-switch-indicator ${product === "gpt" ? "is-gpt" : product === "muse-token" ? "is-token" : ""}`} />
-          {([["muse", "Muse AI"], ["muse-token", "Muse Token"], ["gpt", "GPT"]] as const).map(([id, label]) => (
+          <span className={`muse-switch-indicator ${product === "gmail" ? "is-gmail" : product === "mail" ? "is-mail" : product === "gpt" ? "is-gpt" : product === "muse-token" ? "is-token" : ""}`} />
+          {([["muse", "Muse AI"], ["muse-token", "Muse Token"], ["gpt", "GPT"], ["mail", "Mail.com"], ["gmail", "Gmail"]] as const).map(([id, label]) => (
             <a key={id} id={`tab-${id}`} href={`${assetBase}/${id === "muse-token" ? "token/" : ""}`} role="tab"
               aria-selected={product === id} aria-controls="muse-product-panel"
               tabIndex={product === id ? 0 : -1}
               onKeyDown={event => {
                 if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
                   event.preventDefault();
-                  const items: Product[] = ["muse", "muse-token", "gpt"];
-                  const next = event.key === "Home" ? items[0] : event.key === "End" ? items[2] : items[(items.indexOf(product) + (event.key === "ArrowRight" ? 1 : 2)) % 3];
+                  const items: Product[] = ["muse", "muse-token", "gpt", "mail", "gmail"];
+                  const next = event.key === "Home" ? items[0] : event.key === "End" ? items[4] : items[(items.indexOf(product) + (event.key === "ArrowRight" ? 1 : 4)) % 5];
                   selectProduct(next);
                   document.getElementById(`tab-${next}`)?.focus();
                 }
@@ -308,7 +317,7 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
                 event.preventDefault();
                 selectProduct(id);
               }}>
-              <Image src={assetBase + (id === "gpt" ? "/sites/muse/openai-mark.svg" : "/sites/muse/muse-logo.svg")} width={20} height={20} alt="" draggable={false} />
+              <Image src={assetBase + (id === "gmail" ? "/sites/muse/google-g.png" : id === "mail" ? "/sites/muse/mail-com.svg" : id === "gpt" ? "/sites/muse/openai-mark.svg" : "/sites/muse/muse-logo.svg")} width={20} height={20} alt="" draggable={false} />
               {label}
             </a>
           ))}
@@ -319,13 +328,13 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
       </header>
 
       <main className="muse-product-layout" id="muse-product-panel" role="tabpanel" aria-labelledby={`tab-${product}`}>
-        <section className="muse-product-stage" aria-label={product === "gpt" ? "GPT" : product === "muse" ? "Muse AI" : "Muse Token"} onDragStart={event => event.preventDefault()} onMouseDown={event => event.preventDefault()}>
+        <section className={`muse-product-stage ${product === "mail" ? "is-mail" : product === "gmail" ? "is-gmail" : ""}`} aria-label={product === "gmail" ? "Gmail" : product === "mail" ? "Mail.com" : product === "gpt" ? "GPT" : product === "muse" ? "Muse AI" : "Muse Token"} onDragStart={event => event.preventDefault()} onMouseDown={event => event.preventDefault()}>
           <div className="muse-stage-halo" />
           <div className="muse-logo-composition">
-            <span className="muse-logo-inner"><Image src={assetBase + (product === "gpt" ? "/sites/muse/openai-mark.svg" : "/sites/muse/muse-logo.svg")} fill sizes="(max-width: 650px) 158px, 354px" alt="" loading="eager" draggable={false} /></span>
+            <span className="muse-logo-inner"><Image key={product} src={assetBase + (product === "gmail" ? "/sites/muse/google-g.png" : product === "mail" ? "/sites/muse/mail-com.svg" : product === "gpt" ? "/sites/muse/openai-mark.svg" : "/sites/muse/muse-logo.svg")} fill sizes="(max-width: 650px) 158px, 354px" alt="" loading="eager" draggable={false} /></span>
           </div>
           <div className="muse-stage-caption" key={product}>
-            <strong>{product === "gpt" ? "GPT" : product === "muse" ? "Muse AI" : "Muse Token"}</strong>
+            <strong>{product === "gmail" ? "Gmail" : product === "mail" ? "Mail.com" : product === "gpt" ? "GPT" : product === "muse" ? "Muse AI" : "Muse Token"}</strong>
           </div>
           <div className="muse-pagination" aria-hidden="true"><i className={product === "muse" ? "active" : ""}/><i className={product === "muse-token" ? "active" : ""}/></div>
         </section>
@@ -335,15 +344,17 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
           <div ref={checkoutRef} className="muse-checkout-content">
           {step === "details" ? (
             <form onSubmit={submitDetails} noValidate>
-              <h1>{product === "gpt" ? "GPT 商品" : isToken ? "Muse Token" : "Muse AI"}</h1>
-              <p className="muse-subtitle">{product === "gpt" ? "选择商品 · 邮箱交付" : isToken ? "Token 充值 · 不含账号" : "成品账号 + 10亿 Token"}</p>
-              {product === "gpt" ? <>
-                <fieldset className="muse-token-plans gpt-plan-grid"><legend className="sr-only">选择 GPT 商品</legend>{gptPlans.map(plan => <label key={plan.id} className={gptPlanId === plan.id ? "is-selected" : ""}><input type="radio" name="gpt-plan" checked={gptPlanId === plan.id} onChange={() => { setGptPlanId(plan.id); setEligibleConfirmed(false); }}/><span className="gpt-plan-brand"><Image src={assetBase + "/sites/muse/openai-mark.svg"} width={20} height={20} alt=""/><span>GPT <b>PLUS</b></span><em>{plan.type}</em></span><span className="gpt-plan-title">{plan.label}</span><span className="gpt-plan-details">{plan.details.map(detail => <span key={detail}>{detail}</span>)}</span><span className="gpt-plan-bottom"><strong><span>¥</span>{plan.amountCents / 100}</strong><small>{stock[plan.id] === false ? "暂时缺货" : stock[plan.id] === true ? "有货" : "库存暂未确认"}</small></span></label>)}</fieldset>
-                {stock[gptPlanId] === false && <div className="muse-token-notice" role="status">此商品暂时缺货，请选择其他商品或联系店主。</div>}
-                {gptPlanId === "halfPriceAccountOneMonth" && <div className="muse-token-notice"><strong>半价资格期限：1 个月（不是 45 天）</strong><p>本商品不含 Plus 订阅，可换绑邮箱。</p></div>}
+              <h1>{product === "gmail" ? "Gmail 邮箱" : product === "mail" ? "Mail.com 邮箱" : product === "gpt" ? "全部商品" : isToken ? "Muse Token" : "Muse AI"}</h1>
+              <p className="muse-subtitle">{product === "gmail" ? "谷歌邮箱成品号 · 邮件交付" : product === "mail" ? "邮箱账号 · 邮件交付" : product === "gpt" ? "选择商品 · 邮箱交付" : isToken ? "Token 充值 · 不含账号" : "成品账号 + 10亿 Token"}</p>
+              {product === "gmail" ? <><div className="muse-token-plan-name">Gmail 邮箱成品号 · ¥15.80 <span className="muse-sales">{salesLabel("gpt:gmailAccount","gmail")}</span></div><p className="muse-field-hint">仅保障 Gmail 收件正常；注册地区及时间随机。</p><p className="muse-field-hint">请收到后尽快检查；部分货源的售后期限从采购时起算，详情请阅读购买须知。</p><div className="muse-email-field"><label htmlFor="muse-email">收件邮箱</label><div className="muse-input-wrap"><Mail size={17}/><input id="muse-email" type="email" placeholder="you@example.com" maxLength={254} value={email} onChange={event => setEmail(event.target.value)}/></div><p className="muse-field-hint">账号资料将发送至此邮箱，请仔细核对</p></div></> : product === "mail" ? <><div className="muse-token-plan-name">Mail.com 邮箱账号 · ¥5.00 <span className="muse-sales">{salesLabel("gpt:mailCom","mail")}</span></div><p className="muse-field-hint">交付邮箱和密码。库存暂不足时，店主将联系你安排人工发货。</p><div className="muse-email-field"><label htmlFor="muse-email">收件邮箱</label><div className="muse-input-wrap"><Mail size={17}/><input id="muse-email" type="email" placeholder="you@example.com" maxLength={254} value={email} onChange={event => setEmail(event.target.value)}/></div><p className="muse-field-hint">账号资料将发送至此邮箱，请仔细核对</p></div></> : product === "gpt" ? <>
+                <fieldset className="muse-token-plans gpt-plan-grid"><legend className="sr-only">选择 GPT 商品</legend>{gptPlans.map(plan => <label key={plan.id} className={gptPlanId === plan.id ? "is-selected" : ""}><input type="radio" name="gpt-plan" checked={gptPlanId === plan.id} onChange={() => { setGptPlanId(plan.id); setEligibleConfirmed(false); }}/><span className="gpt-plan-brand"><Image src={assetBase + "/sites/muse/openai-mark.svg"} width={20} height={20} alt=""/><span>GPT <b>PLUS</b></span><em>{plan.type}</em></span><span className="gpt-plan-title">{plan.label}</span><span className="muse-sales">{stock[plan.id] === false ? "可下单 · 人工处理" : "可下单"}</span><span className="gpt-plan-details">{plan.details.map(detail => <span key={detail}>{detail}</span>)}</span><span className="gpt-plan-bottom"><strong><span>¥</span>{plan.amountCents / 100}</strong><small>{salesLabel(`gpt:${plan.id}`)}</small></span></label>)}</fieldset>
+                {Object.entries(customProducts.reduce<Record<string,typeof customProducts>>((groups,item)=>{(groups[item.category] ||= []).push(item);return groups;},{})).map(([category,items])=><div key={category}><h2 className="custom-category-title">{category}</h2><fieldset className="muse-token-plans gpt-plan-grid"><legend className="sr-only">{category}</legend>{items.map(item=><label key={item.id} className={gptPlanId === `custom:${item.id}` ? "is-selected" : ""}><input type="radio" name="gpt-plan" checked={gptPlanId === `custom:${item.id}`} onChange={()=>setGptPlanId(`custom:${item.id}`)}/><span className="gpt-plan-brand">{item.category}</span><span className="gpt-plan-title">{item.title}</span><span className="muse-sales">可下单</span><span className="gpt-plan-details"><span>{item.description}</span></span><span className="gpt-plan-bottom"><strong><span>¥</span>{formatMoney(item.priceCents)}</strong><small>{salesLabel(`gpt:custom:${item.id}`,"current")}</small></span></label>)}</fieldset></div>)}
+                {stock[gptPlanId] === false && <div className="muse-token-notice" role="status">当前货源暂缺，下单后店主将联系你安排处理。</div>}
+                {gptPlanId === "freeAccount" && <div className="muse-token-notice"><strong>Free 白号，不含 Plus 和半价资格</strong><p>可换绑邮箱；请在收到后 1 小时内首次登录检查，不含接码服务。</p></div>}
+                {gptPlanId === "halfPriceAccountOneMonth" && <div className="muse-token-notice"><strong>半价资格期限：1 个月（不是 45 天）</strong><p>本商品不含 Plus 订阅，可换绑邮箱；请在 1 小时内首次登录检查，优惠需在电脑端查看。</p></div>}
                 {gptPlanId === "halfPriceTopup" && <div className="muse-token-notice"><label><input type="checkbox" checked={eligibleConfirmed} onChange={event => setEligibleConfirmed(event.target.checked)}/> 我确认账号已有半价资格</label><p>没有资格无法使用，请先购买资格账号并确认。</p></div>}
-                {gptPlanId === "plusAccount" && <div className="muse-token-notice"><strong>请购买后 20 分钟内兑换并检查首次登录</strong><p>订阅剩余时间以账号显示为准；售后直接联系 692972690@qq.com，具体范围请先查阅购买须知。</p></div>}
-                {gptPlanId === "plus15Day" && <div className="muse-token-notice"><strong>供货商提供 15 天质保，剩余有效期约 20–26 天</strong><p>请勿换绑、修改密码或 2FA，否则不再提供质保。详情见购买须知。</p></div>}
+                {gptPlanId === "plusAccount" && <div className="muse-token-notice"><strong>请购买后 20 分钟内兑换并检查首次登录</strong><p>仅处理首次无法登录问题；货源对 20 与 30 分钟时限表述不一致，请以 20 分钟为准。售后联系 692972690@qq.com，保留北京时间和登录录屏。</p></div>}
+                {gptPlanId === "plus15Day" && <div className="muse-token-notice"><strong>供货商提供 15 天质保，剩余有效期约 20–26 天</strong><p>标称带 2 张重置卡，实际数量以账号为准。请勿换绑、修改密码或 2FA，否则不再提供质保。详情见购买须知。</p></div>}
                 <div className="gpt-plan-summary"><h2>商品说明</h2>{purchaseTerms.map(item => <div key={item.title}><strong>{item.title}</strong><p>{item.body}</p></div>)}</div>
                 <div className="muse-email-field"><label htmlFor="muse-email">收件邮箱</label><div className="muse-input-wrap"><Mail size={17}/><input id="muse-email" type="email" placeholder="you@example.com" maxLength={254} value={email} onChange={event => setEmail(event.target.value)}/></div><p className="muse-field-hint">卡密和使用说明将发送到此邮箱</p></div>
               </> : isToken ? <>
@@ -351,7 +362,7 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
                   <legend className="sr-only">充值档次</legend>
                   {tokenPlans.map(plan => <label key={plan.id} className={tokenPlanId === plan.id ? "is-selected" : ""}>
                     <input type="radio" name="token-plan" value={plan.id} checked={tokenPlanId === plan.id} onChange={() => { setTokenPlanId(plan.id); setError(""); }}/>
-                    <span className="muse-token-plan-name">{plan.label}</span>
+                    <span className="muse-token-plan-name">{plan.label}</span><span className="muse-sales">{salesLabel(`token:${plan.id}`,plan.id === "300" ? "exact" : "minimum")}</span>
                     <strong><span>¥</span>{formatMoney(plan.amountCents)}</strong>
                     <span className="muse-token-plan-check" aria-hidden="true">{tokenPlanId === plan.id && <Check size={11}/>}</span>
                   </label>)}
@@ -362,15 +373,9 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
                   <div className={`muse-input-wrap ${error.includes("邀请码") ? "has-error" : ""}`}><Ticket size={17}/><input id="muse-invite-code" placeholder="必填：请输入需要充值的账号邀请码" required aria-invalid={error.includes("邀请码")} aria-describedby="muse-invite-hint" autoComplete="off" maxLength={128} spellCheck={false} value={inviteCode} onChange={event => { setInviteCode(event.target.value); setError(""); }}/></div>
                   <p className="muse-field-hint" id="muse-invite-hint">请务必填写并核对邀请码，Token 将充值到对应账号</p>
                 </div>
-                <div className="muse-email-field"><label htmlFor="muse-email">联系邮箱</label><div className="muse-input-wrap"><Mail size={17}/><input id="muse-email" type="email" placeholder="you@example.com" maxLength={254} value={email} onChange={event => setEmail(event.target.value)}/></div><p className="muse-field-hint">用于订单出现问题时联系你</p></div>
-              </> : <><div className="muse-selected-plan">
-                <div className="muse-plan-description">
-                  <span className="muse-selected-circle"><Check size={12} strokeWidth={3}/></span>
-                  <div><strong>成品账号 + 10亿 Token</strong><span>账号与额度一同交付</span></div>
-                </div>
-                <div className="muse-plan-price"><span>¥</span>{formatMoney(accountPriceCents)}<small>一次购买</small></div>
-              </div>
-              {stock.museAccount === false && <div className="muse-token-notice" role="status">此商品暂时缺货，请稍后再来或联系店主。</div>}
+                <div className="muse-email-field"><label htmlFor="muse-email">联系邮箱</label><div className="muse-input-wrap"><Mail size={17}/><input id="muse-email" type="email" placeholder="you@example.com" maxLength={254} value={email} onChange={event => setEmail(event.target.value)}/></div><p className="muse-field-hint">用于接收卡密、兑换链接和使用说明，请仔细核对</p></div>
+              </> : <><fieldset className="muse-token-plans"><legend>选择账号规格</legend>{([{id: "warranty", label: "7 天质保", description: "7 天内封号免费换号，8 小时内首次登录验证", price: 1800}, {id: "basic", label: "无 7 天质保", description: "首次登录保障期限请联系支持确认", price: 1400}] as const).map(plan => <label key={plan.id} className={musePlanId === plan.id ? "is-selected" : ""}><input type="radio" name="muse-plan" checked={musePlanId === plan.id} onChange={() => { setMusePlanId(plan.id); setAccepted(false); setError(""); }}/><strong>{plan.label} · ¥{formatMoney(plan.price)}</strong><span className="muse-sales">{salesLabel(`muse:${plan.id}`)}</span><span>{plan.description}</span></label>)}</fieldset>
+              {musePlanId === "warranty" && stock.museAccount === false && <div className="muse-token-notice" role="status">当前货源暂缺，下单后店主将联系你安排处理。</div>}
               <div className="muse-email-field">
                 <label htmlFor="muse-email">收件邮箱</label>
                 <div className={`muse-input-wrap ${error.includes("邮箱") ? "has-error" : ""}`}>
@@ -398,7 +403,7 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
               </div>
               {error && <p className="muse-error" role="alert">{error}</p>}
               <div className="muse-order-total">
-                <div><span>合计</span><small>{product === "gpt" ? "核款后邮箱交付" : isToken ? "仅充值 Token，不含账号" : "含成品账号与 10亿 Token"}</small></div>
+                <div><span>合计</span><small>{product === "gmail" || product === "mail" || product === "gpt" ? "核款后邮箱交付" : isToken ? "仅充值 Token，不含账号" : "含成品账号与 10亿 Token"}</small></div>
                 <strong><span>¥</span>{formatMoney(amountCents + feeCents)}</strong>
               </div>
               <button className="muse-primary" type="submit">确认订单 <ArrowRight size={17}/></button>
@@ -444,7 +449,7 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
               {orderError && <p className="muse-error" role="alert">{orderError}</p>}
               <button className="muse-primary" type="submit" disabled={queryingOrder}>{queryingOrder ? "查询中…" : "查询订单"} <ArrowRight size={16}/></button>
             </form>
-            {orderSummary && <div className="muse-token-notice" role="status"><strong>订单码 {orderSummary.code} · {{ pending: "待付款", reported: "等待核实到账", processing: "已收款，处理中", complete: "订单已完成", expired: "订单已超时" }[orderSummary.status]}</strong><p>{orderSummary.title} · ¥{formatMoney(orderSummary.amountCents)}</p><p>成品账号卡密会发到下单邮箱；订单状态可在原下单浏览器或用完整订单编号查询。需要协助请联系 QQ：{supportQQ}。</p></div>}
+            {orderSummary && <div className="muse-token-notice" role="status"><strong>订单码 {orderSummary.code} · {{ pending: "待付款", reported: "等待核实到账", processing: "已收款，处理中", complete: "订单已完成", expired: "订单已超时", cancelled: "订单已取消" }[orderSummary.status]}</strong><p>{orderSummary.title} · ¥{formatMoney(orderSummary.amountCents)}</p><p>成品账号卡密会发到下单邮箱；订单状态可在原下单浏览器或用完整订单编号查询。需要协助请联系 QQ：{supportQQ}。</p></div>}
             {savedOrders.length > 0 ? <div className="muse-saved-orders"><h3>已保存的订单 · 无需复制</h3>{savedOrders.map(saved => <button key={saved.id} type="button" onClick={async () => { try { openOrder(await lookupStoreOrder(saved.id, saved.token)); } catch { setOrderError("订单暂时无法打开，请稍后重试"); } }}><ShoppingBag size={14}/><span>{saved.code} · {saved.title}</span><ArrowRight size={15}/></button>)}</div> : <RecentOrders orders={orders} onOpen={openOrder}/>}
           </>}
       </dialog>}
