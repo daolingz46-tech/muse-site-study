@@ -1013,4 +1013,26 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal(values["token:200"] || 0,before["token:200"] || 0);assert.doesNotMatch(JSON.stringify(response.data),/TEST-INVITE|example.com/);
   });
 
+  await t.test("来源会话去重、只存域名、核款成交归因与重试隔离",async()=>{
+    await db.prepare("DELETE FROM rate_limits").run();
+    const visit=randomUUID(),payload={id:visit,referrer:"https://www.google.com/search?q=PRIVATE-QUERY",page:"/",product:"muse",device:"mobile",wechat:true};
+    assert.equal((await call("/api/admin/traffic?days=7")).status,401);
+    assert.equal((await call("/api/traffic",payload)).status,200);
+    await call("/api/traffic",{...payload,referrer:"https://evil.example/",product:"gpt"});
+    const saved=await db.prepare("SELECT * FROM traffic_visits WHERE id=?").bind(visit).first();
+    assert.equal(saved.platform,"Google");assert.equal(saved.channel,"search");assert.equal(saved.referrerHost,"www.google.com");assert.equal(saved.wechat,1);assert.doesNotMatch(JSON.stringify(saved),/PRIVATE-QUERY/);
+    const orderInput={product:"muse",planId:"warranty",email:"traffic-test@example.com",method:"alipay",acceptedTerms:true,requestId:randomUUID(),trafficId:visit};
+    const created=await call("/api/orders",orderInput);assert.equal(created.status,201);
+    let report=(await call("/api/admin/traffic?days=7",undefined,session)).data;
+    let row=report.rows.find(x=>x.platform==="Google");assert.equal(row.visits,1);assert.equal(row.orders,1);assert.equal(row.paidOrders,0);
+    await call("/api/admin/update",{id:created.data.id,action:"confirm"},session);
+    await call("/api/orders",{...orderInput,trafficId:randomUUID()});
+    report=(await call("/api/admin/traffic?days=7",undefined,session)).data;row=report.rows.find(x=>x.platform==="Google");assert.equal(row.paidOrders,1);assert.equal(row.revenueCents,1800);assert.equal(row.convertedVisits,1);assert.doesNotMatch(JSON.stringify(report),/traffic-test|PRIVATE-QUERY/);
+    const detail=await call(`/api/admin/traffic-order?id=${created.data.id}`,undefined,session);assert.equal(detail.data.source.platform,"Google");
+    assert.equal((await call("/api/admin/traffic?days=-1",undefined,session)).status,400);
+    assert.equal((await call("/api/traffic",{...payload,id:"bad"})).status,400);
+    const absent=await call("/api/orders",{...orderInput,requestId:randomUUID(),trafficId:randomUUID()});assert.equal(absent.status,201);
+    assert.equal((await call(`/api/admin/traffic-order?id=${absent.data.id}`,undefined,session)).data.source,null);
+  });
+
 });

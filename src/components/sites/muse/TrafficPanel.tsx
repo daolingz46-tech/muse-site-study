@@ -1,0 +1,27 @@
+"use client";
+import {useEffect,useState} from "react";
+import QRCode from "qrcode";
+import {storeApiUrl} from "./store-api";
+import {campaignLabel} from "../../../lib/traffic";
+type Source={platform:string;channel:string;referrerHost:string;campaign:string;content:string;medium:string;evidence:string;landingPage:string;createdAt:number;agentName:string|null};
+type Report={rows:(Source & {visits:number;productVisits:number;orders:number;paidOrders:number;convertedVisits:number;revenueCents:number})[];recent:Source[];unattributedOrders:number};
+const channels:Record<string,string>={search:"搜索",ai:"AI 推荐",social:"社交平台",wechat:"微信",campaign:"推广链接",external:"其他网站",unknown:"来源未知"};
+const evidence:Record<string,string>={tag:"链接标记",referrer:"浏览器来源",unknown:"未提供来源"};
+async function read<T>(path:string):Promise<T>{const r=await fetch(storeApiUrl(path),{credentials:"include",cache:"no-store",signal:AbortSignal.timeout(15000)});if(!r.ok)throw Error("来源统计读取失败，请刷新重试");return r.json();}
+function description(s:Source){return [s.platform,s.campaign&&`活动 ${s.campaign}`,s.content&&`素材 ${s.content}`,s.agentName&&`代理 ${s.agentName}`].filter(Boolean).join(" · ");}
+export function OrderTraffic({id}:{id:string}){
+  const [text,setText]=useState("");
+  return <div><button className="wb-action" onClick={()=>void read<{source:Source|null}>(`/api/admin/traffic-order?id=${encodeURIComponent(id)}`).then(d=>setText(d.source?`${description(d.source)}；依据：${evidence[d.source.evidence]}；进入页面：${d.source.landingPage}`:"该订单未记录详细来源（历史订单或统计未成功），不能反推来源。")).catch(()=>setText("读取失败，请重试"))}>查看订单来源</button>{text&&<p role="status">{text}</p>}</div>;
+}
+export function TrafficPanel(){
+  const [days,setDays]=useState(7),[refresh,setRefresh]=useState(0),[data,setData]=useState<Report|null>(null),[error,setError]=useState("");
+  const [source,setSource]=useState("wechat"),[medium,setMedium]=useState("social"),[campaign,setCampaign]=useState(""),[content,setContent]=useState(""),[ref,setRef]=useState(""),[link,setLink]=useState(""),[qr,setQr]=useState(""),[linkError,setLinkError]=useState("");
+  useEffect(()=>{let active=true;void read<Report>(`/api/admin/traffic?days=${days}`).then(v=>{if(active){setData(v);setError("");}}).catch(e=>{if(active){setData(null);setError(e.message);}});return()=>{active=false;};},[days,refresh]);
+  async function generate(){setLinkError("");setLink("");setQr("");if(!campaignLabel(source)||!campaignLabel(medium)||!campaignLabel(campaign)||(content&&!campaignLabel(content))||(ref&&!/^[a-f0-9]{32}$/.test(ref))){setLinkError("渠道、方式、活动请使用中英文、数字、点、下划线或短横线（最多64字）；代理推广码须为已有的32位推广码。不要填写客户姓名、邮箱或口令。");return;}const u=new URL("https://musetoken.store/");u.searchParams.set("utm_source",campaignLabel(source));u.searchParams.set("utm_medium",campaignLabel(medium));u.searchParams.set("utm_campaign",campaignLabel(campaign));if(content)u.searchParams.set("utm_content",campaignLabel(content));if(ref)u.searchParams.set("ref",ref);setLink(u.href);try{setQr(await QRCode.toDataURL(u.href,{width:280,margin:2}));}catch{setLinkError("链接已生成，二维码生成失败，请重试");}}
+  return <section className="wb-visitors"><h2>访客来源与成交</h2><p>按进入本站的访问会话统计；30 分钟无活动后视为新会话。仅从功能上线起记录详细来源，旧数据无法补全。同一客户跨设备或不同浏览器可能重复计算。</p><label>访问发生时间 <select value={days} onChange={e=>setDays(Number(e.target.value))}><option value={7}>近7天</option><option value={30}>近30天</option><option value={90}>近90天</option></select></label> <button className="wb-action" onClick={()=>setRefresh(n=>n+1)}>刷新来源统计</button>
+    {error&&<p role="alert">{error}</p>}{!data&&!error&&<p>正在读取…</p>}
+    {data&&<><p>所选期间有 {data.unattributedOrders} 笔订单未关联详细来源。下表最多显示200组；成交金额为这些访问带来的已核款且待交付或已完成订单金额，不是净利润。</p><div style={{overflowX:"auto"}}><table className="wb-table"><thead><tr>{["来源／活动／素材","访问会话","看过商品","下单","已核款","访问成交率","成交金额"].map(x=><th key={x}>{x}</th>)}</tr></thead><tbody>{data.rows.map((r,i)=><tr key={i}><td>{description(r)}<small>{channels[r.channel] || r.channel} · {r.medium || "无方式标记"}</small></td><td>{r.visits}</td><td>{r.productVisits}</td><td>{r.orders}</td><td>{r.paidOrders}</td><td>{r.visits?(r.convertedVisits/r.visits*100).toFixed(1):"0"}%</td><td>¥{(r.revenueCents/100).toFixed(2)}</td></tr>)}</tbody></table></div>{!data.rows.length&&<p>还没有新版本的来源记录。</p>}<details><summary>最近50条来源记录与依据</summary>{data.recent.map((r,i)=><p key={i}>{new Date(r.createdAt).toLocaleString("zh-CN",{timeZone:"Asia/Shanghai"})} · {description(r)} · {evidence[r.evidence]} · {r.referrerHost || "未提供来源域名"} · {r.landingPage}</p>)}</details></>}
+    <p>链接标记反映该链接的推广渠道，不保证实际分享平台；微信内打开只代表浏览环境。统计不记录姓名、IP、完整来源网址或搜索词，不用于认定客户身份或计算佣金。</p>
+    <details><summary>生成推广链接和二维码</summary><p>每个渠道、活动和海报使用不同标记。需要代理归属时，附上该代理已有的推广码，佣金规则保持不变。</p><div className="wb-aftercare-review">{[["渠道",source,setSource],["推广方式",medium,setMedium],["活动名称",campaign,setCampaign],["素材编号（可选）",content,setContent],["已有代理推广码（可选）",ref,setRef]].map(([label,value,setter])=><label key={String(label)} style={{display:"block",margin:"8px 0"}}>{String(label)} <input value={String(value)} maxLength={64} onChange={e=>(setter as (v:string)=>void)(e.target.value)}/></label>)}</div><button className="wb-action" onClick={()=>void generate()}>生成链接和二维码</button>{linkError&&<p role="alert">{linkError}</p>}{link&&<p><a href={link} target="_blank" rel="noreferrer">{link}</a> <button className="wb-action" onClick={()=>void navigator.clipboard.writeText(link).catch(()=>setLinkError("复制失败，请选中链接手动复制"))}>复制链接</button></p>}{qr&&<a href={qr} download="推广二维码.png"><img src={qr} alt="推广链接二维码，点击保存" width={280} height={280}/></a>}</details>
+  </section>;
+}

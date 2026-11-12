@@ -1,3 +1,4 @@
+import {recordTraffic, trafficOrderStatement, trafficReport} from "./traffic";
 import type { D1Database } from "@cloudflare/workers-types";
 import { buildPushPayload, type PushSubscription } from "@block65/webcrypto-web-push";
 import { tokenPlans, accountPriceCents, accountTitle } from "../src/lib/products";
@@ -291,6 +292,7 @@ async function createOrder(env: Env, request: Request, input: Record<string, unk
     const [result] = await env.DB.batch([
       env.DB.prepare("INSERT OR IGNORE INTO orders(id,requestHash,inputHash,tokenHash,code,product,title,amountCents,target,method,createdAt,expiresAt,updatedAt,supplierPlan,contactEmail,customGoodsNo,customInstructions) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(id, requestHash, inputHash, await hash(token), code, input.product, title, amount, target, input.method, now, now + 15 * 60000, now, input.product === "gpt" ? String(input.planId) : input.product === "muse" ? (input.planId === "basic" ? "museBasic" : "museWarranty") : null, contactEmail || null,custom?.goodsNo || null,custom?.instructions || null),
       env.DB.prepare("INSERT INTO agent_order_attribution(orderId,agentId,productKey,commissionCents,ruleVersion,createdAt) SELECT ?,a.id,?,COALESCE(r.amountCents,0),COALESCE(r.updatedAt,0),? FROM agents a LEFT JOIN agent_commission_rules r ON r.productKey=? WHERE a.referralCode=? AND a.status='active' AND changes()=1").bind(id,productKey,now,productKey,referralCode),
+      trafficOrderStatement(env.DB,id,requestHash,input.trafficId,now),
     ]);
     const row = await env.DB.prepare("SELECT * FROM orders WHERE requestHash=?").bind(requestHash).first<Row>();
     if (row) { if (!await matchesInput(row)) throw new HttpError(409, "订单内容已改变，请重新下单"); await queueOrderEmail(env, row, "created", ctx); if (result.meta.changes) { await queueOrderPush(env, row, "created", ctx); await queueAgentPush(env,row,ctx); } return json(publicOrder(row, token), result.meta.changes ? 201 : 200); }
@@ -502,6 +504,17 @@ async function admin(env: Env, request: Request, path: string) {
     return miniLogin ? json({ ok: true, session }) : json({ ok: true }, 200, { "Set-Cookie": cookieHeader(request, session, 28800) });
   }
   await requireAdmin(env, request);
+  if (path === "/api/admin/traffic" && request.method === "GET") {
+    const days=Number(new URL(request.url).searchParams.get("days") || "7");
+    if (![7,30,90].includes(days)) throw new HttpError(400,"请选择 7、30 或 90 天");
+    return json(await trafficReport(env.DB,days));
+  }
+  if (path === "/api/admin/traffic-order" && request.method === "GET") {
+    const id=new URL(request.url).searchParams.get("id") || "";
+    const source=await env.DB.prepare("SELECT v.channel,v.platform,v.referrerHost,v.campaign,v.content,v.medium,v.evidence,v.landingPage,v.createdAt,g.name AS agentName FROM traffic_orders t JOIN traffic_visits v ON v.id=t.visitId LEFT JOIN agents g ON g.id=v.agentId WHERE t.orderId=?").bind(id).first();
+    return json({source});
+  }
+
   if (path === "/api/admin/owner-login" && request.method === "POST") {
     await limit(env,request,"owner-login",6,900);
     const input=await body(request), password=typeof input.password === "string" ? input.password : "";
@@ -1237,6 +1250,11 @@ const worker = {
       if (path.startsWith("/api/admin/")) return withCors(await admin(env, request, path));
       if (path === "/api/catalog/custom" && request.method === "GET") { const rows=await env.DB.prepare("SELECT id,title,category,description,priceCents FROM custom_products WHERE active=1 ORDER BY createdAt DESC").all(); return withCors(json({items:rows.results})); }
       if (path.startsWith("/api/agent/")) return withCors(await agentApi(env, request, path, ctx));
+      if (path === "/api/traffic" && request.method === "POST") {
+        await limit(env,request,"traffic",60,60);
+        if (!await recordTraffic(env.DB,await body(request))) throw new HttpError(400,"访问记录无效");
+        return withCors(json({ok:true}));
+      }
       if (path === "/api/visit" && request.method === "POST") {
         await limit(env, request, "visit", 60, 60);
         const input = await body(request);
