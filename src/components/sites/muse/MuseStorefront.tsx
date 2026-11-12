@@ -10,6 +10,7 @@ import { createStoreOrder, lookupStoreOrder, findStoreOrder, storeApiUrl, type O
 import { importSavedOrders, readSavedOrders, saveOrder, type SavedOrder } from "./saved-orders";
 import { isDirectVisit, rememberReferral, storedReferralCode } from "./referral";
 import "./muse.css";
+import {trackProduct} from "./traffic-client";
 
 type Product = "muse" | "muse-token" | "gpt" | "mail" | "gmail";
 type Dialog = "terms" | "orders" | "support" | "request" | null;
@@ -138,21 +139,7 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
     }
   }, [initialProduct]);
 
-  useEffect(() => {
-    if (window.location.origin !== new URL(canonicalStore).origin) return;
-    const storageKey = "muse-visit-session";
-    let id = sessionStorage.getItem(storageKey);
-    if (!id) { id = crypto.randomUUID(); sessionStorage.setItem(storageKey, id); }
-    const referrer = document.referrer.toLowerCase();
-    const ua = navigator.userAgent.toLowerCase();
-    const campaign = new URLSearchParams(window.location.search).get("utm_source")?.toLowerCase() || "";
-    const source = /micromessenger/.test(ua) || /weixin|wechat/.test(referrer) || /weixin|wechat/.test(campaign) ? "wechat"
-      : /baidu|bing|google|sogou|so\.com/.test(referrer) ? "search"
-      : /douyin|xiaohongshu|weibo|zhihu/.test(referrer) ? "social"
-      : referrer && !/musetoken\.store|github\.io/.test(referrer) ? "external" : "direct";
-    const device = /ipad|tablet/.test(ua) ? "tablet" : /mobile|android|iphone/.test(ua) ? "mobile" : "desktop";
-    void fetch(storeApiUrl("/api/visit"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, page: "/", source, device }), keepalive: true }).catch(() => {});
-  }, []);
+  useEffect(() => { trackProduct(product); }, [product]);
 
   useEffect(() => {
     if (!notification) return;
