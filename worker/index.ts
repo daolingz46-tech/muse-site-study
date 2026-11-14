@@ -434,7 +434,7 @@ async function chooseSupplier(env: Env, order: Row, primary: string) {
     available.push({ goodsNo, supplierName:supplierNames[goodsNo] || "16688 货源", total, unitPrice:quote.data.unit_price, quantity, costPerUnit: Math.ceil(Math.round(total*100)/quantity), balanceEnough:quote.data.balance_enough === true });
   }
   if (!available.length) throw new HttpError(409,"已配置货源均缺货，未执行采购。");
-  available.sort((a,b) => a.costPerUnit-b.costPerUnit);
+  available.sort((a,b) => Math.round(a.total*100)/a.quantity-Math.round(b.total*100)/b.quantity);
   const selected=available[0];
   if (!selected.balanceEnough) throw new HttpError(409,`运营钱包余额不足，本次需 ¥${selected.total.toFixed(2)}（含手续费）。`);
   if (selected.costPerUnit>order.amountCents) throw new HttpError(409,"货源成本高于售价，未执行采购。");

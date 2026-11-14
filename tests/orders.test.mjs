@@ -996,6 +996,16 @@ test("订单、收款核实和交付的数据库流程", async t => {
     emptyGoods.clear();supplierStock=10;
   });
 
+  await t.test("批量报价按精确平均单件成本比较", async () => {
+    await db.prepare("DELETE FROM rate_limits").run();
+    const order=(await call("/api/orders",{product:"gpt",planId:"gmailAccount",email:"bulk-price@example.com",method:"alipay",acceptedTerms:true,requestId:randomUUID()})).data;
+    await call("/api/admin/update",{id:order.id,action:"confirm"},session);supplierStock=10;emptyGoods.clear();
+    supplierQuotePrices=new Map([["G30430004",4.21],["G88230690",12.61]]);
+    const result=await call("/api/admin/supplier-preview",{id:order.id,directPurchase:true},session);
+    assert.equal(result.status,200);assert.equal(result.data.goodsNo,"G88230690");assert.equal(result.data.quantity,3);
+    supplierQuotePrices.clear();
+  });
+
   await t.test("Gmail 备选自动批购三件，成本分摊且并发不重复", async () => {
     await db.prepare("DELETE FROM rate_limits").run();
     await db.prepare("DELETE FROM inventory_cards WHERE product='gpt:G88230690' AND orderId IS NULL").run();
