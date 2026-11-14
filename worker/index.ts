@@ -4,7 +4,7 @@ import type { D1Database } from "@cloudflare/workers-types";
 import { buildPushPayload, type PushSubscription } from "@block65/webcrypto-web-push";
 import { tokenPlans, accountPriceCents, accountTitle } from "../src/lib/products";
 import { GPT_SUPPLIER_PRODUCTS, MUSE_ACCOUNT_SUPPLIER, MUSE_BASIC_SUPPLIER, SUPPLIER_BACKUPS, supplierRequest } from "./supplier16688";
-import { deliveryEmail } from "./delivery-email";
+import { cleanInstructions, deliveryEmail } from "./delivery-email";
 import { deriveAgentPassword, payoutDueAt } from "./agent-ledger";
 import { agentBalance, commissionReconciliation, withdrawalReservation } from "./agent-finance";
 import { createOwnerSession, hasOwnerSession, clearOwnerSession } from "./owner-auth";
@@ -412,7 +412,7 @@ async function eligibleInventoryProducts(env: Env, order: Row): Promise<string[]
   if (result.code !== 1 || typeof result.data?.available_quantity !== "number") throw new HttpError(409,"无法确认首选货源库存，未切换备选货源。");
   return result.data.available_quantity === 0 ? [primary,backup] : [primary];
 }
-const supplierNames: Record<string,string> = {G55108222:"AI源头",G30430004:"ai小头",G88230690:"AI贝贝",G24324524:"AI源头",G94215456:"692972690@qq.com",G53967132:"332297567@qq.com",G42078548:"692972690@qq.com",G95786160:"huaiyesu",G88655555:"lzz_ai小铺",G75777360:"原货源商（名称待核实）",G82369242:"AI成品号源头",G63757710:"692972690@qq.com",G17614190:"AI源头",G37376813:"阿度AI账号批发",G43844575:"小白ai一手货源",G66668406:"AI贝贝"};
+const supplierNames: Record<string,string> = {G55108222:"AI源头",G30430004:"ai小头",G88230690:"AI贝贝",G24324524:"AI源头",G94215456:"692972690@qq.com",G53967132:"332297567@qq.com",G42078548:"692972690@qq.com",G95786160:"huaiyesu",G88655555:"lzz_ai小铺",G75777360:"原货源商（名称待核实）",G82369242:"AI成品号源头",G63757710:"692972690@qq.com",G17614190:"AI源头",G27467630:"muse源头|1卡1号",G37376813:"阿度AI账号批发",G43844575:"小白ai一手货源",G66668406:"AI贝贝"};
 function safeSupplierMessage(value: unknown): string {
   if (typeof value !== "string") return "";
   const message=value.trim();
@@ -714,7 +714,7 @@ async function admin(env: Env, request: Request, path: string) {
     let goods: readonly string[] = [], quantity = 1;
     if (key.startsWith("custom:")) { const custom=await env.DB.prepare("SELECT goodsNo FROM custom_products WHERE id=? AND active=1").bind(key.slice(7)).first<{goodsNo:string}>(); if (custom?.goodsNo) goods=[custom.goodsNo]; }
     else if (key === "mailCom") { goods = ["G24433963"]; quantity = 10; }
-    else if (key === "museWarranty") goods = [MUSE_ACCOUNT_SUPPLIER.goodsNo];
+    else if (key === "museWarranty") goods = [MUSE_ACCOUNT_SUPPLIER.goodsNo,...(SUPPLIER_BACKUPS.museWarranty || [])];
     else if (key === "museBasic") goods = [MUSE_BASIC_SUPPLIER.goodsNo,...(SUPPLIER_BACKUPS.museBasic || [])];
     else if (key === "token:300亿 Token") goods = [museToken300Supplier.goodsNo];
     else if (key.startsWith("token:")) throw new HttpError(410,"Muse Token 为手工充值，没有货源采购。");
@@ -1056,8 +1056,18 @@ async function admin(env: Env, request: Request, path: string) {
       const goodsNo=queriedSource || recordedSource;
       if (["halfPriceAccountOneMonth","halfPriceTopup","philippinesTopup","vietnamPlus30"].includes(order.supplierPlan || "") && !goodsNo) throw new HttpError(409,"无法确认这笔采购的货源编号，请核查后再发货。");
       const rawInstruction=typeof result.data.instruction === "string" ? result.data.instruction.trim() : "";
+      let apiMailGuide = "";
+      if (goodsNo === "G27467630") {
+        const plain = cleanInstructions(rawInstruction);
+        const links = [...new Set((plain.match(/https?:\/\/[^\s<>"']+/g) || []).map(link => link.replace(/[，。；;！!、）)]+$/, "")))].filter(link => {
+          try { const host = new URL(link).hostname.toLowerCase(); return host !== "16688.com.cn" && !host.endsWith(".16688.com.cn") && host !== "1688.com" && !host.endsWith(".1688.com"); } catch { return false; }
+        });
+        if (!/api\s*mail/i.test(plain) || !links.length) throw new HttpError(409,"新货源未返回可核实的 API Mail 使用说明和地址，已采购；请核查教程后再发货，勿重复采购。");
+        apiMailGuide = `请使用交付的 API Mail 账号资料及以下地址，按页面指引获取邮箱验证码并登录 Muse：\n${links.join("\n")}\n建议收到后 1 小时内首次登录检查；使用稳定的美国或加拿大网络环境，建议稳定使用 7 天后再修改账号资料。如有问题请联系店主。`;
+      }
+
       if (["G55108222","G17614190","G24324524","G53967132","G19335525","G75777360"].includes(goodsNo) && !rawInstruction) throw new HttpError(409,"货源未返回专属教程，已采购，请核查教程后再发货，勿重复采购。");
-      const instruction = goodsNo === "G55108222" ? ["兑换网址：https://muse.dasaobi.top/\n使用收到的卡密，按兑换页面指引完成兑换。如有问题请联系客服。", rawInstruction].join("\n\n") : goodsNo === "G43844575" ? muse438Guide : goodsNo === "G66668406" ? muse666Guide : goodsNo === "G88230690" ? [gmailBackupGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G30430004" ? [gmailAccountGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G82369242" ? vietnamPlusGuide : goodsNo === "G94215456" ? [plus15NewGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G39595340" ? [plusAccountGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G42078548" ? freeAccountGuide : goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G63757710" ? supplier637Guide : goodsNo === "G88655555" ? qualificationGuide : goodsNo === "G17614190" ? [halfPriceTopupGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G24324524" ? [visaTopupGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G53967132" ? [philippinesSupplierGuide,rawInstruction].filter(Boolean).join("\n\n") : rawInstruction || fallback;
+      const instruction = goodsNo === "G27467630" ? apiMailGuide : goodsNo === "G55108222" ? ["兑换网址：https://muse.dasaobi.top/\n使用收到的卡密，按兑换页面指引完成兑换。如有问题请联系客服。", rawInstruction].join("\n\n") : goodsNo === "G43844575" ? muse438Guide : goodsNo === "G66668406" ? muse666Guide : goodsNo === "G88230690" ? [gmailBackupGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G30430004" ? [gmailAccountGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G82369242" ? vietnamPlusGuide : goodsNo === "G94215456" ? [plus15NewGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G39595340" ? [plusAccountGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G42078548" ? freeAccountGuide : goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G63757710" ? supplier637Guide : goodsNo === "G88655555" ? qualificationGuide : goodsNo === "G17614190" ? [halfPriceTopupGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G24324524" ? [visaTopupGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G53967132" ? [philippinesSupplierGuide,rawInstruction].filter(Boolean).join("\n\n") : rawInstruction || fallback;
       const saved = await env.DB.prepare("UPDATE supplier_fulfillment SET state='ready',card=?,instruction=?,updatedAt=? WHERE orderId=? AND state='awaiting'").bind(card, instruction, Date.now(), id).run();
       if (!saved.meta.changes) throw new HttpError(409, "订单正在处理，请刷新");
       task = { ...task, state: "ready", card, instruction };
