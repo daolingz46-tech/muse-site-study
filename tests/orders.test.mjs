@@ -435,6 +435,20 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.notEqual(first.id,second.id);
   });
 
+  await t.test("GPT Plus ֱ��������ѡ��Դ�����Դ�̳̲���ֹ�ظ��ɹ�", async () => {
+    await db.prepare("DELETE FROM rate_limits").run();
+    const make=async email=>{const result=await call("/api/orders",{product:"gpt",planId:"philippinesTopup",email,method:"alipay",acceptedTerms:true,requestId:randomUUID()});await call("/api/admin/update",{id:result.data.id,action:"confirm"},session);return result.data;};
+    for (const no of ["G53967132","G24324524","G19335525"]) emptyGoods.add(no);
+    const order=await make("new-source@example.com"), before=supplierPurchases;
+    const quote=await call("/api/admin/supplier-preview",{id:order.id},session);assert.equal(quote.data.goodsNo,"G98503368");
+    assert.equal((await call("/api/admin/supplier-deliver",{id:order.id,expectedGoodsNo:"G98503368",expectedCents:11000},session)).status,200);
+    assert.equal(supplierGoods,"G98503368");assert.match(sentMessages.findLast(x=>x.to==="new-source@example.com").text,/example.com\/redeem/);
+    assert.equal((await call("/api/admin/supplier-deliver",{id:order.id},session)).status,409);assert.equal(supplierPurchases,before+1);
+    supplierNoInstructions=true;const missing=await make("new-source-no-guide@example.com");
+    assert.equal((await call("/api/admin/supplier-deliver",{id:missing.id,expectedGoodsNo:"G98503368",expectedCents:11000},session)).status,409);
+    assert.equal((await call("/api/admin/supplier-deliver",{id:missing.id},session)).status,409);assert.equal(supplierPurchases,before+2);
+    supplierNoInstructions=false;emptyGoods.clear();
+  });
   await t.test("半价代充使用新货源及其说明", async () => {
     const o=(await call("/api/orders",{product:"gpt",planId:"halfPriceTopup",email:"topup-new@example.com",method:"wechat",eligibleConfirmed:true,acceptedTerms:true,requestId:randomUUID()})).data;
     await call("/api/admin/update",{id:o.id,action:"confirm"},session);
