@@ -29,16 +29,25 @@ test("exported public pages are readable without JavaScript and have unique meta
 });
 
 test("Worker excludes private responses, preserves public crawling, and redirects aliases", async () => {
-  const mf = new Miniflare(convertV4MiniflareOptions({ workers: [{ name: "seo-test", modules: true, scriptPath: "temp/worker/index.js", compatibilityDate: "2026-10-01", serviceBindings: { ASSETS: async () => new Response("<html>public</html>", { headers: { "Content-Type": "text/html" } }) } }] }));
+  const mf = new Miniflare(convertV4MiniflareOptions({ workers: [{ name: "seo-test", modules: true, scriptPath: "temp/worker/index.js", compatibilityDate: "2026-10-01", serviceBindings: { ASSETS: async () => new Response('<html><script>window.ready=true</script>public</html>', { headers: { "Content-Type": "text/html" } }) } }] }));
   try {
     for (const path of ["/", "/account/", "/token/", "/guides/muse-token/"]) {
       const response = await mf.dispatchFetch(`https://musetoken.store${path}`);
       assert.equal(response.status, 200);
       assert.equal(response.headers.get("X-Robots-Tag"), null);
+      assert.equal(response.headers.get("X-Content-Type-Options"), "nosniff");
+      assert.equal(response.headers.get("Strict-Transport-Security"), "max-age=31536000");
+      const csp = response.headers.get("Content-Security-Policy");
+      const nonce = csp.match(/'nonce-([^']+)'/)[1];
+      assert.ok((await response.text()).includes(`nonce="${nonce}"`));
+      assert.match(csp, /object-src 'none'/);
+      assert.doesNotMatch(csp, /unsafe-eval/);
+      assert.equal(response.headers.get("Cache-Control"), "private, no-store");
     }
     for (const path of ["/admin/", "/admin/agents/", "/agent/", "/orders/", "/payment/", "/?order=test", "/?token=test", "/api/health", "/api/unknown"]) {
       const response = await mf.dispatchFetch(`https://musetoken.store${path}`);
       assert.match(response.headers.get("X-Robots-Tag"), /noindex/);
+      assert.equal(response.headers.get("X-Content-Type-Options"), "nosniff");
     }
     const http = await mf.dispatchFetch("http://musetoken.store/token/", { redirect: "manual" });
     assert.equal(http.status, 308);
@@ -46,5 +55,9 @@ test("Worker excludes private responses, preserves public crawling, and redirect
     const response = await mf.dispatchFetch("https://api.musetoken.store/token/?utm_source=test", { redirect: "manual" });
     assert.equal(response.status, 308);
     assert.equal(response.headers.get("Location"), "https://musetoken.store/token/?utm_source=test");
+    assert.equal(response.headers.get("Strict-Transport-Security"), "max-age=31536000");
+    const a = await mf.dispatchFetch("https://musetoken.store/");
+    const b = await mf.dispatchFetch("https://musetoken.store/");
+    assert.notEqual(a.headers.get("Content-Security-Policy"), b.headers.get("Content-Security-Policy"));
   } finally { await mf.dispose(); }
 });

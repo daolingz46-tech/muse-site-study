@@ -423,3 +423,5 @@
 .muse-search-content a { color: #0369a1; text-decoration: underline; }
 .muse-search-content ol { list-style: decimal; padding-left: 24px; }
 .muse-search-content li { margin: 16px 0; }
+
+.muse-logo-inner > img { width: 100%; height: 100%; object-fit: contain; }
