@@ -45,7 +45,11 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
   const [musePlanId, setMusePlanId] = useState<"basic" | "warranty">("warranty");
   const [salesCounts,setSalesCounts]=useState<Record<string,number>>({});
   useEffect(()=>{let active=true;const refresh=()=>void fetch(storeApiUrl("/api/catalog/sales"),{cache:"no-store"}).then(r=>r.ok?r.json():null).then(data=>{if(active && data?.counts && typeof data.counts === "object")setSalesCounts(data.counts);}).catch(()=>{});refresh();const timer=window.setInterval(refresh,30000);return()=>{active=false;window.clearInterval(timer);};},[]);
-  function salesLabel(key:string,base:"minimum"|"mail"|"gmail"|"exact"|"current"="minimum") { const n=Math.max(0,Number(salesCounts[key])||0); return key==="gpt:halfPriceTopup" ? `销量 ${69+n}` : key==="gpt:philippinesTopup" ? `销量 ${82+n}` : base==="mail" ? `销量 ${57+n}` : base==="gmail" ? `销量 ${89+n}` : base==="exact" ? `销量 ${76+n}` : base==="current" ? `销量 ${n}` : `销量 ${100+n}+`; }
+  function salesLabel(key:string,base:"minimum"|"mail"|"gmail"|"exact"|"current"="minimum") {
+    const n=Math.max(0,Number(salesCounts[key])||0);
+    const total=n+(key==="gpt:halfPriceTopup" ? 69 : key==="gpt:philippinesTopup" ? 82 : base==="mail" ? 57 : base==="gmail" ? 89 : base==="exact" ? 76 : base==="current" ? 0 : 100);
+    return base==="minimum" && key!=="gpt:halfPriceTopup" && key!=="gpt:philippinesTopup" || total>100 ? "销量 100+" : `销量 ${total}`;
+  }
   const [gptPlanId, setGptPlanId] = useState<string>(gptPlans[0].id);
   const [customProducts,setCustomProducts]=useState<{id:string;title:string;category:string;description:string;priceCents:number}[]>([]);
   useEffect(()=>{let active=true;const load=()=>fetch(storeApiUrl("/api/catalog/custom"),{cache:"no-store"}).then(r=>r.ok?r.json():null).then(data=>{if(active && Array.isArray(data?.items))setCustomProducts(data.items)}).catch(()=>{});void load();const timer=window.setInterval(load,30000);return()=>{active=false;window.clearInterval(timer)};},[]);
