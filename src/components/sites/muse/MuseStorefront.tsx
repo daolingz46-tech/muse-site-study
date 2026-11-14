@@ -10,6 +10,8 @@ import { createStoreOrder, lookupStoreOrder, findStoreOrder, storeApiUrl, type O
 import { importSavedOrders, readSavedOrders, saveOrder, type SavedOrder } from "./saved-orders";
 import { isDirectVisit, rememberReferral, storedReferralCode } from "./referral";
 import "./muse.css";
+import { productPaths } from "@/lib/seo";
+import {trackProduct} from "./traffic-client";
 
 type Product = "muse" | "muse-token" | "gpt" | "mail" | "gmail";
 type Dialog = "terms" | "orders" | "support" | "request" | null;
@@ -44,7 +46,11 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
   const [musePlanId, setMusePlanId] = useState<"basic" | "warranty">("warranty");
   const [salesCounts,setSalesCounts]=useState<Record<string,number>>({});
   useEffect(()=>{let active=true;const refresh=()=>void fetch(storeApiUrl("/api/catalog/sales"),{cache:"no-store"}).then(r=>r.ok?r.json():null).then(data=>{if(active && data?.counts && typeof data.counts === "object")setSalesCounts(data.counts);}).catch(()=>{});refresh();const timer=window.setInterval(refresh,30000);return()=>{active=false;window.clearInterval(timer);};},[]);
-  function salesLabel(key:string,base:"minimum"|"mail"|"gmail"|"exact"|"current"="minimum") { const n=Math.max(0,Number(salesCounts[key])||0); return key==="gpt:halfPriceTopup" ? `销量 ${69+n}` : key==="gpt:philippinesTopup" ? `销量 ${82+n}` : base==="mail" ? `销量 ${57+n}` : base==="gmail" ? `销量 ${89+n}` : base==="exact" ? `销量 ${76+n}` : base==="current" ? `销量 ${n}` : `销量 ${100+n}+`; }
+  function salesLabel(key:string,base:"minimum"|"mail"|"gmail"|"exact"|"current"="minimum") {
+    const n=Math.max(0,Number(salesCounts[key])||0);
+    const total=n+(key==="gpt:halfPriceTopup" ? 69 : key==="gpt:philippinesTopup" ? 82 : base==="mail" ? 57 : base==="gmail" ? 89 : base==="exact" ? 76 : base==="current" ? 0 : 100);
+    return base==="minimum" && key!=="gpt:halfPriceTopup" && key!=="gpt:philippinesTopup" || total>100 ? "销量 100+" : `销量 ${total}`;
+  }
   const [gptPlanId, setGptPlanId] = useState<string>(gptPlans[0].id);
   const [customProducts,setCustomProducts]=useState<{id:string;title:string;category:string;description:string;priceCents:number}[]>([]);
   useEffect(()=>{let active=true;const load=()=>fetch(storeApiUrl("/api/catalog/custom"),{cache:"no-store"}).then(r=>r.ok?r.json():null).then(data=>{if(active && Array.isArray(data?.items))setCustomProducts(data.items)}).catch(()=>{});void load();const timer=window.setInterval(load,30000);return()=>{active=false;window.clearInterval(timer)};},[]);
@@ -77,6 +83,11 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
   const [notification, setNotification] = useState("");
   const [creatingOrder, setCreatingOrder] = useState(false);
   const [queryingOrder, setQueryingOrder] = useState(false);
+  useEffect(() => {
+    const tag = document.querySelector('meta[name="robots"]');
+    const privateView = Boolean(activeOrder) || step !== "details" || dialog === "orders" || /(?:order|token|receipts)=/.test(window.location.hash);
+    tag?.setAttribute("content", privateView ? "noindex, nofollow, nosnippet" : "index, follow");
+  }, [activeOrder, step, dialog]);
   const orderRequestRef = useRef("");
   const notify = useCallback((message: string) => setNotification(message), []);
   const referralCheck = useRef<Promise<boolean>>(Promise.resolve(true));
@@ -126,7 +137,7 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
       const params = new URLSearchParams(window.location.hash.slice(1));
       const saved = readSavedOrders();
       if (saved.length) params.set("receipts", JSON.stringify(saved));
-      window.location.replace(canonicalStore + (initialProduct === "muse-token" ? "token/" : "") + window.location.search + (params.size ? `#${params}` : ""));
+      window.location.replace(canonicalStore + productPaths[initialProduct].slice(1) + window.location.search + (params.size ? `#${params}` : ""));
       return;
     }
     const params = new URLSearchParams(window.location.hash.slice(1));
@@ -138,21 +149,7 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
     }
   }, [initialProduct]);
 
-  useEffect(() => {
-    if (window.location.origin !== new URL(canonicalStore).origin) return;
-    const storageKey = "muse-visit-session";
-    let id = sessionStorage.getItem(storageKey);
-    if (!id) { id = crypto.randomUUID(); sessionStorage.setItem(storageKey, id); }
-    const referrer = document.referrer.toLowerCase();
-    const ua = navigator.userAgent.toLowerCase();
-    const campaign = new URLSearchParams(window.location.search).get("utm_source")?.toLowerCase() || "";
-    const source = /micromessenger/.test(ua) || /weixin|wechat/.test(referrer) || /weixin|wechat/.test(campaign) ? "wechat"
-      : /baidu|bing|google|sogou|so\.com/.test(referrer) ? "search"
-      : /douyin|xiaohongshu|weibo|zhihu/.test(referrer) ? "social"
-      : referrer && !/musetoken\.store|github\.io/.test(referrer) ? "external" : "direct";
-    const device = /ipad|tablet/.test(ua) ? "tablet" : /mobile|android|iphone/.test(ua) ? "mobile" : "desktop";
-    void fetch(storeApiUrl("/api/visit"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, page: "/", source, device }), keepalive: true }).catch(() => {});
-  }, []);
+  useEffect(() => { trackProduct(product); }, [product]);
 
   useEffect(() => {
     if (!notification) return;
@@ -176,11 +173,7 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
   }, [dialog]);
 
   function selectProduct(next: Product) {
-    setProduct(next);
-    setStep("details");
-    window.history.replaceState(null, "", `${assetBase}/${next === "muse-token" ? "token/" : ""}`);
-    setAccepted(false);
-    setError("");
+    window.location.assign(assetBase + productPaths[next]);
   }
 
   function submitDetails(event: FormEvent<HTMLFormElement>) {
@@ -331,7 +324,7 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
         <section className={`muse-product-stage ${product === "mail" ? "is-mail" : product === "gmail" ? "is-gmail" : ""}`} aria-label={product === "gmail" ? "Gmail" : product === "mail" ? "Mail.com" : product === "gpt" ? "GPT" : product === "muse" ? "Muse AI" : "Muse Token"} onDragStart={event => event.preventDefault()} onMouseDown={event => event.preventDefault()}>
           <div className="muse-stage-halo" />
           <div className="muse-logo-composition">
-            <span className="muse-logo-inner"><Image key={product} src={assetBase + (product === "gmail" ? "/sites/muse/google-g.png" : product === "mail" ? "/sites/muse/mail-com.svg" : product === "gpt" ? "/sites/muse/openai-mark.svg" : "/sites/muse/muse-logo.svg")} fill sizes="(max-width: 650px) 158px, 354px" alt="" loading="eager" draggable={false} /></span>
+            <span className="muse-logo-inner"><Image key={product} src={assetBase + (product === "gmail" ? "/sites/muse/google-g.png" : product === "mail" ? "/sites/muse/mail-com.svg" : product === "gpt" ? "/sites/muse/openai-mark.svg" : "/sites/muse/muse-logo.svg")} width={product === "mail" ? 300 : product === "gpt" ? 151 : product === "gmail" ? 512 : 100} height={product === "mail" ? 80 : product === "gpt" ? 150 : product === "gmail" ? 512 : 100} sizes="(max-width: 650px) 158px, 354px" alt={product === "gmail" ? "Gmail 邮箱商品标志" : product === "mail" ? "Mail.com 邮箱商品标志" : product === "gpt" ? "GPT 账号与代充商品标志" : isToken ? "Muse Token 充值商品标志" : "Muse AI 账号商品标志"} loading="eager" draggable={false} /></span>
           </div>
           <div className="muse-stage-caption" key={product}>
             <strong>{product === "gmail" ? "Gmail" : product === "mail" ? "Mail.com" : product === "gpt" ? "GPT" : product === "muse" ? "Muse AI" : "Muse Token"}</strong>
@@ -344,7 +337,7 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
           <div ref={checkoutRef} className="muse-checkout-content">
           {step === "details" ? (
             <form onSubmit={submitDetails} noValidate>
-              <h1>{product === "gmail" ? "Gmail 邮箱" : product === "mail" ? "Mail.com 邮箱" : product === "gpt" ? "全部商品" : isToken ? "Muse Token" : "Muse AI"}</h1>
+              <h1>{product === "gmail" ? "Gmail 邮箱" : product === "mail" ? "Mail.com 邮箱" : product === "gpt" ? "GPT 账号与代充" : isToken ? "Muse Token 充值" : "Muse AI 账号"}</h1>
               <p className="muse-subtitle">{product === "gmail" ? "谷歌邮箱成品号 · 邮件交付" : product === "mail" ? "邮箱账号 · 邮件交付" : product === "gpt" ? "选择商品 · 邮箱交付" : isToken ? "Token 充值 · 不含账号" : "成品账号 + 10亿 Token"}</p>
               {product === "gmail" ? <><div className="muse-token-plan-name">Gmail 邮箱成品号 · ¥15.80 <span className="muse-sales">{salesLabel("gpt:gmailAccount","gmail")}</span></div><p className="muse-field-hint">仅保障 Gmail 收件正常；注册地区及时间随机。</p><p className="muse-field-hint">请收到后尽快检查；部分货源的售后期限从采购时起算，详情请阅读购买须知。</p><div className="muse-email-field"><label htmlFor="muse-email">收件邮箱</label><div className="muse-input-wrap"><Mail size={17}/><input id="muse-email" type="email" placeholder="you@example.com" maxLength={254} value={email} onChange={event => setEmail(event.target.value)}/></div><p className="muse-field-hint">账号资料将发送至此邮箱，请仔细核对</p></div></> : product === "mail" ? <><div className="muse-token-plan-name">Mail.com 邮箱账号 · ¥5.00 <span className="muse-sales">{salesLabel("gpt:mailCom","mail")}</span></div><p className="muse-field-hint">交付邮箱和密码。库存暂不足时，店主将联系你安排人工发货。</p><div className="muse-email-field"><label htmlFor="muse-email">收件邮箱</label><div className="muse-input-wrap"><Mail size={17}/><input id="muse-email" type="email" placeholder="you@example.com" maxLength={254} value={email} onChange={event => setEmail(event.target.value)}/></div><p className="muse-field-hint">账号资料将发送至此邮箱，请仔细核对</p></div></> : product === "gpt" ? <>
                 <fieldset className="muse-token-plans gpt-plan-grid"><legend className="sr-only">选择 GPT 商品</legend>{gptPlans.map(plan => <label key={plan.id} className={gptPlanId === plan.id ? "is-selected" : ""}><input type="radio" name="gpt-plan" checked={gptPlanId === plan.id} onChange={() => { setGptPlanId(plan.id); setEligibleConfirmed(false); }}/><span className="gpt-plan-brand"><Image src={assetBase + "/sites/muse/openai-mark.svg"} width={20} height={20} alt=""/><span>GPT <b>PLUS</b></span><em>{plan.type}</em></span><span className="gpt-plan-title">{plan.label}</span><span className="muse-sales">{stock[plan.id] === false ? "可下单 · 人工处理" : "可下单"}</span><span className="gpt-plan-details">{plan.details.map(detail => <span key={detail}>{detail}</span>)}</span><span className="gpt-plan-bottom"><strong><span>¥</span>{plan.amountCents / 100}</strong><small>{salesLabel(`gpt:${plan.id}`)}</small></span></label>)}</fieldset>
