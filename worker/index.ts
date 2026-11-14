@@ -400,18 +400,10 @@ async function agentApi(env: Env, request: Request, path: string, ctx: Execution
   if (path === "/api/agent/logout" && request.method === "POST") { await env.DB.prepare("DELETE FROM agent_sessions WHERE hash=?").bind(await hash(session)).run(); const secure=new URL(request.url).protocol === "https:"; return json({ok:true},200,{"Set-Cookie":`agent_session=; HttpOnly; SameSite=${secure?"None":"Lax"}; Path=/api/agent; Max-Age=0${secure?"; Secure":""}`}); }
   throw new HttpError(404,"接口不存在");
 }
-async function eligibleInventoryProducts(env: Env, order: Row): Promise<string[]> {
-  const products = inventoryProducts(order);
-  if (order.supplierPlan !== "gmailAccount") return products;
-  const primary = products[0], backup = products[1];
-  if (!backup || !await env.DB.prepare("SELECT id FROM inventory_cards WHERE product=? AND orderId IS NULL LIMIT 1").bind(backup).first()) return [primary];
-  if (await env.DB.prepare("SELECT id FROM inventory_cards WHERE product=? AND orderId IS NULL LIMIT 1").bind(primary).first()) return [primary];
-  let result: {code:number;data?:{available_quantity?:number}};
-  try { result = await supplierRequest({appId:env.SUPPLIER_APP_ID!,secret:env.SUPPLIER_SECRET!}, "purchase", "quotePrice", {goods_no:"G30430004",quantity:1}) as typeof result; }
-  catch { throw new HttpError(502,"无法确认首选货源库存，未切换备选货源。"); }
-  if (result.code !== 1 || typeof result.data?.available_quantity !== "number") throw new HttpError(409,"无法确认首选货源库存，未切换备选货源。");
-  return result.data.available_quantity === 0 ? [primary,backup] : [primary];
+async function eligibleInventoryProducts(_env: Env, order: Row): Promise<string[]> {
+  return inventoryProducts(order);
 }
+
 const supplierNames: Record<string,string> = {G55108222:"AI源头",G30430004:"ai小头",G88230690:"AI贝贝",G24324524:"AI源头",G94215456:"692972690@qq.com",G53967132:"332297567@qq.com",G42078548:"692972690@qq.com",G95786160:"huaiyesu",G88655555:"lzz_ai小铺",G75777360:"原货源商（名称待核实）",G82369242:"AI成品号源头",G63757710:"692972690@qq.com",G17614190:"AI源头",G27467630:"muse源头|1卡1号",G37376813:"阿度AI账号批发",G43844575:"小白ai一手货源",G66668406:"AI贝贝"};
 function safeSupplierMessage(value: unknown): string {
   if (typeof value !== "string") return "";
@@ -421,6 +413,7 @@ function safeSupplierMessage(value: unknown): string {
 const unavailableSupplierMessages = new Set(["商品已下架","该商品已下架","商品不存在","该商品不存在","商品不存在或已下架","货源商品不存在或已下架","商品已售罄","该商品已售罄","库存不足","商品库存不足","商品无库存","商品已删除"]);
 async function chooseSupplier(env: Env, order: Row, primary: string) {
   const candidates = [primary, ...(order.supplierPlan ? SUPPLIER_BACKUPS[order.supplierPlan] || [] : [])];
+  const available: Array<{goodsNo:string;supplierName:string;total:number;unitPrice:number | undefined;quantity:number;costPerUnit:number;balanceEnough:boolean}> = [];
   for (const goodsNo of candidates) {
     const quantity = goodsNo === "G88230690" ? 3 : 1;
     let quote: { code:number; msg?:string; message?:string; data?: { total_amount?:number; unit_price?:number; available_quantity?:number; balance_enough?:boolean } };
@@ -432,16 +425,20 @@ async function chooseSupplier(env: Env, order: Row, primary: string) {
       throw new HttpError(409,`货源 ${goodsNo} 询价未确认${reason ? `（${reason}）` : ""}，未执行采购。`);
     }
     if (quote.data.available_quantity === 0) continue;
+    if (candidates.length > 1 && (typeof quote.data.available_quantity !== "number" || !Number.isFinite(quote.data.available_quantity) || quote.data.available_quantity < 0)) throw new HttpError(409,`货源 ${goodsNo} 库存未确认，无法安全比价；未执行采购。`);
     if (isMuseToken300(order) && (typeof quote.data.available_quantity !== "number" || quote.data.available_quantity < 1)) throw new HttpError(409,"货源库存未确认，未执行采购。");
     if (quantity > 1 && typeof quote.data.available_quantity === "number" && quote.data.available_quantity < quantity) continue;
     if (quantity > 1 && typeof quote.data.available_quantity !== "number") throw new HttpError(409,"备选货源库存未确认，未执行采购。");
     const total=Number(quote.data.total_amount);
     if (!Number.isFinite(total) || total <= 0) throw new HttpError(409,"货源价格未确认，未执行采购。");
-    if (quote.data.balance_enough !== true) throw new HttpError(409,`运营钱包余额不足，本次需 ¥${total.toFixed(2)}（含手续费）。`);
-    if (Math.ceil(Math.round(total*100)/quantity)>order.amountCents) throw new HttpError(409,"货源成本高于售价，未执行采购。");
-    return { goodsNo, supplierName:supplierNames[goodsNo] || "16688 货源", total, unitPrice:quote.data.unit_price, quantity };
+    available.push({ goodsNo, supplierName:supplierNames[goodsNo] || "16688 货源", total, unitPrice:quote.data.unit_price, quantity, costPerUnit: Math.ceil(Math.round(total*100)/quantity), balanceEnough:quote.data.balance_enough === true });
   }
-  throw new HttpError(409,"已配置货源均缺货，未执行采购。");
+  if (!available.length) throw new HttpError(409,"已配置货源均缺货，未执行采购。");
+  available.sort((a,b) => a.costPerUnit-b.costPerUnit);
+  const selected=available[0];
+  if (!selected.balanceEnough) throw new HttpError(409,`运营钱包余额不足，本次需 ¥${selected.total.toFixed(2)}（含手续费）。`);
+  if (selected.costPerUnit>order.amountCents) throw new HttpError(409,"货源成本高于售价，未执行采购。");
+  return {goodsNo:selected.goodsNo,supplierName:selected.supplierName,total:selected.total,unitPrice:selected.unitPrice,quantity:selected.quantity};
 }
 
 const gmailAccountGuide = `本商品为 Gmail 邮箱账号，仅保障 Gmail 邮箱收件正常；不保证 Gemini、GP 或其他第三方服务授权。注册地区和 2023–2026 年注册时间随机，不保证全新。供货商对首登售后时限有 30 分钟与一天两种表述，请从下单起 30 分钟内完成首次登录检查并及时联系店主。请使用 https://accounts.google.com/ 登录，并妥善更新账号安全资料；如发生封号或第三方服务问题，请按供货商实际售后规则处理。`;
@@ -489,7 +486,13 @@ function inventoryGoodsNo(product: string): string {
 }
 async function fulfillmentInventoryProducts(env: Env, order: Row): Promise<string[]> {
   const products=await eligibleInventoryProducts(env,order);
-  return order.supplierPlan === "philippinesTopup" ? products.filter(p => p === `gpt:${GPT_SUPPLIER_PRODUCTS.philippinesTopup.goodsNo}`) : products;
+  const eligible=products;
+  const costs=await Promise.all(eligible.map(async (product,index) => {
+    const item=await env.DB.prepare("SELECT costCents FROM inventory_cards WHERE product=? AND orderId IS NULL ORDER BY costCents IS NULL,costCents,createdAt,id LIMIT 1").bind(product).first<{costCents:number|null}>();
+    return {product,index,cost:item?.costCents ?? null};
+  }));
+  costs.sort((a,b) => (a.cost ?? Infinity)-(b.cost ?? Infinity) || a.index-b.index);
+  return costs.map(item=>item.product);
 }
 
 async function admin(env: Env, request: Request, path: string) {
@@ -729,7 +732,10 @@ async function admin(env: Env, request: Request, path: string) {
         return {...entry,unitPrice:typeof unit === "number" && Number.isFinite(unit) && unit >= 0 ? unit : null,total:typeof total === "number" && Number.isFinite(total) && total >= 0 ? total : null,stock:typeof stock === "number" && Number.isFinite(stock) && stock >= 0 ? stock : null,balanceEnough:typeof balanceEnough === "boolean" ? balanceEnough : null};
       } catch { return entry; }
     }));
-    return json({quantity,items});
+    const price = (item: typeof items[number]) => item.stock === null || item.stock <= 0 || item.total === null || item.total <= 0 ? Infinity : item.total / item.quoteQuantity;
+    items.sort((a,b) => price(a)-price(b));
+    let ranked=0;
+    return json({quantity,items:items.map(item=>({...item,priority:price(item) === Infinity ? (item.stock === 0 ? "缺货" : "待核实") : ranked++ === 0 ? "首选" : `备用 ${ranked-1}`}))});
   }
   if (path === "/api/admin/email-bridge-match" && request.method === "POST") {
     const candidate = str((await body(request)).url, 500);
@@ -945,9 +951,9 @@ async function admin(env: Env, request: Request, path: string) {
     if (await env.DB.prepare("SELECT orderId FROM supplier_fulfillment WHERE orderId=?").bind(order.id).first()) throw new HttpError(409,"已有采购记录，请刷新订单后继续查询。");
     const products=input.directPurchase === true ? [] : await fulfillmentInventoryProducts(env,order);
     for (const product of products) {
-      const item=await env.DB.prepare("SELECT product,instruction FROM inventory_cards WHERE product=? AND orderId IS NULL ORDER BY createdAt,id LIMIT 1").bind(product).first<{product:string;instruction:string|null}>();
+      const item=await env.DB.prepare("SELECT product,instruction FROM inventory_cards WHERE product=? AND orderId IS NULL ORDER BY costCents IS NULL,costCents,createdAt,id LIMIT 1").bind(product).first<{product:string;instruction:string|null}>();
       if (!item) continue;
-      if (item.product === "gpt:G75777360" && !item.instruction?.trim()) throw new HttpError(409,"备选货源 G75777360 的库存缺少专属教程，请先核查后再发货。");
+      if (["gpt:G75777360","gpt:G24324524","gpt:G19335525"].includes(item.product) && !item.instruction?.trim()) throw new HttpError(409,"备选货源的库存缺少专属教程，请先核查后再发货。");
       const goodsNo=inventoryGoodsNo(item.product);
       return json({inventory:true,goodsNo,supplierName:supplierNames[goodsNo] || "已导入库存"},200,{"Cache-Control":"no-store"});
     }
@@ -975,18 +981,27 @@ async function admin(env: Env, request: Request, path: string) {
         if (typeof input.expectedGoodsNo !== "string" || typeof input.expectedCents !== "number") throw new HttpError(409,"请先确认采购货源和价格；未执行采购。");
         products=[];
       } else if (input.expectedInventory === true && typeof input.expectedGoodsNo === "string") {
-        products=products.filter(product => inventoryGoodsNo(product) === input.expectedGoodsNo);
-        if (!products.length) throw new HttpError(409,"确认的库存货源与订单不匹配，请重新确认；未执行采购。");
+        let firstAvailable = "";
+        for (const product of products) {
+          if (await env.DB.prepare("SELECT id FROM inventory_cards WHERE product=? AND orderId IS NULL LIMIT 1").bind(product).first()) { firstAvailable=product; break; }
+        }
+        if (!firstAvailable || inventoryGoodsNo(firstAvailable) !== input.expectedGoodsNo) throw new HttpError(409,"库存或成本排序已变化，请重新确认；未执行采购。");
+        products=[firstAvailable];
       } else if (input.expectedGoodsNo !== undefined && input.expectedInventory !== true) {
         for (const product of products) if (await env.DB.prepare("SELECT id FROM inventory_cards WHERE product=? AND orderId IS NULL LIMIT 1").bind(product).first()) throw new HttpError(409,"商品库存已变化，请重新确认发货方式；未执行采购。");
         products=[];
       }
       for (const product of products) {
+        if (["gpt:G75777360","gpt:G24324524","gpt:G19335525"].includes(product)) {
+          const candidate=await env.DB.prepare("SELECT instruction FROM inventory_cards WHERE product=? AND orderId IS NULL ORDER BY costCents IS NULL,costCents,createdAt,id LIMIT 1").bind(product).first<{instruction:string|null}>();
+          if (candidate && !candidate.instruction?.trim()) throw new HttpError(409,"备选货源的库存缺少专属教程，请先核查后再发货。");
+        }
         await env.DB.batch([
-        env.DB.prepare("INSERT OR IGNORE INTO supplier_fulfillment(orderId,state,tradeNo,card,instruction,inventoryId,updatedAt) SELECT ?,'ready',tradeNo,card,CASE product WHEN 'muse-basic-43844575' THEN ? WHEN 'muse-basic-66668406' THEN ? WHEN 'gpt:G95786160' THEN ? WHEN 'gpt:G88655555' THEN ? WHEN 'gpt:G63757710' THEN ? ELSE instruction END,id,? FROM inventory_cards WHERE product=? AND orderId IS NULL AND (product<>'gpt:G75777360' OR LENGTH(TRIM(COALESCE(instruction,'')))>0) AND NOT EXISTS (SELECT 1 FROM delivery_emails WHERE orderId=?) ORDER BY createdAt,id LIMIT 1").bind(id, muse438Guide, muse666Guide, newQualificationGuide, qualificationGuide, supplier637Guide, Date.now(), product, id),
+        env.DB.prepare("INSERT OR IGNORE INTO supplier_fulfillment(orderId,state,tradeNo,card,instruction,inventoryId,updatedAt) SELECT ?,'ready',tradeNo,card,CASE product WHEN 'muse-basic-43844575' THEN ? WHEN 'muse-basic-66668406' THEN ? WHEN 'gpt:G95786160' THEN ? WHEN 'gpt:G88655555' THEN ? WHEN 'gpt:G63757710' THEN ? ELSE instruction END,id,? FROM inventory_cards WHERE product=? AND orderId IS NULL AND (product NOT IN ('gpt:G75777360','gpt:G24324524','gpt:G19335525') OR LENGTH(TRIM(COALESCE(instruction,'')))>0) AND NOT EXISTS (SELECT 1 FROM delivery_emails WHERE orderId=?) ORDER BY costCents IS NULL,costCents,createdAt,id LIMIT 1").bind(id, muse438Guide, muse666Guide, newQualificationGuide, qualificationGuide, supplier637Guide, Date.now(), product, id),
         env.DB.prepare("UPDATE inventory_cards SET orderId=? WHERE id=(SELECT inventoryId FROM supplier_fulfillment WHERE orderId=?) AND orderId IS NULL").bind(id, id),
         env.DB.prepare("INSERT OR IGNORE INTO order_procurement_cost(orderId,goodsNo,supplierName,costCents,source,updatedAt) SELECT ?,substr(product,5),'AI贝贝',costCents,'supplier',? FROM inventory_cards WHERE id=(SELECT inventoryId FROM supplier_fulfillment WHERE orderId=?) AND product='gpt:G88230690'").bind(id,Date.now(),id),
         env.DB.prepare("INSERT OR IGNORE INTO order_procurement_cost(orderId,goodsNo,supplierName,costCents,source,updatedAt) SELECT ?,substr(product,5),CASE product WHEN 'gpt:G95786160' THEN 'huaiyesu' WHEN 'gpt:G88655555' THEN 'lzz_ai小铺' WHEN 'gpt:G63757710' THEN '692972690@qq.com' ELSE '原货源商（名称待核实）' END,costCents,'supplier',? FROM inventory_cards WHERE id=(SELECT inventoryId FROM supplier_fulfillment WHERE orderId=?) AND product IN ('gpt:G95786160','gpt:G88655555','gpt:G75777360','gpt:G63757710')").bind(id,Date.now(),id),
+        env.DB.prepare("INSERT OR IGNORE INTO order_procurement_cost(orderId,goodsNo,supplierName,costCents,source,updatedAt) SELECT ?,?,?,costCents,'inventory',? FROM inventory_cards WHERE id=(SELECT inventoryId FROM supplier_fulfillment WHERE orderId=?) AND costCents IS NOT NULL AND ?<>''").bind(id,inventoryGoodsNo(product),supplierNames[inventoryGoodsNo(product)] || "已导入库存",Date.now(),id,inventoryGoodsNo(product)),
       ]);
       task = await env.DB.prepare("SELECT state,tradeNo,card,instruction FROM supplier_fulfillment WHERE orderId=?").bind(id).first<{ state: string; tradeNo: string | null; card: string | null; instruction: string | null }>();
       if (task) break;
