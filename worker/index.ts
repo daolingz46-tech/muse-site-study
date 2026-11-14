@@ -1189,12 +1189,17 @@ async function admin(env: Env, request: Request, path: string) {
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContextLike): Promise<Response> {
     const url = new URL(request.url), path = url.pathname.replace(/\/$/, "");
+    if (url.hostname === "musetoken.store" && url.protocol === "http:") {
+      url.protocol = "https:";
+      return Response.redirect(url.toString(), 308);
+    }
     const origin = request.headers.get("Origin");
     const githubPagesOrigin = "https://daolingz46-tech.github.io";
     const corsOrigin = origin === url.origin || origin === githubPagesOrigin ? origin : "";
     const withCors = (response: Response) => {
-      if (!corsOrigin) return response;
       const headers = new Headers(response.headers);
+      headers.set("X-Robots-Tag", "noindex, nofollow, nosnippet");
+      if (!corsOrigin) return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
       headers.set("Access-Control-Allow-Origin", corsOrigin);
       headers.set("Access-Control-Allow-Credentials", "true");
       headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -1205,9 +1210,19 @@ const worker = {
     };
     try {
       if (!path.startsWith("/api/")) {
-        const asset=await env.ASSETS.fetch(request);
-        if ((path === "/admin" || path.startsWith("/admin/")) && (asset.headers.get("Content-Type") || "").includes("text/html")) { const headers=new Headers(asset.headers); headers.set("Cache-Control","no-store"); return new Response(asset.body,{status:asset.status,statusText:asset.statusText,headers}); }
-        return asset;
+        if (["api.musetoken.store"].includes(url.hostname) || url.hostname.endsWith(".workers.dev")) {
+          url.hostname = "musetoken.store"; url.protocol = "https:"; url.port = "";
+          return Response.redirect(url.toString(), 308);
+        }
+        const asset = await env.ASSETS.fetch(request);
+        const headers = new Headers(asset.headers);
+        const publicPaths = new Set(["", "/account", "/token", "/gpt", "/mail", "/gmail", "/guides/muse-account", "/guides/muse-token"]);
+        const sensitiveQuery = [...url.searchParams.keys()].some(key => /^(order|orderId|token|receipt|receipts|payment|session|code)$/i.test(key));
+        if ((!publicPaths.has(path) && !path.startsWith("/_next/")) || sensitiveQuery || asset.status >= 400) {
+          headers.set("X-Robots-Tag", "noindex, nofollow, nosnippet");
+        }
+        if (/^\/(admin|agent)(\/|$)/.test(path) || sensitiveQuery) headers.set("Cache-Control", "private, no-store");
+        return new Response(asset.body, { status: asset.status, statusText: asset.statusText, headers });
       }
       if (request.method === "OPTIONS") {
         if (!corsOrigin) throw new HttpError(403, "请求来源无效，请刷新页面");
