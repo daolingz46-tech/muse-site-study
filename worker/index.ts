@@ -1,3 +1,4 @@
+import { secureResponse } from "./security-headers";
 import {recordTraffic, trafficOrderStatement, trafficReport} from "./traffic";
 import type { D1Database } from "@cloudflare/workers-types";
 import { buildPushPayload, type PushSubscription } from "@block65/webcrypto-web-push";
@@ -1348,4 +1349,11 @@ const worker = {
   },
   async scheduled(_event: unknown, env: Env) { await expire(env); await sendOrderEmails(env); await sendWithdrawalNotices(env); await sendOrderPushes(env); await sendAgentPushes(env); },
 };
-export default worker;
+const securedWorker = {
+  ...worker,
+  async fetch(request: Request, env: Env, ctx: ExecutionContextLike): Promise<Response> {
+    return secureResponse(request, await worker.fetch(request, env, ctx));
+  },
+};
+
+export default securedWorker;
