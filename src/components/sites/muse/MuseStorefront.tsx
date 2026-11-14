@@ -10,6 +10,7 @@ import { createStoreOrder, lookupStoreOrder, findStoreOrder, storeApiUrl, type O
 import { importSavedOrders, readSavedOrders, saveOrder, type SavedOrder } from "./saved-orders";
 import { isDirectVisit, rememberReferral, storedReferralCode } from "./referral";
 import "./muse.css";
+import { productPaths } from "@/lib/seo";
 import {trackProduct} from "./traffic-client";
 
 type Product = "muse" | "muse-token" | "gpt" | "mail" | "gmail";
@@ -82,6 +83,11 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
   const [notification, setNotification] = useState("");
   const [creatingOrder, setCreatingOrder] = useState(false);
   const [queryingOrder, setQueryingOrder] = useState(false);
+  useEffect(() => {
+    const tag = document.querySelector('meta[name="robots"]');
+    const privateView = Boolean(activeOrder) || step !== "details" || dialog === "orders" || /(?:order|token|receipts)=/.test(window.location.hash);
+    tag?.setAttribute("content", privateView ? "noindex, nofollow, nosnippet" : "index, follow");
+  }, [activeOrder, step, dialog]);
   const orderRequestRef = useRef("");
   const notify = useCallback((message: string) => setNotification(message), []);
   const referralCheck = useRef<Promise<boolean>>(Promise.resolve(true));
@@ -131,7 +137,7 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
       const params = new URLSearchParams(window.location.hash.slice(1));
       const saved = readSavedOrders();
       if (saved.length) params.set("receipts", JSON.stringify(saved));
-      window.location.replace(canonicalStore + (initialProduct === "muse-token" ? "token/" : "") + window.location.search + (params.size ? `#${params}` : ""));
+      window.location.replace(canonicalStore + productPaths[initialProduct].slice(1) + window.location.search + (params.size ? `#${params}` : ""));
       return;
     }
     const params = new URLSearchParams(window.location.hash.slice(1));
@@ -167,11 +173,7 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
   }, [dialog]);
 
   function selectProduct(next: Product) {
-    setProduct(next);
-    setStep("details");
-    window.history.replaceState(null, "", `${assetBase}/${next === "muse-token" ? "token/" : ""}`);
-    setAccepted(false);
-    setError("");
+    window.location.assign(assetBase + productPaths[next]);
   }
 
   function submitDetails(event: FormEvent<HTMLFormElement>) {

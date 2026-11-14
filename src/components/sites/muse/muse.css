@@ -416,3 +416,10 @@
 .muse-product-stage.is-gmail .muse-logo-inner img{filter:none}
 
 .muse-sales{display:inline-block;color:#65738a;font-size:11px;line-height:1.4;font-weight:500}
+
+.muse-search-content { max-width: 1080px; margin: 32px auto; padding: 24px; color: #334155; font-size: 15px; line-height: 1.85; }
+.muse-search-content h1, .muse-search-content h2 { color: #0f172a; font-size: 24px; margin-bottom: 16px; }
+.muse-search-content nav { display: flex; flex-wrap: wrap; gap: 12px 24px; margin: 16px 0; }
+.muse-search-content a { color: #0369a1; text-decoration: underline; }
+.muse-search-content ol { list-style: decimal; padding-left: 24px; }
+.muse-search-content li { margin: 16px 0; }
