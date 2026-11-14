@@ -276,6 +276,7 @@ async function createOrder(env: Env, request: Request, input: Record<string, unk
   };
   const existing = await env.DB.prepare("SELECT * FROM orders WHERE requestHash=?").bind(requestHash).first<Row>();
   if (existing) { if (!await matchesInput(existing)) throw new HttpError(409, "订单内容已改变，请重新下单"); await queueOrderEmail(env, existing, "created", ctx); return json(publicOrder(existing, token)); }
+  if (input.product === "gpt" && input.planId === "plusAccount") throw new HttpError(410, "该商品已下架");
   await limit(env, request, "create", 20, 3600);
   await expire(env);
   const now = Date.now(), id = `M${crypto.randomUUID().replaceAll("-", "")}`;
@@ -311,7 +312,7 @@ function agentProducts() {
     { productKey: "museAccount", name: `${accountTitle} · 7 天质保`, priceCents: accountPriceCents, category: "Muse" },
     { productKey: "museAccountBasic", name: `${accountTitle} · 基础款`, priceCents: 1400, category: "Muse" },
     ...tokenPlans.map(plan => ({ productKey: `muse-token:${plan.id}`, name: `Muse Token · ${plan.label}`, priceCents: plan.amountCents, category: "Muse Token" })),
-    ...Object.entries(GPT_SUPPLIER_PRODUCTS).filter(([key]) => key !== "halfPriceAccount").map(([key,plan]) => ({ productKey: `gpt:${key}`, name: plan.title, priceCents: plan.priceCents, category: "GPT" })),
+    ...Object.entries(GPT_SUPPLIER_PRODUCTS).filter(([key]) => key !== "halfPriceAccount" && key !== "plusAccount").map(([key,plan]) => ({ productKey: `gpt:${key}`, name: plan.title, priceCents: plan.priceCents, category: "GPT" })),
   ];
 }
 async function agentApi(env: Env, request: Request, path: string, ctx: ExecutionContextLike) {
@@ -704,7 +705,7 @@ async function admin(env: Env, request: Request, path: string) {
       { key:"museWarranty", category: "Muse", title: `${accountTitle} · 7 天质保`, supplier: MUSE_ACCOUNT_SUPPLIER.goodsNo, sales: sales.results.filter(x => x.product === "muse" && x.supplierPlan === "museWarranty").reduce((n,x) => n + x.sales,0) },
       { key:"museBasic", category: "Muse", title: `${accountTitle} · 基础款`, supplier: MUSE_BASIC_SUPPLIER.goodsNo, sales: sales.results.filter(x => x.product === "muse" && x.supplierPlan !== "museWarranty").reduce((n,x) => n + x.sales,0) },
       ...tokenPlans.map(p => ({ key:`token:${p.label}`, category: "Muse Token", title: `Muse Token · ${p.label}`, supplier: p.id === "300" ? museToken300Supplier.goodsNo : null, sales: sales.results.filter(x => x.product === "muse-token" && x.title === `Muse Token · ${p.label}`).reduce((n,x) => n + x.sales,0) })),
-      ...Object.entries(GPT_SUPPLIER_PRODUCTS).filter(([key]) => key !== "halfPriceAccount").map(([key,p]) => ({ key, category: key === "mailCom" ? "Mail.com" : key === "gmailAccount" ? "Gmail" : "GPT", title: p.title, supplier: p.goodsNo, sales: sales.results.filter(x => x.product === "gpt" && x.supplierPlan === key).reduce((n,x) => n + x.sales,0) })),
+      ...Object.entries(GPT_SUPPLIER_PRODUCTS).filter(([key]) => key !== "halfPriceAccount" && key !== "plusAccount").map(([key,p]) => ({ key, category: key === "mailCom" ? "Mail.com" : key === "gmailAccount" ? "Gmail" : "GPT", title: p.title, supplier: p.goodsNo, sales: sales.results.filter(x => x.product === "gpt" && x.supplierPlan === key).reduce((n,x) => n + x.sales,0) })),
     ];
     return json({ products });
   }
@@ -1240,7 +1241,7 @@ const worker = {
       if (path === "/api/availability" && request.method === "GET") {
         await limit(env, request, "availability", 90, 60);
         if (!env.SUPPLIER_APP_ID || !env.SUPPLIER_SECRET) return withCors(json({ stock: {} }));
-        const supplierProducts: Array<[string, { goodsNo: string }]> = [...Object.entries(GPT_SUPPLIER_PRODUCTS).filter(([key]) => key !== "halfPriceAccount"), ["museAccount", MUSE_ACCOUNT_SUPPLIER]];
+        const supplierProducts: Array<[string, { goodsNo: string }]> = [...Object.entries(GPT_SUPPLIER_PRODUCTS).filter(([key]) => key !== "halfPriceAccount" && key !== "plusAccount"), ["museAccount", MUSE_ACCOUNT_SUPPLIER]];
         const entries = await Promise.all(supplierProducts.map(async ([key,plan]) => {
           try { for (const goodsNo of [plan.goodsNo,...(SUPPLIER_BACKUPS[key] || [])]) { const result = await supplierRequest({ appId: env.SUPPLIER_APP_ID!, secret: env.SUPPLIER_SECRET! }, "purchase", "quotePrice", { goods_no: goodsNo, quantity: 1 }) as {code:number;msg?:string;message?:string;data?:{available_quantity?:number}}; const n = result.data?.available_quantity; if (result.code !== 1 || !result.data) { if (unavailableSupplierMessages.has(safeSupplierMessage(result.msg || result.message))) continue; return [key,null] as const; } if (typeof n !== "number") return [key,null] as const; if (n >= (goodsNo === "G88230690" ? 3 : 1)) return [key,true] as const; } return [key,false] as const; }
           catch { return [key, null] as const; }

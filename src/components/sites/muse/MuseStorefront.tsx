@@ -29,7 +29,6 @@ const gptPlans = [
   { id: "halfPriceAccountOneMonth", label: "1个月半价资格账号", amountCents: 1500, type: "资格", details: ["资格期限：1个月，不是45天", "不含 Plus 订阅", "可换绑邮箱", "1 小时内首次登录质保"] },
   { id: "halfPriceTopup", label: "一个月半价代充", amountCents: 7500, type: "代充", details: ["需已有半价资格，账号须为 Free", "菲律宾渠道 · 一个月 Plus", "订阅 30 天质保（不保封号）"] },
   { id: "philippinesTopup", label: "GPT Plus 代充", amountCents: 12800, type: "代充", details: ["正规代充", "订阅质保按货源规则处理", "账号须为 Free 状态"] },
-  { id: "plusAccount", label: "Plus 成品账号", amountCents: 4000, type: "成品", details: ["账号、密码及 2FA", "购买后 20 分钟内兑换并检查", "仅保首次登录，售后时限请核对"] },
   { id: "vietnamPlus30", label: "越南实卡 Plus · 30 天质保", amountCents: 9500, type: "成品", details: ["个人独享 · 已开通 Plus", "越南实卡 · 30 天质保", "一次性邮箱无法找回", "货源采购后 1 小时内修改 2FA"] },
   { id: "plus15Day", label: "Plus 老号 · 15 天质保", amountCents: 6900, type: "成品", details: ["标称带 2 张重置卡，数量以实际为准", "剩余有效期约 20–26 天", "供货商提供 15 天质保", "勿换绑、改密码或 2FA"] },
   { id: "freeAccount", label: "GPT 白号 · 可换绑", amountCents: 500, type: "白号", details: ["Free 空账号，不含 Plus", "没有半价资格", "可换绑邮箱", "1 小时内首次登录质保"] },
