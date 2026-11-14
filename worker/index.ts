@@ -1189,6 +1189,10 @@ async function admin(env: Env, request: Request, path: string) {
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContextLike): Promise<Response> {
     const url = new URL(request.url), path = url.pathname.replace(/\/$/, "");
+    if (url.hostname === "musetoken.store" && url.protocol === "http:") {
+      url.protocol = "https:";
+      return Response.redirect(url.toString(), 308);
+    }
     const origin = request.headers.get("Origin");
     const githubPagesOrigin = "https://daolingz46-tech.github.io";
     const corsOrigin = origin === url.origin || origin === githubPagesOrigin ? origin : "";

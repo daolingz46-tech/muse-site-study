@@ -40,6 +40,9 @@ test("Worker excludes private responses, preserves public crawling, and redirect
       const response = await mf.dispatchFetch(`https://musetoken.store${path}`);
       assert.match(response.headers.get("X-Robots-Tag"), /noindex/);
     }
+    const http = await mf.dispatchFetch("http://musetoken.store/token/", { redirect: "manual" });
+    assert.equal(http.status, 308);
+    assert.equal(http.headers.get("Location"), "https://musetoken.store/token/");
     const response = await mf.dispatchFetch("https://api.musetoken.store/token/?utm_source=test", { redirect: "manual" });
     assert.equal(response.status, 308);
     assert.equal(response.headers.get("Location"), "https://musetoken.store/token/?utm_source=test");
