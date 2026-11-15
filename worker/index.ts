@@ -4,7 +4,7 @@ import type { D1Database } from "@cloudflare/workers-types";
 import { buildPushPayload, type PushSubscription } from "@block65/webcrypto-web-push";
 import { tokenPlans, accountPriceCents, accountTitle } from "../src/lib/products";
 import { GPT_SUPPLIER_PRODUCTS, MUSE_ACCOUNT_SUPPLIER, MUSE_BASIC_SUPPLIER, SUPPLIER_BACKUPS, supplierRequest } from "./supplier16688";
-import { cleanInstructions, deliveryEmail } from "./delivery-email";
+import { deliveryEmail } from "./delivery-email";
 import { deriveAgentPassword, payoutDueAt } from "./agent-ledger";
 import { agentBalance, commissionReconciliation, withdrawalReservation } from "./agent-finance";
 import { createOwnerSession, hasOwnerSession, clearOwnerSession } from "./owner-auth";
@@ -464,6 +464,12 @@ const vietnamPlusGuide = `越南实卡 Plus 个人独享成品号，供货商提
 账号使用一次性 Gmail 注册，该邮箱无法辅助后续修改或找回；不含接码服务，使用需要手机验证码的功能时需自行接码。禁止反代使用。质保期间符合条件的异常按照货源规则处理；供应商对免费换号时段的描述存在差异，请联系店主核实。`;
 const muse438Guide = `Muse 基础款，包含 10 亿 Token，不含 7 天质保。供货商对首次登录保障时限有 1 小时和 24 小时两种表述，请按较短的 1 小时内检查；首次登录成功后保障失效；请登录后立即将邮箱换绑为自己的邮箱。如有问题请联系店主。`;
 const muse666Guide = `本商品为 Muse 基础款，账号包含 10 亿 Token，不含 7 天质保。货源仅保障 1 小时内首次登录成功；首次登录成功后不再提供退换。请收到后立即检查，如有问题及时联系店主。使用交付的账号及验证码网址登录；请使用稳定的美国或加拿大网络环境，避免频繁更换网络和设备。请先稳定使用 7 天，再考虑修改邮箱、密码或其他账号资料。`;
+const muse274Guide = `1. 复制全部卡密，不要遗漏。
+2. 打开 https://dongvanfb.net/read_mail_box/，粘贴全部卡密，点击 Read Inbox。
+3. 复制页面左下角显示的邮箱。
+4. 打开 https://muse.ai/，输入该邮箱并发送验证码。
+5. 返回邮箱读取页面，找到并复制验证码，再回到 Muse 输入验证码登录。
+建议收到后 1 小时内首次登录检查；使用稳定的美国或加拿大网络环境，建议稳定使用 7 天后再修改账号资料。如有问题请联系店主。`;
 const visaTopupGuide = `GPT Plus 正规代充：为自己的账号充值，不是成品账号。账号必须处于 Free 免费版，不能覆盖 Go、Plus 或 Pro 等已有订阅。请按照以下卡密附带的兑换教程操作。供货商说明充值成功后提供 30 天订阅质保，封号不在质保范围；如有问题请联系店主。`;
 const philippinesSupplierGuide = `菲律宾渠道 GPT Plus 代充，账号须为 Free 状态，不能覆盖已有订阅。订阅异常掉落或失效（非账号自身原因）时，请联系店主并提供订单信息，按供货商售后规则处理。封号或账号风控问题不在该供货商售后范围内。`;
 const halfPriceTopupGuide = `本商品为菲律宾渠道 Plus 一个月半价代充，使用前请先确认账号有半价资格。\n账号须为 Free 状态，不能覆盖已有订阅。新号及老号均可使用，具体以账号资格为准。\n可参考资格查询文档：https://docs.qq.com/doc/DY2plWm9pdVhXb0Fs\n供货商说明提供 30 天订阅质保；封号不在其质保范围。请保留订单信息，遇到问题及时联系店主。`;
@@ -1071,15 +1077,7 @@ async function admin(env: Env, request: Request, path: string) {
       const goodsNo=queriedSource || recordedSource;
       if (["halfPriceAccountOneMonth","halfPriceTopup","philippinesTopup","vietnamPlus30"].includes(order.supplierPlan || "") && !goodsNo) throw new HttpError(409,"无法确认这笔采购的货源编号，请核查后再发货。");
       const rawInstruction=typeof result.data.instruction === "string" ? result.data.instruction.trim() : "";
-      let apiMailGuide = "";
-      if (goodsNo === "G27467630") {
-        const plain = cleanInstructions(rawInstruction);
-        const links = [...new Set((plain.match(/https?:\/\/[^\s<>"']+/g) || []).map(link => link.replace(/[，。；;！!、）)]+$/, "")))].filter(link => {
-          try { const host = new URL(link).hostname.toLowerCase(); return host !== "16688.com.cn" && !host.endsWith(".16688.com.cn") && host !== "1688.com" && !host.endsWith(".1688.com"); } catch { return false; }
-        });
-        if (!/api\s*mail/i.test(plain) || !links.length) throw new HttpError(409,"新货源未返回可核实的 API Mail 使用说明和地址，已采购；请核查教程后再发货，勿重复采购。");
-        apiMailGuide = `请使用交付的 API Mail 账号资料及以下地址，按页面指引获取邮箱验证码并登录 Muse：\n${links.join("\n")}\n建议收到后 1 小时内首次登录检查；使用稳定的美国或加拿大网络环境，建议稳定使用 7 天后再修改账号资料。如有问题请联系店主。`;
-      }
+      const apiMailGuide = goodsNo === "G27467630" ? muse274Guide : "";
 
       if (["G55108222","G17614190","G24324524","G53967132","G19335525","G75777360"].includes(goodsNo) && !rawInstruction) throw new HttpError(409,"货源未返回专属教程，已采购，请核查教程后再发货，勿重复采购。");
       const instruction = goodsNo === "G27467630" ? apiMailGuide : goodsNo === "G55108222" ? ["兑换网址：https://muse.dasaobi.top/\n使用收到的卡密，按兑换页面指引完成兑换。如有问题请联系客服。", rawInstruction].join("\n\n") : goodsNo === "G43844575" ? muse438Guide : goodsNo === "G66668406" ? muse666Guide : goodsNo === "G88230690" ? [gmailBackupGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G30430004" ? [gmailAccountGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G82369242" ? vietnamPlusGuide : goodsNo === "G94215456" ? [plus15NewGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G39595340" ? [plusAccountGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G42078548" ? freeAccountGuide : goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G63757710" ? supplier637Guide : goodsNo === "G88655555" ? qualificationGuide : goodsNo === "G17614190" ? [halfPriceTopupGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G24324524" ? [visaTopupGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G53967132" ? [philippinesSupplierGuide,rawInstruction].filter(Boolean).join("\n\n") : rawInstruction || fallback;
@@ -1096,7 +1094,7 @@ async function admin(env: Env, request: Request, path: string) {
     const claim = await env.DB.prepare("UPDATE supplier_fulfillment SET state='sending',updatedAt=? WHERE orderId=? AND state='ready'").bind(Date.now(), id).run();
     if (!claim.meta.changes) throw new HttpError(409, "邮件正在发送，请刷新订单");
     const loginGuide = order.supplierPlan === "plus15Day" ? "登录步骤：\n1. 打开 ChatGPT 登录页面，输入邮件中的账号和密码。\n2. 将邮件中的 2FA 密钥输入 https://2fa.fun/ 或 https://2fa.live/，获取一次性验证码。\n3. 在登录页面输入验证码。请勿换绑、修改密码或 2FA，否则供货商不再提供质保。" : "";
-    const { html, text } = deliveryEmail({ title: order.title, code: order.code, card: task.card, instructions: [loginGuide, task.instruction || "", order.product === "muse" ? (order.supplierPlan === "museWarranty" ? "7 天内封号，可以免费换号；请在 8 小时内首次登录验证。" : "本商品不含 7 天质保；首次登录保障期限请联系支持确认。") : ""].filter(Boolean).join("\n\n"), supplierOrderNo: needsSupplierSupport ? task.tradeNo! : undefined });
+    const { html, text } = deliveryEmail({ title: order.title, code: order.code, card: task.card, preserveCard: task.instruction === muse274Guide, instructions: [loginGuide, task.instruction || "", order.product === "muse" ? (order.supplierPlan === "museWarranty" ? "7 天内封号，可以免费换号；请在 8 小时内首次登录验证。" : "本商品不含 7 天质保；首次登录保障期限请联系支持确认。") : ""].filter(Boolean).join("\n\n"), supplierOrderNo: needsSupplierSupport ? task.tradeNo! : undefined });
     const historyId = crypto.randomUUID();
     await env.DB.prepare("INSERT INTO delivery_history(id,orderId,text,state,createdAt) VALUES(?,?,?,'sending',?)").bind(historyId, id, text, Date.now()).run();
     try { await sendEmail(env, `supplier-delivery:${id}`, `${order.title} · 订单 ${order.code}`, html, text, recipient, [], "buyer_delivery"); }

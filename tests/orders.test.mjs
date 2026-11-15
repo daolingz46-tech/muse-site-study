@@ -39,7 +39,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
       if (path.endsWith("/query") && params.trade_no === "GPT-BACKUP-STOCK") return Response.json({code:1,data:{goods_no:"G88655555",status:4,cards:[{code:"gpt-backup-stock-card"}],instruction:"备选供应商说明"}});
       if (path.endsWith("/query") && params.trade_no === "OTHER-STOCK") return Response.json({code:1,data:{goods_no:"G12345678",status:4,cards:[{code:"other-stock-card"}]}});
       if (path.endsWith("/query") && supplierGoods === "G85161614") return Response.json({code:1,data:{status:4,cards:Array.from({length:supplierQuantity},(_,i)=>({code:`TEST-${i}`}))}});
-      if (path.endsWith("/query") && supplierGoods === "G27467630" && !supplierNoInstructions) return Response.json({code:1,data:{status:4,cards:[{code:"test@example.com|https://example.com/code"}],instruction:"<p>API Mail 验证码：<a href=\"https://example.com/redeem\">使用地址</a></p>"}});
+      if (path.endsWith("/query") && supplierGoods === "G27467630") return Response.json({code:1,data:{goods_no:"G27467630",status:4,cards:[{code:"test@example.com----example-password----ABCDEFGHIJKLMNOP"}],instruction:supplierNoInstructions ? "" : "<p>打开api网站：<a href=\"https://dongvanfb.net/read_mail_box/\">邮箱读取</a>，粘贴全部卡密，点击 Read Inbox。</p>"}});
       if (path.endsWith("/query") && supplierNoInstructions) return Response.json({code:1,data:{status:4,cards:[{code:"TEST-CARD"}],instruction:""}});
       if (path.endsWith("/query")) return Response.json({ code: 1, data: { status: 4, cards: [{ code: supplierGoods === "G37376813" ? "muse@example.com—mailpass--https://example.com/code" : "TEST-CARD" }], instruction: `<h3>${supplierGoods === "G24324524" ? "新货源教程" : "旧货源教程"}</h3><p>打开 <a href="https://example.com/redeem">兑换地址</a></p>` } });
       throw new Error("unexpected supplier request");
@@ -776,11 +776,19 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal((await call("/api/admin/supplier-deliver",{id:o.id,directPurchase:true,expectedGoodsNo:preview.data.goodsNo,expectedCents:Math.round(preview.data.total*100)},session)).status,200);
     assert.equal(supplierGoods,"G27467630");assert.equal(supplierPurchases,before+1);
     const email=sentMessages.find(m=>m.to==="muse-backup-test@example.com" && m.purpose==="buyer_delivery");
-    assert.ok(email);assert.match(email.text,/API Mail/);assert.match(email.text,/https:\/\/example.com\/redeem/);assert.match(email.text,/7 天内封号/);assert.doesNotMatch(email.text,/旧货源教程|16688/);
+    assert.ok(email);assert.match(email.text,/https:\/\/dongvanfb\.net\/read_mail_box\//);assert.match(email.text,/test@example\.com----example-password----ABCDEFGHIJKLMNOP/);assert.match(email.text,/Read Inbox/);assert.match(email.text,/7 天内封号/);assert.doesNotMatch(email.text,/旧货源教程|16688/);
     assert.equal((await call("/api/admin/supplier-deliver",{id:o.id},session)).status,409);assert.equal(supplierPurchases,before+1);
-    const missing=await make("muse-missing-guide@example.com");const missingPreview=(await call("/api/admin/supplier-preview",{id:missing.id,directPurchase:true},session)).data;supplierNoInstructions=true;const n=supplierPurchases;
-    assert.equal((await call("/api/admin/supplier-deliver",{id:missing.id,directPurchase:true,expectedGoodsNo:missingPreview.goodsNo,expectedCents:Math.round(missingPreview.total*100)},session)).status,409);assert.equal(supplierPurchases,n+1);
-    assert.equal((await call("/api/admin/supplier-deliver",{id:missing.id},session)).status,409);assert.equal(supplierPurchases,n+1);
+    const missing=await make("muse-missing-guide@example.com");supplierNoInstructions=true;const n=supplierPurchases;
+    await db.prepare("INSERT INTO supplier_fulfillment(orderId,state,tradeNo,instruction,updatedAt) VALUES(?,'awaiting','TEST-16688','source:G27467630',?)").bind(missing.id,Date.now()).run();
+    assert.equal((await call("/api/admin/supplier-deliver",{id:missing.id},session)).status,200);assert.equal(supplierPurchases,n);
+    const resumed=sentMessages.find(m=>m.to==="muse-missing-guide@example.com" && m.purpose==="buyer_delivery");assert.ok(resumed);assert.match(resumed.text,/dongvanfb\.net\/read_mail_box/);assert.match(resumed.text,/test@example\.com----example-password----ABCDEFGHIJKLMNOP/);
+    assert.equal((await call("/api/admin/supplier-deliver",{id:missing.id},session)).status,409);assert.equal(supplierPurchases,n);
+    const mailFailed=await make("muse-mail-failed@example.com");
+    await db.prepare("INSERT INTO supplier_fulfillment(orderId,state,tradeNo,instruction,updatedAt) VALUES(?,'awaiting','TEST-16688','source:G27467630',?)").bind(mailFailed.id,Date.now()).run();
+    deliveryFailure=true;assert.equal((await call("/api/admin/supplier-deliver",{id:mailFailed.id},session)).status,502);deliveryFailure=false;
+    assert.equal((await db.prepare("SELECT state FROM supplier_fulfillment WHERE orderId=?").bind(mailFailed.id).first()).state,"mail_unknown");
+    assert.equal((await call("/api/orders/lookup",mailFailed)).data.status,"processing");
+    assert.equal((await call("/api/admin/supplier-deliver",{id:mailFailed.id},session)).status,409);assert.equal(supplierPurchases,n);
     supplierNoInstructions=false;emptyGoods.delete("G37376813");
   });
 
