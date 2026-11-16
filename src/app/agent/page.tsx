@@ -5,7 +5,7 @@ export const metadata: Metadata = {
   title: "代理工作台 · 卡密大王",
   manifest: "https://musetoken.store/agent/manifest.webmanifest",
   appleWebApp: { capable: true, title: "代理工作台", statusBarStyle: "default" },
-  icons: { apple: "https://musetoken.store/sites/muse/store-logo.png" },
+  icons: { apple: "https://musetoken.store/agent/muse-icon-180.png" },
   robots: { index: false, follow: false },
 };
 
