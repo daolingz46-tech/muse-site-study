@@ -39,6 +39,14 @@ export function cleanInstructions(input: string): string {
 }
 
 function credentialFields(card: string, title: string): Array<{ label: string; value: string }> {
+  const museEmailLink = title.startsWith("Muse") && card.match(/^\s*([^\s@]+@[^\s@]+\.[^\s@]+?)\s*----\s*(https\\?:\/\/\S+)\s*$/);
+  if (museEmailLink) {
+    const address = museEmailLink[2].replace(/^https\\:/, "https:");
+    try {
+      const url = new URL(address);
+      if (url.protocol === "https:" && !url.username && !url.password) return [{ label: "Muse 登录账号", value: museEmailLink[1] }, { label: "邮箱验证码获取地址", value: address }];
+    } catch { /* Preserve unrecognized content. */ }
+  }
   const museFields = title.startsWith("Muse") && card.match(/^([^\s@]+@[^\s@]+\.[^\s@]+)\s*(?:—|–|-{2,}|\|)\s*(.+?)\s*(?:—|–|-{2,}|\|)\s*(https?:\/\/\S+)\s*$/);
   if (museFields) {
     try { const url = new URL(museFields[3]); if (["http:", "https:"].includes(url.protocol)) return [{ label: "Muse 登录账号", value: museFields[1] }, { label: "邮箱密码", value: museFields[2] }, { label: "邮箱验证码获取地址", value: museFields[3] }]; } catch { /* Preserve unrecognized content. */ }
