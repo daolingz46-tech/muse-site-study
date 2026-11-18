@@ -462,6 +462,12 @@ const vietnamPlusGuide = `越南实卡 Plus 个人独享成品号，供货商提
 2. 使用自己的验证器或供货商提供的 https://2fa.fun/index.html 根据 2FA 原始密钥生成验证码，输入验证码完成登录。请妥善保管密钥。
 3. 按供货商要求在货源采购后 1 小时内修改 2FA，并在账号安全的活动会话中移除其他设备。遇到邮箱验证或无法修改时不要退出账号，及时联系店主。
 账号使用一次性 Gmail 注册，该邮箱无法辅助后续修改或找回；不含接码服务，使用需要手机验证码的功能时需自行接码。禁止反代使用。质保期间符合条件的异常按照货源规则处理；供应商对免费换号时段的描述存在差异，请联系店主核实。`;
+const museBasicLoginGuide = `Muse 基础款首次登录（含 10 亿 Token，不含 7 天质保）
+1. 打开 Muse 登录页面，输入发货邮件中标注的「Muse 登录账号」，让 Muse 发送验证码。若收到的是「邮箱----网址」，请用四条横线前的邮箱登录，不要复制横线或网址。
+2. 复制邮件中的「邮箱验证码获取地址」到浏览器打开；若是原始卡密，只复制四条横线后面的完整网址。
+3. 在该网页查看 Muse 发来的验证码，再回到 Muse 输入验证码完成登录。
+4. 登录后检查账号及 Token 额度。若邮件没有提供验证码获取方式、无法登录或额度异常，请保留订单号并联系店主。
+更改邮箱或密码前，请先查看该账号的随单说明；没有对应说明时请先联系店主。`;
 const muse438Guide = `Muse 基础款，包含 10 亿 Token，不含 7 天质保。供货商对首次登录保障时限有 1 小时和 24 小时两种表述，请按较短的 1 小时内检查；首次登录成功后保障失效；请登录后立即将邮箱换绑为自己的邮箱。如有问题请联系店主。`;
 const muse666Guide = `本商品为 Muse 基础款，账号包含 10 亿 Token，不含 7 天质保。货源仅保障 1 小时内首次登录成功；首次登录成功后不再提供退换。请收到后立即检查，如有问题及时联系店主。使用交付的账号及验证码网址登录；请使用稳定的美国或加拿大网络环境，避免频繁更换网络和设备。请先稳定使用 7 天，再考虑修改邮箱、密码或其他账号资料。`;
 const muse274Guide = `1. 复制全部卡密，不要遗漏。
@@ -1094,7 +1100,8 @@ async function admin(env: Env, request: Request, path: string) {
     const claim = await env.DB.prepare("UPDATE supplier_fulfillment SET state='sending',updatedAt=? WHERE orderId=? AND state='ready'").bind(Date.now(), id).run();
     if (!claim.meta.changes) throw new HttpError(409, "邮件正在发送，请刷新订单");
     const loginGuide = order.supplierPlan === "plus15Day" ? "登录步骤：\n1. 打开 ChatGPT 登录页面，输入邮件中的账号和密码。\n2. 将邮件中的 2FA 密钥输入 https://2fa.fun/ 或 https://2fa.live/，获取一次性验证码。\n3. 在登录页面输入验证码。请勿换绑、修改密码或 2FA，否则供货商不再提供质保。" : "";
-    const { html, text } = deliveryEmail({ title: order.title, code: order.code, card: task.card, preserveCard: task.instruction === muse274Guide, instructions: [loginGuide, task.instruction || "", order.product === "muse" ? (order.supplierPlan === "museWarranty" ? "7 天内封号，可以免费换号；请在 8 小时内首次登录验证。" : "本商品不含 7 天质保；首次登录保障期限请联系支持确认。") : ""].filter(Boolean).join("\n\n"), supplierOrderNo: needsSupplierSupport ? task.tradeNo! : undefined });
+    const basicMuse = order.product === "muse" && order.supplierPlan === "museBasic";
+    const { html, text } = deliveryEmail({ title: order.title, code: order.code, card: task.card, preserveCard: task.instruction === muse274Guide, instructions: [loginGuide, basicMuse ? museBasicLoginGuide : "", task.instruction || "", order.product === "muse" && !basicMuse ? (order.supplierPlan === "museWarranty" ? "7 天内封号，可以免费换号；请在 8 小时内首次登录验证。" : "本商品不含 7 天质保；首次登录保障期限请联系支持确认。") : ""].filter(Boolean).join("\n\n"), supplierOrderNo: needsSupplierSupport ? task.tradeNo! : undefined });
     const historyId = crypto.randomUUID();
     await env.DB.prepare("INSERT INTO delivery_history(id,orderId,text,state,createdAt) VALUES(?,?,?,'sending',?)").bind(historyId, id, text, Date.now()).run();
     try { await sendEmail(env, `supplier-delivery:${id}`, `${order.title} · 订单 ${order.code}`, html, text, recipient, [], "buyer_delivery"); }
@@ -1116,7 +1123,8 @@ async function admin(env: Env, request: Request, path: string) {
     const resend = order.status === "complete";
     if (resend && input.confirmResend !== true) throw new HttpError(409,"请确认这是给已交付订单补发邮件");
     if (!resend && !card) throw new HttpError(400,"请粘贴卡密内容");
-    let instructions = "";
+    const basicMuse = order.product === "muse" && order.supplierPlan === "museBasic";
+    let instructions = basicMuse && input.includeTutorial !== false ? museBasicLoginGuide : "";
     if (order.product === "gpt" && !resend) {
       const goodsNo = str(input.goodsNo, 30);
       if (order.supplierPlan?.startsWith("custom:")) { if (goodsNo !== (order.customGoodsNo || "手工交付")) throw new HttpError(400,"请选择订单对应的货源"); instructions=order.customInstructions || str(input.instructions,2000); } else {
@@ -1136,7 +1144,7 @@ async function admin(env: Env, request: Request, path: string) {
     if (resend && !card && !files.length && !(order.product === "muse" && input.includeTutorial !== false)) throw new HttpError(400,"请填写教程或选择附件后再发送");
     if (files.reduce((sum, file) => sum + file.size, 0) > maxMailBytes) throw new HttpError(413, "单封邮件附件合计不能超过 20 MB");
     if (files.length && !await hasAttachmentDelivery(env)) throw new HttpError(503, "请先更新 Google 邮件脚本，才能发送附件");
-    const tutorial = order.product !== "muse" || input.includeTutorial === false ? null : await env.DB.prepare("SELECT title,blocks FROM tutorials WHERE id='muse-account'").first<{ title: string; blocks: string }>();
+    const tutorial = order.product !== "muse" || basicMuse || input.includeTutorial === false ? null : await env.DB.prepare("SELECT title,blocks FROM tutorials WHERE id='muse-account'").first<{ title: string; blocks: string }>();
     const blocks = tutorial ? validateTutorial(JSON.parse(tutorial.blocks)) : [];
     const tutorialHtml = blocks.map(block => block.type === "text"
       ? `<p style="white-space:pre-wrap">${escapeHtml(block.content)}</p>`

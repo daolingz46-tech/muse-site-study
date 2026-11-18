@@ -763,7 +763,11 @@ test("订单、收款核实和交付的数据库流程", async t => {
       assert.equal(supplierGoods, goods);
       const email = sentMessages.find(item => item.to === `${planId}@example.com` && item.purpose === "buyer_delivery");
       assert.ok(email); assert.match(email.text, planId === "basic" ? /不含 7 天质保/ : /7 天内封号/);
-      if (planId === "basic") { assert.match(email.text,/稳定使用 7 天/); assert.doesNotMatch(email.text,/立即.{0,10}换绑|立即.{0,10}更换邮箱/); }
+      if (planId === "basic") {
+        assert.match(email.text, /Muse 基础款首次登录[\s\S]*四条横线前的邮箱[\s\S]*四条横线后面的完整网址[\s\S]*回到 Muse 输入验证码/);
+        assert.match(email.text, /稳定使用 7 天/);
+        assert.doesNotMatch(email.text, /立即.{0,10}换绑|立即.{0,10}更换邮箱/);
+      } else assert.doesNotMatch(email.text, /Muse 基础款首次登录/);
     }
   });
 

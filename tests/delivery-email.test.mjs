@@ -29,6 +29,17 @@ test("formats Muse account and verification link without adding a password", () 
 });
 
 
+test("splits Muse email and verification URL across four dashes", () => {
+  const address = "https://example.com/m?f=html&e=buyer@example.com";
+  for (const link of [address, address.replace(":", "\\:")]) {
+    const result = deliveryEmail({ title: "Muse AI · 成品账号", code: "1111", card: "buyer@example.com----" + link });
+    assert.match(result.text, /Muse 登录账号：buyer@example.com/);
+    assert.ok(result.text.includes("邮箱验证码获取地址：" + address));
+    assert.match(result.html, /href="https:\/\/example.com\/m\?f=html&amp;e=buyer@example.com"/);
+    assert.doesNotMatch(result.text, /邮箱密码|----/);
+  }
+});
+
 test("formats Muse email password and verification link from the new supplier", () => {
   const result = deliveryEmail({ title: "Muse AI · 成品账号", code: "1111", card: "buyer@example.com—mail-pass--https://example.com/code?token=abc" });
   assert.match(result.text, /Muse 登录账号：buyer@example.com/);

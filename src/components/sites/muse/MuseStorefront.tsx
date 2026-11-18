@@ -370,6 +370,7 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
                 </div>
                 <div className="muse-email-field"><label htmlFor="muse-email">联系邮箱</label><div className="muse-input-wrap"><Mail size={17}/><input id="muse-email" type="email" placeholder="you@example.com" maxLength={254} value={email} onChange={event => setEmail(event.target.value)}/></div><p className="muse-field-hint">用于接收卡密、兑换链接和使用说明，请仔细核对</p></div>
               </> : <><fieldset className="muse-token-plans"><legend>选择账号规格</legend>{([{id: "warranty", label: "7 天质保", description: "7 天内封号免费换号，8 小时内首次登录验证", price: 1800}, {id: "basic", label: "无 7 天质保", description: "首次登录保障期限请联系支持确认", price: 1400}] as const).map(plan => <label key={plan.id} className={musePlanId === plan.id ? "is-selected" : ""}><input type="radio" name="muse-plan" checked={musePlanId === plan.id} onChange={() => { setMusePlanId(plan.id); setAccepted(false); setError(""); }}/><strong>{plan.label} · ¥{formatMoney(plan.price)}</strong><span className="muse-sales">{salesLabel(`muse:${plan.id}`)}</span><span>{plan.description}</span></label>)}</fieldset>
+              {musePlanId === "basic" && <div className="muse-token-notice">收到发货邮件后，请按随单的登录步骤验证账号并检查 10 亿 Token 额度。<Link href="/guides/muse-account/">查看首次登录教程</Link></div>}
               {musePlanId === "warranty" && stock.museAccount === false && <div className="muse-token-notice" role="status">当前货源暂缺，下单后店主将联系你安排处理。</div>}
               <div className="muse-email-field">
                 <label htmlFor="muse-email">收件邮箱</label>
