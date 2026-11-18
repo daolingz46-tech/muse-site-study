@@ -1,3 +1,4 @@
+import {currentTrafficId} from "./traffic-client";
 import type { StoreOrder } from "./OrderFlow";
 
 const storeApiBase = (process.env.NEXT_PUBLIC_STORE_API_BASE_URL || "").replace(/\/+$/, "");
@@ -66,8 +67,9 @@ async function requestOrder(path: string, payload: unknown): Promise<StoreOrder>
   return readOrder(data);
 }
 
-export function createStoreOrder(input: CreateStoreOrder, requestId: string) {
-  return requestOrder("/api/orders", { ...input, requestId });
+export async function createStoreOrder(input: CreateStoreOrder, requestId: string) {
+  const trafficId=await currentTrafficId();
+  return requestOrder("/api/orders", { ...input, requestId, trafficId });
 }
 
 export async function lookupStoreOrder(id: string, token: string) {

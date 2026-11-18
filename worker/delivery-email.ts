@@ -39,6 +39,14 @@ export function cleanInstructions(input: string): string {
 }
 
 function credentialFields(card: string, title: string): Array<{ label: string; value: string }> {
+  const museEmailLink = title.startsWith("Muse") && card.match(/^\s*([^\s@]+@[^\s@]+\.[^\s@]+?)\s*----\s*(https\\?:\/\/\S+)\s*$/);
+  if (museEmailLink) {
+    const address = museEmailLink[2].replace(/^https\\:/, "https:");
+    try {
+      const url = new URL(address);
+      if (url.protocol === "https:" && !url.username && !url.password) return [{ label: "Muse 登录账号", value: museEmailLink[1] }, { label: "邮箱验证码获取地址", value: address }];
+    } catch { /* Preserve unrecognized content. */ }
+  }
   const museFields = title.startsWith("Muse") && card.match(/^([^\s@]+@[^\s@]+\.[^\s@]+)\s*(?:—|–|-{2,}|\|)\s*(.+?)\s*(?:—|–|-{2,}|\|)\s*(https?:\/\/\S+)\s*$/);
   if (museFields) {
     try { const url = new URL(museFields[3]); if (["http:", "https:"].includes(url.protocol)) return [{ label: "Muse 登录账号", value: museFields[1] }, { label: "邮箱密码", value: museFields[2] }, { label: "邮箱验证码获取地址", value: museFields[3] }]; } catch { /* Preserve unrecognized content. */ }
@@ -54,8 +62,8 @@ function credentialFields(card: string, title: string): Array<{ label: string; v
   return [{ label: "交付内容", value: card }];
 }
 
-export function deliveryEmail(input: { title: string; code: string; card: string; instructions?: string; extraHtml?: string; extraText?: string; support?: string; supplierOrderNo?: string }) {
-  const fields = credentialFields(input.card, input.title);
+export function deliveryEmail(input: { title: string; code: string; card: string; preserveCard?: boolean; instructions?: string; extraHtml?: string; extraText?: string; support?: string; supplierOrderNo?: string }) {
+  const fields = input.preserveCard ? [{ label: "完整卡密", value: input.card }] : credentialFields(input.card, input.title);
   const instructions = cleanInstructions(input.instructions || "");
   const support = input.support || "如有问题，请联系 QQ：3557785836。";
   const supplierSupport = input.supplierOrderNo ? `<div style="margin-top:28px;padding:16px;background:#fff7e8;border:1px solid #f0cf8c;border-radius:8px;color:#51370c"><strong style="font-size:16px">售后服务：请直接联系源头售后</strong><div style="margin-top:8px">售后邮箱：<a href="mailto:692972690@qq.com">692972690@qq.com</a></div><div>源头订单编号：<strong style="overflow-wrap:anywhere">${escapeHtml(input.supplierOrderNo)}</strong></div><div>联系售后时，请提供以上源头订单编号，并保留北京时间和登录过程录屏。</div></div>` : "";

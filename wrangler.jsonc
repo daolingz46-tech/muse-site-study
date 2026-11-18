@@ -8,7 +8,7 @@
     { "pattern": "api.musetoken.store", "custom_domain": true },
     { "pattern": "musetoken.store", "custom_domain": true }
   ],
-  "assets": { "directory": "./out", "binding": "ASSETS", "run_worker_first": ["/api/*"] },
+  "assets": { "directory": "./out", "binding": "ASSETS", "run_worker_first": true },
   "d1_databases": [{ "binding": "DB", "database_name": "muse-orders", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "migrations" }],
   "triggers": { "crons": ["*/5 * * * *"] },
   "observability": { "enabled": false }
