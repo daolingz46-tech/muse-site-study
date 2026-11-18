@@ -12,6 +12,7 @@ import { isDirectVisit, rememberReferral, storedReferralCode } from "./referral"
 import "./muse.css";
 import { productPaths } from "@/lib/seo";
 import {trackProduct} from "./traffic-client";
+import { VisitSourceQuestion } from "./VisitSourceQuestion";
 
 type Product = "muse" | "muse-token" | "gpt" | "mail" | "gmail";
 type Dialog = "terms" | "orders" | "support" | "request" | null;
@@ -319,6 +320,7 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
           <ShoppingBag size={16} /> <span>我的订单</span>
         </button>
       </header>
+      <VisitSourceQuestion />
 
       <main className="muse-product-layout" id="muse-product-panel" role="tabpanel" aria-labelledby={`tab-${product}`}>
         <section className={`muse-product-stage ${product === "mail" ? "is-mail" : product === "gmail" ? "is-gmail" : ""}`} aria-label={product === "gmail" ? "Gmail" : product === "mail" ? "Mail.com" : product === "gpt" ? "GPT" : product === "muse" ? "Muse AI" : "Muse Token"} onDragStart={event => event.preventDefault()} onMouseDown={event => event.preventDefault()}>

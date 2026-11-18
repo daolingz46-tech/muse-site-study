@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
+import { VisitSourceQuestion } from "@/components/sites/muse/VisitSourceQuestion";
 import { pageMetadata } from "@/lib/seo";
 import "@/components/sites/muse/muse.css";
 
@@ -32,5 +33,5 @@ export default async function Guide({ params }: { params: Promise<{ slug: string
   const { slug } = await params;
   if (!(slug in guides)) notFound();
   const guide = guides[slug as keyof typeof guides];
-  return <main className="muse-search-content"><h1>{guide.title}</h1><p>本教程说明卡密大王站内购买流程。具体价格、额度和售后条件以当前商品页及所选方案为准。</p><ol>{guide.steps.map(step => <li key={step}>{step}</li>)}</ol><nav><Link href="/account/">查看 Muse AI 账号</Link><Link href="/token/">查看 Muse Token 充值</Link><Link href="/">返回商店</Link></nav></main>;
+  return <main className="muse-search-content"><h1>{guide.title}</h1><VisitSourceQuestion /><p>本教程说明卡密大王站内购买流程。具体价格、额度和售后条件以当前商品页及所选方案为准。</p><ol>{guide.steps.map(step => <li key={step}>{step}</li>)}</ol><nav><Link href="/account/">查看 Muse AI 账号</Link><Link href="/token/">查看 Muse Token 充值</Link><Link href="/">返回商店</Link></nav></main>;
 }

@@ -425,3 +425,29 @@
 .muse-search-content li { margin: 16px 0; }
 
 .muse-logo-inner > img { width: 100%; height: 100%; object-fit: contain; }
+
+.muse-visit-source {
+  width: min(100% - 32px, 960px);
+  margin: 0 auto 24px;
+  padding: 14px 16px;
+  border: 1px solid #dbe6f5;
+  border-radius: 14px;
+  background: #f8faff;
+  color: #233954;
+}
+.muse-visit-source h2 { margin: 0 0 10px; font-size: 15px; }
+.muse-visit-source-options { display: flex; flex-wrap: wrap; gap: 6px; }
+.muse-visit-source-options button {
+  min-height: 36px;
+  padding: 5px 11px;
+  border: 1px solid #c8d8ed;
+  border-radius: 8px;
+  background: #fff;
+  color: #204d8c;
+  font-size: 13px;
+  cursor: pointer;
+}
+.muse-visit-source-options button:not(:disabled):hover { background: #eaf2ff; }
+.muse-visit-source-options button:focus-visible { outline: 2px solid #315ea8; outline-offset: 2px; }
+.muse-visit-source-options button:disabled { opacity: .6; cursor: wait; }
+.muse-visit-source p { margin: 8px 0 0; font-size: 13px; }
