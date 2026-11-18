@@ -1,4 +1,4 @@
-import {campaignLabel,trafficId} from "../../../lib/traffic";
+import {campaignLabel,trafficId,type ReportedSource} from "../../../lib/traffic";
 import {storeApiUrl} from "./store-api";
 type Session={id:string;seen:number;entry:string;payload:Record<string,unknown>};
 let current:Session|null=null;
@@ -13,7 +13,7 @@ function session():Session {
   if(!current || now-current.seen>=1800000 || current.entry!==entry){
     const ua=navigator.userAgent.toLowerCase();
     let referrer=""; try {referrer=new URL(document.referrer).origin;}catch{/* No source provided. */}
-    current={id:crypto.randomUUID(),seen:now,entry,payload:{referrer,page:/^\/(?:muse|gpt|gmail|mail|token)?\/?$/.test(location.pathname)?location.pathname:"/",utmSource:campaignLabel(params.get("utm_source")),utmMedium:campaignLabel(params.get("utm_medium")),utmCampaign:campaignLabel(params.get("utm_campaign")),utmContent:campaignLabel(params.get("utm_content")),referralCode:/^[a-f0-9]{32}$/.test(params.get("ref")||"")?params.get("ref"):"",device:/ipad|tablet/.test(ua)?"tablet":/mobile|android|iphone/.test(ua)?"mobile":"desktop",wechat:/micromessenger/.test(ua)}};
+    current={id:crypto.randomUUID(),seen:now,entry,payload:{referrer,page:/^\/(?:muse|account|gpt|gmail|mail|token|guides\/muse-(?:account|token))?\/?$/.test(location.pathname)?location.pathname:"/",utmSource:campaignLabel(params.get("utm_source")),utmMedium:campaignLabel(params.get("utm_medium")),utmCampaign:campaignLabel(params.get("utm_campaign")),utmContent:campaignLabel(params.get("utm_content")),referralCode:/^[a-f0-9]{32}$/.test(params.get("ref")||"")?params.get("ref"):"",device:/ipad|tablet/.test(ua)?"tablet":/mobile|android|iphone/.test(ua)?"mobile":"desktop",wechat:/micromessenger/.test(ua)}};
   }
   current.seen=now;
   try {sessionStorage.setItem("muse-traffic-v1",JSON.stringify(current));}catch{/* Continue without persistent storage. */}
@@ -24,6 +24,20 @@ export function trackProduct(product:string) {
   if(typeof window==="undefined" || location.hostname!=="musetoken.store")return;
   try {const s=session();pending=fetch(storeApiUrl("/api/traffic"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...s.payload,id:s.id,product}),keepalive:true,signal:AbortSignal.timeout(3000)}).catch(()=>{});}catch{/* Analytics must never block shopping. */}
 }
+export async function reportVisitSource(reportedSource: ReportedSource) {
+  const visit = session();
+  const response = await fetch(storeApiUrl("/api/traffic"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...visit.payload, id: visit.id, reportedSource }),
+    keepalive: true,
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!response.ok || (await response.json()).sourceRecorded !== true) {
+    throw new Error("来源保存失败，请重试");
+  }
+}
+
 export async function currentTrafficId() {
   trackProduct(lastProduct);
   await pending;

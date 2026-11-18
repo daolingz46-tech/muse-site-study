@@ -1291,8 +1291,9 @@ const worker = {
       if (path.startsWith("/api/agent/")) return withCors(await agentApi(env, request, path, ctx));
       if (path === "/api/traffic" && request.method === "POST") {
         await limit(env,request,"traffic",60,60);
-        if (!await recordTraffic(env.DB,await body(request))) throw new HttpError(400,"访问记录无效");
-        return withCors(json({ok:true}));
+        const input = await body(request);
+        if (!await recordTraffic(env.DB,input)) throw new HttpError(400,"访问记录无效");
+        return withCors(json(input.reportedSource === undefined ? {ok:true} : {ok:true,sourceRecorded:true}));
       }
       if (path === "/api/visit" && request.method === "POST") {
         await limit(env, request, "visit", 60, 60);

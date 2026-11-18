@@ -1,18 +1,27 @@
 import type {D1Database} from "@cloudflare/workers-types";
-import { classifyTraffic, trafficId } from "../src/lib/traffic";
+import { classifyTraffic, isReportedSource, trafficId } from "../src/lib/traffic";
 
 export async function recordTraffic(db:D1Database,input:Record<string,unknown>,now=Date.now()) {
   const id=typeof input.id==="string" ? input.id : "";
-  if (!trafficId.test(id)) return false;
+  const reported = input.reportedSource;
+  if (!trafficId.test(id) || (reported !== undefined && !isReportedSource(reported))) return false;
   const v=classifyTraffic(input);
   const referral=typeof input.referralCode==="string" && /^[a-f0-9]{32}$/.test(input.referralCode) ? input.referralCode : "";
   const product=["muse","muse-token","gpt","gmail","mail"].includes(String(input.product)) ? String(input.product) : "muse";
-  await db.batch([
+  const statements = [
     db.prepare("INSERT OR IGNORE INTO visits(id,page,source,device,createdAt) VALUES(?,?,?,?,?)").bind(id,v.page,v.channel==="search" ? "search" : v.channel==="social" ? "social" : v.channel==="wechat" ? "wechat" : v.channel==="unknown" ? "direct" : "external",v.device,now),
     db.prepare("INSERT OR IGNORE INTO traffic_visits(id,channel,platform,referrerHost,medium,campaign,content,landingPage,evidence,device,wechat,agentId,createdAt,lastSeenAt) VALUES(?,?,?,?,?,?,?,?,?,?,?,(SELECT id FROM agents WHERE referralCode=? AND status='active'),?,?)").bind(id,v.channel,v.platform,v.host,v.medium,v.campaign,v.content,v.page,v.evidence,v.device,v.wechat,referral,now,now),
     db.prepare("UPDATE traffic_visits SET lastSeenAt=? WHERE id=? AND createdAt>=?").bind(now,id,now-86400000),
-    db.prepare("INSERT OR IGNORE INTO traffic_views(visitId,product) SELECT id,? FROM traffic_visits WHERE id=? AND createdAt>=?").bind(product,id,now-86400000),
-  ]);
+  ];
+  if (isReportedSource(reported)) {
+    statements.push(db.prepare("INSERT OR IGNORE INTO traffic_source_answers(visitId,source,answeredAt) SELECT id,?,? FROM traffic_visits WHERE id=? AND createdAt>=?").bind(reported,now,id,now-86400000));
+  } else {
+    statements.push(db.prepare("INSERT OR IGNORE INTO traffic_views(visitId,product) SELECT id,? FROM traffic_visits WHERE id=? AND createdAt>=?").bind(product,id,now-86400000));
+  }
+  await db.batch(statements);
+  if (isReportedSource(reported)) {
+    return !!await db.prepare("SELECT visitId FROM traffic_source_answers WHERE visitId=?").bind(id).first();
+  }
   return true;
 }
 export function trafficOrderStatement(db:D1Database,id:string,requestHash:string,input:unknown,now:number) {
@@ -25,5 +34,9 @@ export async function trafficReport(db:D1Database,days:number,now=Date.now()) {
   const rows=await db.prepare(query).bind(since).all();
   const recent=await db.prepare("SELECT v.platform,v.channel,v.referrerHost,v.landingPage,v.evidence,v.device,v.wechat,v.createdAt,v.campaign,v.content,g.name AS agentName FROM traffic_visits v LEFT JOIN agents g ON g.id=v.agentId WHERE v.createdAt>=? ORDER BY v.createdAt DESC LIMIT 50").bind(since).all();
   const missing=await db.prepare("SELECT COUNT(*) AS orders FROM orders o WHERE o.createdAt>=? AND NOT EXISTS(SELECT 1 FROM traffic_orders t WHERE t.orderId=o.id)").bind(since).first();
-  return {days,rows:rows.results,recent:recent.results,unattributedOrders:missing?.orders || 0};
+  const reported = await db.prepare(`SELECT a.source, COUNT(*) AS responses,
+    SUM((SELECT COUNT(*) FROM traffic_orders t JOIN orders o ON o.id=t.orderId
+      WHERE t.visitId=a.visitId AND o.paidAt IS NOT NULL AND o.status IN ('processing','complete'))) AS paidOrders
+    FROM traffic_source_answers a WHERE a.answeredAt>=? GROUP BY a.source ORDER BY responses DESC,a.source`).bind(since).all();
+  return {days,rows:rows.results,recent:recent.results,reportedSources:reported.results,unattributedOrders:missing?.orders || 0};
 }

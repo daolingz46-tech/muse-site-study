@@ -1092,6 +1092,9 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal((await call("/api/admin/traffic?days=7")).status,401);
     assert.equal((await call("/api/traffic",payload)).status,200);
     await call("/api/traffic",{...payload,referrer:"https://evil.example/",product:"gpt"});
+    assert.equal((await call("/api/traffic",{...payload,reportedSource:"xiaohongshu"})).data.sourceRecorded,true);
+    assert.equal((await call("/api/traffic",{...payload,reportedSource:"douyin"})).status,200);
+    assert.equal((await call("/api/traffic",{...payload,reportedSource:"private@example.com"})).status,400);
     const saved=await db.prepare("SELECT * FROM traffic_visits WHERE id=?").bind(visit).first();
     assert.equal(saved.platform,"Google");assert.equal(saved.channel,"search");assert.equal(saved.referrerHost,"www.google.com");assert.equal(saved.wechat,1);assert.doesNotMatch(JSON.stringify(saved),/PRIVATE-QUERY/);
     const orderInput={product:"muse",planId:"warranty",email:"traffic-test@example.com",method:"alipay",acceptedTerms:true,requestId:randomUUID(),trafficId:visit};
@@ -1101,6 +1104,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
     await call("/api/admin/update",{id:created.data.id,action:"confirm"},session);
     await call("/api/orders",{...orderInput,trafficId:randomUUID()});
     report=(await call("/api/admin/traffic?days=7",undefined,session)).data;row=report.rows.find(x=>x.platform==="Google");assert.equal(row.paidOrders,1);assert.equal(row.revenueCents,1800);assert.equal(row.convertedVisits,1);assert.doesNotMatch(JSON.stringify(report),/traffic-test|PRIVATE-QUERY/);
+    assert.deepEqual(report.reportedSources,[{source:"xiaohongshu",responses:1,paidOrders:1}]);
     const detail=await call(`/api/admin/traffic-order?id=${created.data.id}`,undefined,session);assert.equal(detail.data.source.platform,"Google");
     assert.equal((await call("/api/admin/traffic?days=-1",undefined,session)).status,400);
     assert.equal((await call("/api/traffic",{...payload,id:"bad"})).status,400);

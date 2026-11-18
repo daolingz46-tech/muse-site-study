@@ -1,3 +1,23 @@
+export const reportedSources = [
+  ["xiaohongshu", "小红书"],
+  ["douyin", "抖音"],
+  ["wechat", "微信群 / 朋友圈"],
+  ["wechat_channels", "微信视频号"],
+  ["wechat_official", "微信公众号"],
+  ["bilibili", "B 站"],
+  ["search", "搜索引擎"],
+  ["ai", "AI 推荐"],
+  ["friend", "朋友推荐"],
+  ["other", "其他渠道"],
+  ["unsure", "记不清了"],
+] as const;
+
+export type ReportedSource = (typeof reportedSources)[number][0];
+
+export function isReportedSource(value: unknown): value is ReportedSource {
+  return reportedSources.some(([source]) => source === value);
+}
+
 export const trafficId = /^[a-f0-9-]{36}$/i;
 export function campaignLabel(value: unknown): string {
   return typeof value === "string" && /^[\p{L}\p{N}_.-]{1,64}$/u.test(value) ? value.toLowerCase() : "";
@@ -15,6 +35,6 @@ export function classifyTraffic(input: Record<string,unknown>) {
   const match=domains.slice().sort((a,b)=>b[0].length-a[0].length).find(([domain])=>host===domain || host.endsWith(`.${domain}`));
   const channel=source ? "campaign" : match?.[2] || (host ? "external" : "unknown");
   const platform=source || match?.[1] || host || "来源未知";
-  const page=typeof input.page==="string" && /^\/(?:muse|gpt|gmail|mail|token)?\/?$/.test(input.page) ? input.page : "/";
+  const page=typeof input.page==="string" && /^\/(?:muse|account|gpt|gmail|mail|token|guides\/muse-(?:account|token))?\/?$/.test(input.page) ? input.page : "/";
   return {channel,platform,host,medium,campaign,content,page,evidence:source ? "tag" : host ? "referrer" : "unknown",device:["mobile","tablet","desktop"].includes(String(input.device)) ? String(input.device) : "desktop",wechat:input.wechat===true ? 1 : 0};
 }
