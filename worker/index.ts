@@ -479,7 +479,14 @@ const muse274Guide = `1. 复制全部卡密，不要遗漏。
 const visaTopupGuide = `GPT Plus 正规代充：为自己的账号充值，不是成品账号。账号必须处于 Free 免费版，不能覆盖 Go、Plus 或 Pro 等已有订阅。请按照以下卡密附带的兑换教程操作。供货商说明充值成功后提供 30 天订阅质保，封号不在质保范围；如有问题请联系店主。`;
 const philippinesSupplierGuide = `菲律宾渠道 GPT Plus 代充，账号须为 Free 状态，不能覆盖已有订阅。订阅异常掉落或失效（非账号自身原因）时，请联系店主并提供订单信息，按供货商售后规则处理。封号或账号风控问题不在该供货商售后范围内。`;
 const halfPriceTopupGuide = `本商品为菲律宾渠道 Plus 一个月半价代充，使用前请先确认账号有半价资格。\n账号须为 Free 状态，不能覆盖已有订阅。新号及老号均可使用，具体以账号资格为准。\n可参考资格查询文档：https://docs.qq.com/doc/DY2plWm9pdVhXb0Fs\n供货商说明提供 30 天订阅质保；封号不在其质保范围。请保留订单信息，遇到问题及时联系店主。`;
-const museToken300Supplier = { goodsNo: "G55108222" };
+const museToken300Supplier = { goodsNo: "G47298847" };
+const museToken300RedemptionGuide = `Muse Token 300 亿自助兑换（可分次使用）
+1. 打开兑换页面 https://boost.ppure.cc/ ，输入本邮件中的兑换码。
+2. 填写要充值的 Muse 账号的 6 位大写邀请码，核对无误后提交兑换。
+3. 等待系统处理，在兑换页面的订单记录中查看充值结果。
+
+每份为 10 亿 Token，共 30 份。每个 Muse 账号的累计充值上限为 300 亿 Token，请先确认账号剩余额度，再选择本次充值份数。
+请妥善保管兑换码。如遇充值失败或未到账，请联系店主核查。`;
 function isMuseToken300(order: Pick<Row, "product" | "title">) {
   return order.product === "muse-token" && order.title === "Muse Token · 300亿 Token";
 }
@@ -1086,7 +1093,7 @@ async function admin(env: Env, request: Request, path: string) {
       const apiMailGuide = goodsNo === "G27467630" ? muse274Guide : "";
 
       if (["G55108222","G17614190","G24324524","G53967132","G19335525","G75777360"].includes(goodsNo) && !rawInstruction) throw new HttpError(409,"货源未返回专属教程，已采购，请核查教程后再发货，勿重复采购。");
-      const instruction = goodsNo === "G27467630" ? apiMailGuide : goodsNo === "G55108222" ? ["兑换网址：https://muse.dasaobi.top/\n使用收到的卡密，按兑换页面指引完成兑换。如有问题请联系客服。", rawInstruction].join("\n\n") : goodsNo === "G43844575" ? muse438Guide : goodsNo === "G66668406" ? muse666Guide : goodsNo === "G88230690" ? [gmailBackupGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G30430004" ? [gmailAccountGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G82369242" ? vietnamPlusGuide : goodsNo === "G94215456" ? [plus15NewGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G39595340" ? [plusAccountGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G42078548" ? freeAccountGuide : goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G63757710" ? supplier637Guide : goodsNo === "G88655555" ? qualificationGuide : goodsNo === "G17614190" ? [halfPriceTopupGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G24324524" ? [visaTopupGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G53967132" ? [philippinesSupplierGuide,rawInstruction].filter(Boolean).join("\n\n") : rawInstruction || fallback;
+      const instruction = goodsNo === museToken300Supplier.goodsNo ? museToken300RedemptionGuide : goodsNo === "G27467630" ? apiMailGuide : goodsNo === "G55108222" ? ["兑换网址：https://muse.dasaobi.top/\n使用收到的卡密，按兑换页面指引完成兑换。如有问题请联系客服。", rawInstruction].join("\n\n") : goodsNo === "G43844575" ? muse438Guide : goodsNo === "G66668406" ? muse666Guide : goodsNo === "G88230690" ? [gmailBackupGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G30430004" ? [gmailAccountGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G82369242" ? vietnamPlusGuide : goodsNo === "G94215456" ? [plus15NewGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G39595340" ? [plusAccountGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G42078548" ? freeAccountGuide : goodsNo === "G95786160" ? newQualificationGuide : goodsNo === "G63757710" ? supplier637Guide : goodsNo === "G88655555" ? qualificationGuide : goodsNo === "G17614190" ? [halfPriceTopupGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G24324524" ? [visaTopupGuide,rawInstruction].filter(Boolean).join("\n\n") : goodsNo === "G53967132" ? [philippinesSupplierGuide,rawInstruction].filter(Boolean).join("\n\n") : rawInstruction || fallback;
       const saved = await env.DB.prepare("UPDATE supplier_fulfillment SET state='ready',card=?,instruction=?,updatedAt=? WHERE orderId=? AND state='awaiting'").bind(card, instruction, Date.now(), id).run();
       if (!saved.meta.changes) throw new HttpError(409, "订单正在处理，请刷新");
       task = { ...task, state: "ready", card, instruction };
