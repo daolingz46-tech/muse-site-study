@@ -5,6 +5,7 @@ export const reportedSources = [
   ["wechat_channels", "微信视频号"],
   ["wechat_official", "微信公众号"],
   ["bilibili", "B 站"],
+  ["twitter", "推特（X）"],
   ["search", "搜索引擎"],
   ["ai", "AI 推荐"],
   ["friend", "朋友推荐"],
@@ -23,6 +24,7 @@ export function campaignLabel(value: unknown): string {
   return typeof value === "string" && /^[\p{L}\p{N}_.-]{1,64}$/u.test(value) ? value.toLowerCase() : "";
 }
 const domains: [string,string,string][] = [
+  ["x.com","推特（X）","social"],["twitter.com","推特（X）","social"],["t.co","推特（X）","social"],
   ["google.com","Google","search"],["google.com.hk","Google","search"],["baidu.com","百度","search"],["bing.com","Bing","search"],["sogou.com","搜狗","search"],["so.com","360 搜索","search"],
   ["chatgpt.com","ChatGPT","ai"],["chat.openai.com","ChatGPT","ai"],["perplexity.ai","Perplexity","ai"],["gemini.google.com","Gemini","ai"],["claude.ai","Claude","ai"],["deepseek.com","DeepSeek","ai"],["doubao.com","豆包","ai"],
   ["xiaohongshu.com","小红书","social"],["xhslink.com","小红书","social"],["douyin.com","抖音","social"],["weibo.com","微博","social"],["zhihu.com","知乎","social"],["bilibili.com","哔哩哔哩","social"],["mp.weixin.qq.com","微信公众号","wechat"],

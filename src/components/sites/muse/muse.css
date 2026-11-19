@@ -451,3 +451,14 @@
 .muse-visit-source-options button:focus-visible { outline: 2px solid #315ea8; outline-offset: 2px; }
 .muse-visit-source-options button:disabled { opacity: .6; cursor: wait; }
 .muse-visit-source p { margin: 8px 0 0; font-size: 13px; }
+.muse-visit-source .muse-visit-source-reward {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid #ffd08a;
+  border-radius: 8px;
+  background: #fff1d6;
+  color: #743700;
+  font-size: 14px;
+  font-weight: 600;
+}
+.muse-visit-source-reward strong { font-size: 16px; }
