@@ -28,8 +28,8 @@ test("订单、收款核实和交付的数据库流程", async t => {
     if (new URL(request.url).hostname === "www.16688.com.cn") {
       const path = new URL(request.url).pathname;
       const params = await request.json();
-      if (path.endsWith("/quotePrice")) return supplierQuoteErrors.has(params.goods_no) ? Response.json(supplierQuoteErrors.get(params.goods_no)) : Response.json({ code: 1, data: { balance_enough: supplierBalanceEnough, available_quantity: emptyGoods.has(params.goods_no) ? 0 : supplierStock, total_amount: supplierQuotePrices.get(params.goods_no) ?? (params.goods_no === "G27467630" ? 5.8 : params.goods_no === "G55108222" ? 7 : params.goods_no === "G88230690" ? 12.61 : params.goods_no === "G30430004" ? 4.85 : params.goods_no === "G42078548" ? 0.05 : params.goods_no === "G85161614" ? params.quantity * 1.03 : params.goods_no === "G82369242" ? 60.6 : params.goods_no === "G17614190" ? 58.5 : ["G95786160", "G88655555", "G75777360", "G63757710"].includes(params.goods_no) ? 3.10 : ["G37376813", "G43844575", "G66668406"].includes(params.goods_no) ? 4.12 : params.goods_no === "G39595340" ? 11.31 : params.goods_no === "G94215456" ? 40.65 : 110) } });
-      if (path.endsWith("/create")) { supplierGoods = params.goods_no; supplierQuantity = params.quantity; supplierRemark = params.remark; supplierPurchases++; if (supplierTimeout) throw new Error("simulated network failure"); return Response.json({ code: 1, data: { trade_no: params.goods_no === "G88230690" ? "BATCH-16688" : "TEST-16688", total_amount: params.goods_no === "G55108222" ? 7 : params.goods_no === "G88230690" ? 12.61 : params.goods_no === "G75777360" ? 3.27 : 3.10 } }); }
+      if (path.endsWith("/quotePrice")) return supplierQuoteErrors.has(params.goods_no) ? Response.json(supplierQuoteErrors.get(params.goods_no)) : Response.json({ code: 1, data: { balance_enough: supplierBalanceEnough, available_quantity: emptyGoods.has(params.goods_no) ? 0 : supplierStock, total_amount: supplierQuotePrices.get(params.goods_no) ?? (params.goods_no === "G27467630" ? 5.8 : params.goods_no === "G47298847" ? 14.39 : params.goods_no === "G88230690" ? 12.61 : params.goods_no === "G30430004" ? 4.85 : params.goods_no === "G42078548" ? 0.05 : params.goods_no === "G85161614" ? params.quantity * 1.03 : params.goods_no === "G82369242" ? 60.6 : params.goods_no === "G17614190" ? 58.5 : ["G95786160", "G88655555", "G75777360", "G63757710"].includes(params.goods_no) ? 3.10 : ["G37376813", "G43844575", "G66668406"].includes(params.goods_no) ? 4.12 : params.goods_no === "G39595340" ? 11.31 : params.goods_no === "G94215456" ? 40.65 : 110) } });
+      if (path.endsWith("/create")) { supplierGoods = params.goods_no; supplierQuantity = params.quantity; supplierRemark = params.remark; supplierPurchases++; if (supplierTimeout) throw new Error("simulated network failure"); return Response.json({ code: 1, data: { trade_no: params.goods_no === "G88230690" ? "BATCH-16688" : "TEST-16688", total_amount: params.goods_no === "G47298847" ? 14.39 : params.goods_no === "G88230690" ? 12.61 : params.goods_no === "G75777360" ? 3.27 : 3.10 } }); }
       if (path.endsWith("/query") && params.trade_no === "INVENTORY-ORDER") return Response.json({ code: 1, data: { goods_no: "G37376813", status: 4, cards: [{ code: "stock@example.com—pass--https://example.com/code" }], instruction: "说明" } });
       if (path.endsWith("/query") && params.trade_no === "BATCH-16688") return Response.json({code:1,data:{goods_no:"G88230690",status:4,total_amount:12.61,cards:[{code:"new-batch-a"},{code:"new-batch-b"},{code:"new-batch-c"}]}});
       if (path.endsWith("/query") && params.trade_no === "GMAIL-BACKUP") return Response.json({code:1,data:{goods_no:"G88230690",status:4,cards:[{code:"backup-card-a"},{code:"backup-card-b"},{code:"backup-card-c"}]}});
@@ -890,19 +890,34 @@ test("订单、收款核实和交付的数据库流程", async t => {
     assert.equal(supplierPurchases,before);
     supplierStock=1;
     const quote=(await call("/api/admin/supplier-preview",{id:order.id},session)).data;
-    assert.equal(quote.goodsNo,"G55108222");assert.equal(quote.total,7);
-    const payload={id:order.id,expectedGoodsNo:quote.goodsNo,expectedCents:700};
+    assert.equal(quote.goodsNo,"G47298847");assert.equal(quote.total,14.39);
+    const payload={id:order.id,expectedGoodsNo:quote.goodsNo,expectedCents:1439};
     assert.equal((await call("/api/admin/supplier-deliver",payload,session)).status,200);
-    assert.equal(supplierGoods,"G55108222");assert.equal(supplierQuantity,1);
+    assert.equal(supplierGoods,"G47298847");assert.equal(supplierQuantity,1);
     const mail=sentMessages.findLast(m=>m.to==="token-guest@example.com");
-    assert.match(mail.text,/TEST-CARD/);assert.match(mail.text,/muse\.dasaobi\.top/);assert.match(mail.text,/example\.com\/redeem/);assert.doesNotMatch(mail.html,/<h3>使用说明<\/h3><p>打开/);
+    assert.match(mail.text,/TEST-CARD/);
+    assert.match(mail.text,/6 位大写邀请码/);
+    assert.match(mail.text,/10 亿 Token，共 30 份/);
+    assert.match(mail.html,/href="https:\/\/boost\.ppure\.cc\/"/);
+    assert.doesNotMatch(mail.text,/dasaobi|example\.com\/redeem/);
     assert.equal((await call("/api/orders/lookup",order)).data.delivery.method,"email");
     assert.equal((await call("/api/admin/supplier-deliver",payload,session)).status,409);assert.equal(supplierPurchases,before+1);
-    const missing=await make("token-missing@example.com");await call("/api/admin/update",{id:missing.id,action:"confirm"},session);supplierNoInstructions=true;
+    const noGuide=await make("token-new-no-guide@example.com");
+    await call("/api/admin/update",{id:noGuide.id,action:"confirm"},session);
+    supplierNoInstructions=true;
+    assert.equal((await call("/api/admin/supplier-deliver",{...payload,id:noGuide.id},session)).status,200);
+    assert.match(sentMessages.findLast(m=>m.to==="token-new-no-guide@example.com").text,/boost\.ppure\.cc/);
+
+    const missing=await make("token-missing@example.com");
+    await call("/api/admin/update",{id:missing.id,action:"confirm"},session);
+    await db.prepare("INSERT INTO supplier_fulfillment(orderId,state,tradeNo,instruction,updatedAt) VALUES(?,'awaiting','TEST-LEGACY','source:G55108222',?)").bind(missing.id,Date.now()).run();
     assert.equal((await call("/api/admin/supplier-deliver",{...payload,id:missing.id},session)).status,409);
     assert.ok(!sentMessages.some(m=>m.to==="token-missing@example.com"));
     const count=supplierPurchases;supplierNoInstructions=false;
     assert.equal((await call("/api/admin/supplier-deliver",{id:missing.id},session)).status,200);assert.equal(supplierPurchases,count);
+    const legacyMail=sentMessages.findLast(m=>m.to==="token-missing@example.com");
+    assert.match(legacyMail.text,/muse\.dasaobi\.top/);
+    assert.doesNotMatch(legacyMail.text,/boost\.ppure\.cc/);
     const failed=await make("token-failed@example.com");await call("/api/admin/update",{id:failed.id,action:"confirm"},session);supplierTimeout=true;
     assert.equal((await call("/api/admin/supplier-deliver",{...payload,id:failed.id},session)).status,502);const n=supplierPurchases;supplierTimeout=false;
     assert.equal((await call("/api/admin/supplier-deliver",{id:failed.id},session)).status,409);assert.equal(supplierPurchases,n);
@@ -918,7 +933,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
     const customQuote=await call("/api/admin/catalog-suppliers",{key:"custom:stock-custom-test"},session);assert.equal(customQuote.status,200);assert.equal(customQuote.data.items[0].goodsNo,"G12345678");
     await db.prepare("DELETE FROM custom_products WHERE id=?").bind("stock-custom-test").run();
     const token=await call("/api/admin/catalog-suppliers",{key:"token:300亿 Token"},session);
-    assert.equal(token.status,200);assert.equal(token.data.items[0].goodsNo,"G55108222");
+    assert.equal(token.status,200);assert.equal(token.data.items[0].goodsNo,"G47298847");
     assert.equal((await call("/api/admin/catalog-suppliers",{key:"not-valid"},session)).status,400);
   });
 
