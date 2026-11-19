@@ -52,6 +52,7 @@ export function VisitSourceQuestion() {
   if (!visible) return null;
   return (
     <section className="muse-visit-source" aria-label="首次访问来源">
+      <p className="muse-visit-source-reward">下单购买并完成问卷，即可获赠 <strong>10 亿 Muse Token</strong> 额度</p>
       <h2>你是从哪里知道卡密大王的？</h2>
       <div className="muse-visit-source-options">
         {reportedSources.map(([source, label]) => (
