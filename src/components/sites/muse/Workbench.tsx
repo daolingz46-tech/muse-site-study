@@ -27,6 +27,7 @@ type Tutorial = { title: string; blocks: TutorialBlock[]; updatedAt: number | nu
 type DeliveryFile = { id: string; name: string; mime: string; size: number; uploadedBytes: number };
 type CatalogProduct = { key: string; category: string; title: string; supplier: string | null; sales: number };
 type StockItem = { goodsNo:string; name:string; priority:string; stock:number|null; quoteQuantity:number; quoteMessage?:string };
+type CatalogQuotes = { items: (StockItem & { unitPrice: number | null; total: number | null; balanceEnough?: boolean | null })[] };
 type StockResults = Record<string, StockItem[] | null>;
 const missingStockMessages = new Set(["商品已下架","该商品已下架","商品不存在","该商品不存在","商品不存在或已下架","货源商品不存在或已下架","商品已售罄","该商品已售罄","库存不足","商品库存不足","商品无库存","商品已删除"]);
 function stockState(item:StockItem): "missing" | "unknown" | "available" {
@@ -43,8 +44,8 @@ function pushKeyBytes(key: string) {
   return Uint8Array.from(decoded, char => char.charCodeAt(0));
 }
 class ApiError extends Error { constructor(public status: number, message: string) { super(message); } }
-async function api(path: string, input?: unknown) {
-  const response = await fetch(storeApiUrl(`/api/admin/${path}`), { method: input === undefined ? "GET" : "POST", headers: input === undefined ? {} : { "Content-Type": "application/json" }, body: input === undefined ? undefined : JSON.stringify(input), credentials: "include", cache: "no-store", signal: AbortSignal.timeout(["send-delivery", "supplier-deliver", "supplier-preview"].includes(path) ? 90000 : 15000) });
+async function api(path: string, input?: unknown, timeoutMs = ["send-delivery", "supplier-deliver", "supplier-preview"].includes(path) ? 90000 : 15000) {
+  const response = await fetch(storeApiUrl(`/api/admin/${path}`), { method: input === undefined ? "GET" : "POST", headers: input === undefined ? {} : { "Content-Type": "application/json" }, body: input === undefined ? undefined : JSON.stringify(input), credentials: "include", cache: "no-store", signal: AbortSignal.timeout(timeoutMs) });
   const data = await response.json().catch(() => null);
   if (!response.ok) throw new ApiError(response.status, data?.message || "工作台连接失败，请稍后重试");
   return data;
@@ -106,6 +107,16 @@ export function Workbench() {
   const [stockBusy,setStockBusy] = useState(false);
   const [stockCheckedAt,setStockCheckedAt] = useState<number|null>(null);
   const stockRunning=useRef(false),stockDay=useRef("");
+  const pendingQuotes = useRef(new Map<string, Promise<CatalogQuotes>>());
+  const loadCatalogQuotes = useCallback((key: string) => {
+    const pending = pendingQuotes.current.get(key);
+    if (pending) return pending;
+    const request: Promise<CatalogQuotes> = api("catalog-suppliers", { key }, 25000).finally(() => {
+      pendingQuotes.current.delete(key);
+    });
+    pendingQuotes.current.set(key, request);
+    return request;
+  }, []);
   const refreshStock = useCallback(async () => {
     if (stockRunning.current) return;
     stockRunning.current=true; setStockBusy(true);
@@ -113,14 +124,14 @@ export function Workbench() {
       const data: {products:CatalogProduct[]} = await api("catalog");
       setCatalog(data.products);
       const entries=await Promise.all(data.products.filter(item=>item.supplier).map(async item=>{
-        try { const result: {items:StockItem[]} = await api("catalog-suppliers",{key:item.key}); return [item.key,Array.isArray(result.items) && result.items.length ? result.items : null] as const; }
+        try { const result = await loadCatalogQuotes(item.key); return [item.key,Array.isArray(result.items) && result.items.length ? result.items : null] as const; }
         catch { return [item.key,null] as const; }
       }));
       setStockResults(Object.fromEntries(entries)); setStockCheckedAt(Date.now());
       stockDay.current=new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Shanghai",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
     } catch { setStockResults({}); setStockCheckedAt(null); }
     finally { stockRunning.current=false; setStockBusy(false); }
-  }, []);
+  }, [loadCatalogQuotes]);
   useEffect(() => {
     if (auth !== "ready") return;
     void refreshStock();
@@ -130,10 +141,29 @@ export function Workbench() {
     },60000);
     return ()=>window.clearInterval(timer);
   }, [auth,refreshStock]);
-  const [catalogChoice,setCatalogChoice]=useState<CatalogProduct|null>(null), [catalogSources,setCatalogSources]=useState<{quantity:number;items:{goodsNo:string;quoteQuantity:number;name:string;priority:string;unitPrice:number|null;total:number|null;stock:number|null;quoteMessage?:string;balanceEnough?:boolean|null}[]}|null>(null), [catalogError,setCatalogError]=useState("");
+  const [catalogChoice,setCatalogChoice]=useState<CatalogProduct|null>(null), [catalogSources,setCatalogSources]=useState<CatalogQuotes|null>(null), [catalogError,setCatalogError]=useState("");
   const catalogDialog=useRef<HTMLDialogElement>(null);
-  useEffect(()=>{if(catalogChoice)catalogDialog.current?.showModal();},[catalogChoice]);
-  function openCatalog(product:CatalogProduct){setCatalogChoice(product);setCatalogSources(null);setCatalogError("");void api("catalog-suppliers",{key:product.key}).then(setCatalogSources).catch(cause=>setCatalogError(cause instanceof Error?cause.message:"货源查询失败"));}
+  const catalogRequest = useRef(0);
+  useEffect(() => {
+    if (catalogChoice && catalogDialog.current && !catalogDialog.current.open) catalogDialog.current.showModal();
+  }, [catalogChoice]);
+  function closeCatalog() {
+    catalogRequest.current++;
+    setCatalogChoice(null);
+  }
+  async function openCatalog(product: CatalogProduct) {
+    const request = ++catalogRequest.current;
+    setCatalogChoice(product);
+    setCatalogSources(null);
+    setCatalogError("");
+    try {
+      const quotes = await loadCatalogQuotes(product.key);
+      if (request === catalogRequest.current) setCatalogSources(quotes);
+    } catch (cause) {
+      if (request !== catalogRequest.current) return;
+      setCatalogError(cause instanceof ApiError ? cause.message : "暂时无法获取货源报价，请重试。");
+    }
+  }
 
   const contactDialog = useRef<HTMLDialogElement>(null);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -441,7 +471,7 @@ export function Workbench() {
         {actionError && <p className="wb-error" role="alert">{actionError}</p>}<button className="wb-primary" disabled={selected.status === "processing" && !checked || busy}>{busy ? "保存中…" : selected.status === "processing" ? "确认已完成交付" : "确定"}</button>
       </form>
     </dialog>}
-    {catalogChoice && <dialog ref={catalogDialog} className="wb-dialog wb-source-dialog" onCancel={()=>setCatalogChoice(null)} aria-labelledby="wb-source-title"><button type="button" className="wb-close" aria-label="关闭" onClick={()=>setCatalogChoice(null)}><X size={18}/></button><h2 id="wb-source-title">货源详情</h2><p>{catalogChoice.title}</p>{catalogError && <p className="wb-error" role="alert">{catalogError}</p>}{!catalogSources && !catalogError && <p>正在查询货源价格…</p>}{catalogSources && <><p>价格为当前询价，实际采购时以再次确认的金额为准。</p>{catalogSources.items.map(item=><article className="wb-source-item" key={item.goodsNo}><div><strong>{item.name}</strong><span className="wb-source-badge">{item.priority}</span></div><p>商品编号：{item.goodsNo}</p><p>货源单价：{item.unitPrice == null ? "暂未获取" : `¥${item.unitPrice.toFixed(2)} / 件`}</p><p>询价数量：{item.quoteQuantity} 件</p><p>本次询价：{item.total == null ? "暂未获取" : `¥${item.total.toFixed(2)}（含手续费）`}</p><small>库存：{item.stock == null ? item.quoteMessage || "未确认" : item.stock === 0 ? "缺货" : `${item.stock} 件`}</small>{item.balanceEnough === false && <small className="wb-error">运营钱包余额不足</small>}</article>)}</>}</dialog>}
+    {catalogChoice && <dialog ref={catalogDialog} className="wb-dialog wb-source-dialog" onCancel={closeCatalog} aria-labelledby="wb-source-title"><button type="button" className="wb-close" aria-label="关闭" onClick={closeCatalog}><X size={18}/></button><h2 id="wb-source-title">货源详情</h2><p>{catalogChoice.title}</p>{catalogError && <p className="wb-error" role="alert">{catalogError}</p>}{(catalogError || catalogSources?.items.some(item => stockState(item) === "unknown")) && <button className="wb-action" type="button" onClick={() => void openCatalog(catalogChoice)}>重新询价</button>}{!catalogSources && !catalogError && <p role="status">正在查询货源价格…</p>}{catalogSources && <><p>价格为当前询价，实际采购时以再次确认的金额为准。</p>{catalogSources.items.map(item=><article className="wb-source-item" key={item.goodsNo}><div><strong>{item.name}</strong><span className="wb-source-badge">{item.priority}</span></div><p>商品编号：{item.goodsNo}</p><p>货源单价：{item.unitPrice == null ? "暂未获取" : `¥${item.unitPrice.toFixed(2)} / 件`}</p><p>询价数量：{item.quoteQuantity} 件</p><p>本次询价：{item.total == null ? "暂未获取" : `¥${item.total.toFixed(2)}（含手续费）`}</p><small>库存：{item.stock == null ? item.quoteMessage || "未确认" : item.stock === 0 ? "缺货" : `${item.stock} 件`}</small>{item.balanceEnough === false && <small className="wb-error">运营钱包余额不足</small>}</article>)}</>}</dialog>}
     {costOrder && <dialog ref={costDialog} className="wb-dialog wb-mail-dialog" onCancel={e=>{if(costBusy)e.preventDefault();else setCostOrder(null);}}><button type="button" className="wb-close" aria-label="关闭" disabled={costBusy} onClick={()=>setCostOrder(null)}><X size={18}/></button><form onSubmit={saveCost}><h2>补录采购成本 · 订单 {costOrder.code}</h2><p>填写该订单实际采购信息；总成本包含货源手续费。可稍后从订单中补录或修改。</p><label>货源商<input required maxLength={100} value={costSupplier} onChange={e=>setCostSupplier(e.target.value)} placeholder="例如：货源商名称"/></label><label>商品编号<input required pattern="G[0-9]{4,20}" value={costGoods} onChange={e=>setCostGoods(e.target.value)} placeholder="例如 G12345678"/></label><label>实际采购总成本（元）<input required inputMode="decimal" value={costValue} onChange={e=>setCostValue(e.target.value)} placeholder="包含手续费"/></label>{costError && <p role="alert" className="wb-error">{costError}</p>}<button className="wb-primary" disabled={costBusy}>{costBusy?"保存中…":"保存采购信息"}</button></form></dialog>}
     {externalOrder && <dialog ref={externalDialog} className="wb-dialog wb-mail-dialog" onCancel={e => { if (externalBusy) e.preventDefault(); else setExternalOrder(null); }} aria-labelledby="wb-external-title">
       <button type="button" className="wb-close" aria-label="关闭" disabled={externalBusy} onClick={() => setExternalOrder(null)}><X size={18}/></button>

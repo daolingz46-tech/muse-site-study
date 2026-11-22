@@ -24,7 +24,7 @@ function ordered(value: Parameter): Parameter {
   return value;
 }
 
-export async function supplierRequest(credentials: SupplierCredentials, controller: string, action: string, data: Record<string, Parameter>) {
+export async function supplierRequest(credentials: SupplierCredentials, controller: string, action: string, data: Record<string, Parameter>, timeoutMs = 15000) {
   if (!credentials.appId || !credentials.secret) throw new Error("supplier_credentials_missing");
   const params: Record<string, Parameter> = { ...data, app_id: credentials.appId, timestamp: Math.floor(Date.now() / 1000), nonce: crypto.randomUUID().replaceAll("-", "") };
   const canonical = Object.keys(params).sort().map(key => {
@@ -36,7 +36,7 @@ export async function supplierRequest(credentials: SupplierCredentials, controll
   const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message));
   const sign = Array.from(new Uint8Array(signature), b => b.toString(16).padStart(2, "0")).join("");
   const response = await fetch(`https://www.16688.com.cn/openApi/${controller}/${action}`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...params, sign }), signal: AbortSignal.timeout(15000),
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...params, sign }), signal: AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok) throw new Error(`supplier_http_${response.status}`);
   const result: unknown = await response.json();

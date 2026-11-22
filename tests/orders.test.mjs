@@ -28,6 +28,7 @@ test("订单、收款核实和交付的数据库流程", async t => {
     if (new URL(request.url).hostname === "www.16688.com.cn") {
       const path = new URL(request.url).pathname;
       const params = await request.json();
+      if (path.endsWith("/quotePrice") && supplierQuoteErrors.get(params.goods_no) === "network") throw new Error("simulated supplier quote failure");
       if (path.endsWith("/quotePrice")) return supplierQuoteErrors.has(params.goods_no) ? Response.json(supplierQuoteErrors.get(params.goods_no)) : Response.json({ code: 1, data: { balance_enough: supplierBalanceEnough, available_quantity: emptyGoods.has(params.goods_no) ? 0 : supplierStock, total_amount: supplierQuotePrices.get(params.goods_no) ?? (params.goods_no === "G27467630" ? 5.8 : params.goods_no === "G47298847" ? 14.39 : params.goods_no === "G88230690" ? 12.61 : params.goods_no === "G30430004" ? 4.85 : params.goods_no === "G42078548" ? 0.05 : params.goods_no === "G85161614" ? params.quantity * 1.03 : params.goods_no === "G82369242" ? 60.6 : params.goods_no === "G17614190" ? 58.5 : ["G95786160", "G88655555", "G75777360", "G63757710"].includes(params.goods_no) ? 3.10 : ["G37376813", "G43844575", "G66668406"].includes(params.goods_no) ? 4.12 : params.goods_no === "G39595340" ? 11.31 : params.goods_no === "G94215456" ? 40.65 : 110) } });
       if (path.endsWith("/create")) { supplierGoods = params.goods_no; supplierQuantity = params.quantity; supplierRemark = params.remark; supplierPurchases++; if (supplierTimeout) throw new Error("simulated network failure"); return Response.json({ code: 1, data: { trade_no: params.goods_no === "G88230690" ? "BATCH-16688" : "TEST-16688", total_amount: params.goods_no === "G47298847" ? 14.39 : params.goods_no === "G88230690" ? 12.61 : params.goods_no === "G75777360" ? 3.27 : 3.10 } }); }
       if (path.endsWith("/query") && params.trade_no === "INVENTORY-ORDER") return Response.json({ code: 1, data: { goods_no: "G37376813", status: 4, cards: [{ code: "stock@example.com—pass--https://example.com/code" }], instruction: "说明" } });
@@ -935,6 +936,19 @@ test("订单、收款核实和交付的数据库流程", async t => {
     const token=await call("/api/admin/catalog-suppliers",{key:"token:300亿 Token"},session);
     assert.equal(token.status,200);assert.equal(token.data.items[0].goodsNo,"G47298847");
     assert.equal((await call("/api/admin/catalog-suppliers",{key:"not-valid"},session)).status,400);
+    const purchasesBefore = supplierPurchases;
+    supplierQuoteErrors.set("G53967132","network");
+    try {
+      const partial = await call("/api/admin/catalog-suppliers",{key:"philippinesTopup"},session);
+      assert.equal(partial.status,200);
+      const failed = partial.data.items.find(item => item.goodsNo === "G53967132");
+      assert.equal(failed.stock,null);
+      assert.match(failed.quoteMessage,/重试/);
+      assert.ok(partial.data.items.some(item => item.goodsNo === "G24324524" && item.total > 0));
+      assert.equal(supplierPurchases,purchasesBefore);
+    } finally {
+      supplierQuoteErrors.delete("G53967132");
+    }
   });
 
   await t.test("Mail.com 库存按商品识别且并发分配不重复", async () => {
