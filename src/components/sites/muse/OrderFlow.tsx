@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { ArrowLeft, ArrowRight, Check, CircleCheck, Clock3, Copy, Download, RefreshCw, ShoppingBag, X } from "lucide-react";
-import { formatMoney, supportQQ, type OrderDetails } from "./catalog";
+import { formatMoney, orderHandlingTime, supportQQ, type OrderDetails } from "./catalog";
 import { lookupStoreOrder, reportStorePayment } from "./store-api";
 
 export type StoreOrder = OrderDetails & {
@@ -58,7 +58,7 @@ export function OrderPayment({ order, onBack, onNotify, onOrderUpdate }: {
   }, [refresh, order.status]);
   async function copy(value: string, code = false) {
     try { await navigator.clipboard.writeText(value); if (code) setCopied(true); onNotify(code ? "订单码已复制，付款时请粘贴到备注" : "已复制"); }
-    catch { onNotify("请选中下面的订单码，长按或 Ctrl+C 复制"); }
+    catch { onNotify(code ? "请选中下面的订单码，长按或 Ctrl+C 复制" : "复制失败，请尝试手动复制"); }
   }
   async function report() {
     if (reporting) return; setReporting(true);
@@ -81,9 +81,19 @@ export function OrderPayment({ order, onBack, onNotify, onOrderUpdate }: {
       {!copied && <small>第 1 步：先复制订单码，再勾选确认。</small>}
     </div>}
     {canPay && <><button className="muse-primary" type="button" disabled={!copied || !remark} onClick={() => setQrOpen(true)}>第 2 步：打开{label}收款码 <ArrowRight size={16}/></button><p className="muse-payment-countdown"><Clock3 size={15}/> 请在 <strong>{countdown}</strong> 内付款</p></>}
-    {!canPay && <div className="muse-status-message">{order.status === "reported" ? <><Clock3/><p>你已反馈付款，店主正在核对收款记录。确认后会更新此订单，请勿重复付款。</p></> : order.status === "processing" ? <><RefreshCw/><p>{order.product === "muse-token" ? (order.title === "Muse Token · 300亿 Token" ? "店主正在处理订单，卡密、兑换链接和使用说明将发送到下单邮箱。" : "正在为填写的邀请码充值，通常 10 分钟内到账，拥挤时可能需要 30 分钟。") : order.product === "gpt" ? "店主正在处理订单，发货后卡密将发送到下单邮箱。" : "店主正在准备成品账号，完成后会发到下单邮箱。"}</p></> : order.status === "complete" ? <><CircleCheck/><p>{order.product === "muse-token" && !(order.delivery && "method" in order.delivery && order.delivery.method === "email") ? "充值已完成，请登录你的账号查看余额。" : order.delivery && "method" in order.delivery ? "卡密和使用教程已发到下单邮箱，请检查收件箱及垃圾邮件。" : "交付资料如下，请妥善保存。"}</p></> : <><Clock3/><p>付款时间已结束。若已付款，请反馈给店主核查；尚未付款请重新下单。</p></>}</div>}
+    {!canPay && <div className="muse-status-message" role="status">
+      {order.status === "reported" ? <><Clock3/><p>已收到你的付款反馈，请勿重复付款。店主正在核款，{orderHandlingTime}。</p></>
+        : order.status === "processing" ? <><RefreshCw/><p><strong>{orderHandlingTime}。</strong> 你可以在此查看进度。</p></>
+        : order.status === "complete" ? <><CircleCheck/><p>{order.product === "muse-token" && !(order.delivery && "method" in order.delivery && order.delivery.method === "email") ? "充值已完成，请登录你的账号查看余额。" : order.delivery && "method" in order.delivery ? "卡密和使用教程已发到下单邮箱，请检查收件箱及垃圾邮件。" : "交付资料如下，请妥善保存。"}</p></>
+        : <><Clock3/><p>付款时间已结束。若已付款，请反馈给店主核查；尚未付款请重新下单。</p></>}
+    </div>}
+    {(order.status === "reported" || order.status === "processing") && <div className="muse-token-notice">
+      <strong>添加店主 QQ 好友</strong>
+      <p>QQ <b>{supportQQ}</b>。加好友时请备注订单码 <b>{order.code}</b>，方便店主查询。</p>
+      <div className="muse-order-tools"><button type="button" onClick={() => void copy(supportQQ)}><Copy size={15}/>复制店主 QQ 号</button></div>
+    </div>}
     {order.status === "complete" && order.delivery && "email" in order.delivery && <div className="muse-delivery-fields">{[["账号邮箱", order.delivery.email], ["密码", order.delivery.password], ["接码链接", order.delivery.codeUrl]].map(([name, value]) => <div key={name}><span>{name}</span><div><code>{value}</code><button type="button" aria-label={`复制${name}`} onClick={() => void copy(value)}><Copy size={14}/></button></div></div>)}</div>}
-    {order.stockIssue && order.status === "processing" && <div className="muse-token-notice" role="status"><strong>商品暂时缺货</strong><p>店主正在处理，请留意邮箱中的通知或联系店主。</p></div>}
+    {order.stockIssue && order.status === "processing" && <div className="muse-token-notice" role="status"><strong>商品暂时缺货</strong><p>店主正在安排，请留意订单进度，也可以加 QQ 好友查询。</p></div>}
     <dl className="muse-payment-details"><div><dt>4 位订单码</dt><dd><b>{order.code}</b></dd></div><div><dt>订单号</dt><dd>{order.id}</dd></div><div><dt>{order.product === "muse-token" ? "账号邀请码" : "收件邮箱"}</dt><dd>{order.product === "muse-token" ? order.inviteCode : order.email}</dd></div><div><dt>支付方式</dt><dd>{label}</dd></div><div><dt>金额</dt><dd>¥{total}</dd></div></dl>
     <div className="muse-order-actions"><button type="button" onClick={() => void copy(orderLink(order))}><Copy size={15}/>复制订单链接</button><button type="button" onClick={download}><Download size={15}/>保存订单凭据</button></div>
     <div className="muse-order-tools"><button type="button" onClick={() => void copy(order.id)}><Copy size={15}/>复制订单编号（单独可查）</button></div>
