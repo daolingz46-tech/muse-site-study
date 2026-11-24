@@ -1,9 +1,11 @@
 export { tokenPlans, accountPriceCents, accountTitle } from "@/lib/products";
 
+export const orderHandlingTime = "确认收款后 10 分钟内处理完毕";
+
 export const tokenTerms = [
   { title: "不包含账号", body: "本商品仅提供 Token 充值，请先准备已有的 Muse 账号。" },
   { title: "填写账号邀请码", body: "请填写需要充值的账号邀请码，提交前仔细核对。" },
-  { title: "到账时间", body: "支付后 10 分钟内到账，拥挤时可能需要 30 分钟。" },
+  { title: "处理时间", body: `${orderHandlingTime}。` },
 ];
 
 export type OrderDetails = {

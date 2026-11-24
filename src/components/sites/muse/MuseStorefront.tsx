@@ -5,7 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { ArrowRight, ArrowUpRight, Check, ChevronDown, Mail, MessageCircle, ShoppingBag, Ticket, X } from "lucide-react";
 import { OrderPayment, PurchaseNotice, RecentOrders, orderLink, type StoreOrder } from "./OrderFlow";
-import { accountPriceCents, accountTitle, formatMoney, storeName, supportQQ, tokenPlans, tokenTerms } from "./catalog";
+import { accountPriceCents, accountTitle, formatMoney, orderHandlingTime, storeName, supportQQ, tokenPlans, tokenTerms } from "./catalog";
 import { createStoreOrder, lookupStoreOrder, findStoreOrder, storeApiUrl, type OrderSummary } from "./store-api";
 import { importSavedOrders, readSavedOrders, saveOrder, type SavedOrder } from "./saved-orders";
 import { isDirectVisit, rememberReferral, storedReferralCode } from "./referral";
@@ -362,7 +362,7 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
                     <span className="muse-token-plan-check" aria-hidden="true">{tokenPlanId === plan.id && <Check size={11}/>}</span>
                   </label>)}
                 </fieldset>
-                <div className="muse-token-notice"><strong>需已有 Muse 账号</strong><p>填写账号邀请码即可充值，不包含账号。支付后 10 分钟内到账，拥挤时可能需要 30 分钟。</p></div>
+                <div className="muse-token-notice"><strong>需已有 Muse 账号</strong><p>请填写要充值的 Muse 邀请码。{orderHandlingTime}。</p></div>
                 <div className="muse-email-field muse-invite-field">
                   <label htmlFor="muse-invite-code">账号邀请码 <span className="muse-required-badge">* 必填</span></label>
                   <div className={`muse-input-wrap ${error.includes("邀请码") ? "has-error" : ""}`}><Ticket size={17}/><input id="muse-invite-code" placeholder="必填：请输入需要充值的账号邀请码" required aria-invalid={error.includes("邀请码")} aria-describedby="muse-invite-hint" autoComplete="off" maxLength={128} spellCheck={false} value={inviteCode} onChange={event => { setInviteCode(event.target.value); setError(""); }}/></div>
