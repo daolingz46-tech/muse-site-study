@@ -1,4 +1,3 @@
-import type { D1Database } from "@cloudflare/workers-types";
 import { buildPushPayload, type PushSubscription } from "@block65/webcrypto-web-push";
 import { tokenPlans, accountPriceCents, accountTitle } from "../src/lib/products";
 import { GPT_SUPPLIER_PRODUCTS, MUSE_ACCOUNT_SUPPLIER, supplierRequest } from "./supplier16688";
@@ -8,7 +7,9 @@ import { agentBalance, commissionReconciliation, withdrawalReservation } from ".
 import { createOwnerSession, hasOwnerSession, clearOwnerSession } from "./owner-auth";
 import { applyCommissionControl, type CommissionControlAction } from "./commission-controls";
 
-type Env = { DB: D1Database; ASSETS: { fetch(request: Request): Promise<Response> }; ADMIN_PASSWORD_HASH: string; OWNER_PASSWORD_HASH?: string; RESEND_API_KEY?: string; GMAIL_SCRIPT_URL?: string; GMAIL_SCRIPT_TOKEN?: string; PUSH_PUBLIC_KEY?: string; PUSH_PRIVATE_KEY?: string; SUPPLIER_APP_ID?: string; SUPPLIER_SECRET?: string };
+import { syncTelegramOrders, telegramOrderWebhook, type TelegramOrderEnv } from "./telegram-orders";
+
+type Env = TelegramOrderEnv & { ASSETS: { fetch(request: Request): Promise<Response> }; ADMIN_PASSWORD_HASH: string; OWNER_PASSWORD_HASH?: string; RESEND_API_KEY?: string; GMAIL_SCRIPT_URL?: string; GMAIL_SCRIPT_TOKEN?: string; PUSH_PUBLIC_KEY?: string; PUSH_PRIVATE_KEY?: string; SUPPLIER_APP_ID?: string; SUPPLIER_SECRET?: string };
 type ExecutionContextLike = { waitUntil(promise: Promise<unknown>): void };
 type Row = {
   id: string; requestHash: string; inputHash: string; tokenHash: string; code: string;
@@ -317,7 +318,7 @@ async function agentApi(env: Env, request: Request, path: string) {
   if (path === "/api/agent/logout" && request.method === "POST") { await env.DB.prepare("DELETE FROM agent_sessions WHERE hash=?").bind(await hash(session)).run(); const secure=new URL(request.url).protocol === "https:"; return json({ok:true},200,{"Set-Cookie":`agent_session=; HttpOnly; SameSite=${secure?"None":"Lax"}; Path=/api/agent; Max-Age=0${secure?"; Secure":""}`}); }
   throw new HttpError(404,"接口不存在");
 }
-async function admin(env: Env, request: Request, path: string) {
+async function admin(env: Env, request: Request, path: string, syncTelegram: () => void) {
   if ((path === "/api/admin/login" || path === "/api/admin/mini-login") && request.method === "POST") {
     const miniLogin = path.endsWith("/mini-login");
     if (miniLogin && request.headers.has("Origin")) throw new HttpError(403, "请求来源无效");
@@ -330,6 +331,14 @@ async function admin(env: Env, request: Request, path: string) {
     return miniLogin ? json({ ok: true, session }) : json({ ok: true }, 200, { "Set-Cookie": cookieHeader(request, session, 28800) });
   }
   await requireAdmin(env, request);
+  const affectsDelivery = request.method === "POST" && [
+    "/api/admin/update", "/api/admin/supplier-deliver", "/api/admin/send-delivery", "/api/admin/confirm-external-delivery",
+  ].includes(path);
+  try { return await authenticatedAdmin(env, request, path); }
+  finally { if (affectsDelivery) syncTelegram(); }
+}
+
+async function authenticatedAdmin(env: Env, request: Request, path: string) {
   if (path === "/api/admin/owner-login" && request.method === "POST") {
     await limit(env,request,"owner-login",6,900);
     const input=await body(request), password=typeof input.password === "string" ? input.password : "";
@@ -524,10 +533,17 @@ async function admin(env: Env, request: Request, path: string) {
   if (path === "/api/admin/orders" && request.method === "GET") {
     await expire(env);
     const url = new URL(request.url); const search = str(url.searchParams.get("q")); const status = str(url.searchParams.get("status"), 20); const page = Math.max(0, Math.min(100000, Number(url.searchParams.get("page")) || 0));
+    const telegramRef = url.searchParams.get("telegramRef");
+    const specialStage = status === "attention" || status === "delivery";
     const where = "WHERE (?='' OR code=? OR id=? OR target LIKE ? ESCAPE '\\') AND (?='' OR status=?)";
-    const values = [search, search, search, `%${search.replace(/[\\%_]/g, "\\$&")}%`, status, status];
-    const rows = await env.DB.prepare(`SELECT id,code,product,title,amountCents,target,contactEmail,method,status,createdAt,expiresAt,reportedAt,paidAt,completedAt,reference,updatedAt,(SELECT sentAt FROM delivery_emails WHERE orderId=orders.id) AS emailSentAt,(SELECT sendCount FROM delivery_emails WHERE orderId=orders.id) AS emailSendCount,(SELECT state FROM supplier_fulfillment WHERE orderId=orders.id) AS supplierState,(SELECT tradeNo FROM supplier_fulfillment WHERE orderId=orders.id) AS supplierTradeNo FROM orders ${where} ORDER BY createdAt DESC LIMIT 50 OFFSET ?`).bind(...values, page * 50).all();
-    const count = await env.DB.prepare(`SELECT COUNT(*) AS total FROM orders ${where}`).bind(...values).first();
+    const filters = where +
+      (telegramRef === null ? "" : " AND id=(SELECT orderId FROM telegram_order_messages WHERE ref=?)") +
+      (status === "attention" ? " AND id IN (SELECT id FROM telegram_order_status WHERE stage IN ('purchase_unknown','mail_unknown','stock_issue'))" : "") +
+      (status === "delivery" ? " AND id IN (SELECT id FROM telegram_order_status WHERE status='processing' AND stage NOT IN ('purchase_unknown','mail_unknown','stock_issue'))" : "");
+    const values = [search, search, search, `%${search.replace(/[\\%_]/g, "\\$&")}%`, specialStage ? "" : status, status];
+    if (telegramRef !== null) values.push(/^[0-9a-f]{32}$/.test(telegramRef) ? telegramRef : "");
+    const rows = await env.DB.prepare(`SELECT id,code,product,title,amountCents,target,contactEmail,method,status,createdAt,expiresAt,reportedAt,paidAt,completedAt,reference,updatedAt,(SELECT MAX(contactedAt) FROM telegram_order_messages WHERE orderId=orders.id) AS contactedAt,(SELECT sentAt FROM delivery_emails WHERE orderId=orders.id) AS emailSentAt,(SELECT sendCount FROM delivery_emails WHERE orderId=orders.id) AS emailSendCount,(SELECT state FROM supplier_fulfillment WHERE orderId=orders.id) AS supplierState,(SELECT tradeNo FROM supplier_fulfillment WHERE orderId=orders.id) AS supplierTradeNo FROM orders ${filters} ORDER BY createdAt DESC LIMIT 50 OFFSET ?`).bind(...values, page * 50).all();
+    const count = await env.DB.prepare(`SELECT COUNT(*) AS total FROM orders ${filters}`).bind(...values).first();
     const summary = await env.DB.prepare("SELECT COUNT(*) AS total, COALESCE(SUM(status='reported'),0) AS awaiting, COALESCE(SUM(status='processing'),0) AS processing, COALESCE(SUM(status='complete'),0) AS completed, COALESCE(SUM(CASE WHEN paidAt IS NOT NULL THEN amountCents ELSE 0 END),0) AS revenueCents, COALESCE(SUM(CASE WHEN paidAt>=? THEN amountCents ELSE 0 END),0) AS todayCents FROM orders").bind(Math.floor((Date.now() + 8 * 3600000) / 86400000) * 86400000 - 8 * 3600000).first();
     return json({ orders: rows.results, count, summary, page });
   }
@@ -844,7 +860,9 @@ async function admin(env: Env, request: Request, path: string) {
 }
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContextLike): Promise<Response> {
+    const acceptedAt = Date.now();
     const url = new URL(request.url), path = url.pathname.replace(/\/$/, "");
+    const syncTelegram = () => ctx.waitUntil(syncTelegramOrders(env, acceptedAt).catch(() => console.error("telegram_order_sync_failed")));
     const origin = request.headers.get("Origin");
     const githubPagesOrigin = "https://daolingz46-tech.github.io";
     const corsOrigin = origin === url.origin || origin === githubPagesOrigin ? origin : "";
@@ -860,6 +878,11 @@ const worker = {
       return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
     };
     try {
+      if (path === "/api/telegram/orders" && request.method === "POST") {
+        const response = await telegramOrderWebhook(env, request);
+        if (response.status === 200) syncTelegram();
+        return response;
+      }
       if (!path.startsWith("/api/")) return env.ASSETS.fetch(request);
       if (request.method === "OPTIONS") {
         if (!corsOrigin) throw new HttpError(403, "请求来源无效，请刷新页面");
@@ -889,7 +912,7 @@ const worker = {
         }));
         return withCors(json({ stock: Object.fromEntries(entries) }));
       }
-      if (path.startsWith("/api/admin/")) return withCors(await admin(env, request, path));
+      if (path.startsWith("/api/admin/")) return withCors(await admin(env, request, path, syncTelegram));
       if (path.startsWith("/api/agent/")) return withCors(await agentApi(env, request, path));
       if (path === "/api/visit" && request.method === "POST") {
         await limit(env, request, "visit", 60, 60);
@@ -932,7 +955,11 @@ const worker = {
         catch { throw new HttpError(502, "暂时无法发送，请稍后再试"); }
         return withCors(json({ ok: true }));
       }
-      if (path === "/api/orders") return withCors(await createOrder(env, request, input, ctx));
+      if (path === "/api/orders") {
+        const response = await createOrder(env, request, input, ctx);
+        if (response.status === 201) syncTelegram();
+        return withCors(response);
+      }
       if (path === "/api/orders/find") {
         const identifier = str(input.identifier, 64);
         if (!/^\d{4}$/.test(identifier) && !/^M[a-f0-9]{32}$/i.test(identifier)) throw new HttpError(400, "请输入 4 位订单码或完整订单编号");
@@ -952,7 +979,10 @@ const worker = {
           if (row.status === "pending" || row.status === "expired") {
             const now = Date.now();
             const changed = await env.DB.prepare("UPDATE orders SET status='reported',reportedAt=?,updatedAt=? WHERE id=? AND status IN ('pending','expired')").bind(now, now, row.id).run();
-            if (changed.meta.changes) await queueOrderPush(env, row, "reported", ctx);
+            if (changed.meta.changes) {
+              syncTelegram();
+              await queueOrderPush(env, row, "reported", ctx);
+            }
           }
           const updated = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(row.id).first<Row>();
           await queueOrderEmail(env, updated!, "reported", ctx);
@@ -967,6 +997,15 @@ const worker = {
       return withCors(json({ message: "订单服务暂时不可用，请稍后重试" }, 500));
     }
   },
-  async scheduled(_event: unknown, env: Env) { await expire(env); await sendOrderEmails(env); await sendOrderPushes(env); },
+  async scheduled(_event: unknown, env: Env) {
+    await expire(env);
+    await Promise.all([
+      syncTelegramOrders(env).catch(() => console.error("telegram_order_sync_failed")),
+      (async () => {
+        await sendOrderEmails(env);
+        await sendOrderPushes(env);
+      })(),
+    ]);
+  },
 };
 export default worker;
