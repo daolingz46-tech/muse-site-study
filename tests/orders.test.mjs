@@ -5,6 +5,7 @@ import { readFileSync, mkdirSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import { makeOwnerPasswordHash } from "../worker/owner-auth.ts";
+import { createTelegramAdminLink } from "../worker/telegram-admin.ts";
 
 test("订单、收款核实和交付的数据库流程", async t => {
   mkdirSync("temp/worker", { recursive: true });
@@ -63,6 +64,25 @@ test("订单、收款核实和交付的数据库流程", async t => {
   };
   const input = { product: "muse-token", planId: "100", inviteCode: "TEST-INVITE", method: "wechat", acceptedTerms: true, requestId: randomUUID(), amountCents: 1 };
   let order, session, other;
+  await t.test("Telegram 店主管理员链接仅用一次并可撤销结算权限", async () => {
+    const chatId = "42", site = "https://musetoken.store";
+    await db.prepare("INSERT INTO telegram_delivery_partners(chatId,approvedAt,role) VALUES(?,?,'admin')").bind(chatId,Date.now()).run();
+    const ticket = new URL(await createTelegramAdminLink(db,chatId,"status=reported")).hash.slice(1);
+    const login = origin => mf.dispatchFetch(site + "/api/admin/telegram-login", {
+      method:"POST",headers:{ Origin:origin,"Content-Type":"application/json" },body:JSON.stringify({ticket}),
+    });
+    assert.equal((await login("https://shop.example")).status,403);
+    const response = await login(site);
+    assert.equal(response.status,200);
+    assert.equal((await response.json()).destination,"status=reported");
+    assert.equal((await login(site)).status,401);
+    const cookies = response.headers.getSetCookie().map(cookie=>cookie.split(";")[0]).join("; ");
+    assert.match(cookies,/muse_admin=.*__Secure-muse_owner=/);
+    const settlement = () => mf.dispatchFetch(site+"/api/admin/owner-withdrawals",{headers:{Cookie:cookies}});
+    assert.equal((await settlement()).status,200);
+    await db.prepare("DELETE FROM telegram_delivery_partners WHERE chatId=?").bind(chatId).run();
+    assert.equal((await settlement()).status,401);
+  });
   await t.test("服务器决定价格，4 位订单码包含前导零规则，邀请码必填", async () => {
     assert.equal((await call("/api/orders", { ...input, inviteCode: "" })).status, 400);
     const r = await call("/api/orders", input); assert.equal(r.status, 201); order = r.data;

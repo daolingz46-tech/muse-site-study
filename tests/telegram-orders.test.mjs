@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import { syncTelegramOrders, telegramOrderWebhook } from "../worker/telegram-orders.ts";
+import { consumeTelegramAdminTicket, createTelegramAdminLink } from "../worker/telegram-admin.ts";
 
 test("Telegram order messages, alerts, owner actions and recovery", async t => {
   const mf = new Miniflare(convertV4MiniflareOptions({ workers: [{
@@ -11,7 +12,7 @@ test("Telegram order messages, alerts, owner actions and recovery", async t => {
   }] }));
   t.after(() => mf.dispose());
   const db = await mf.getD1Database("DB");
-  for (const file of ["0001_orders", "0007_delivery_tutorial", "0009_supplier_fulfillment", "0010_stock_notice", "0026_telegram_orders", "0030_telegram_delivery_drafts", "0031_telegram_delivery_partners"]) {
+  for (const file of ["0001_orders", "0007_delivery_tutorial", "0009_supplier_fulfillment", "0010_stock_notice", "0026_telegram_orders", "0030_telegram_delivery_drafts", "0031_telegram_delivery_partners", "0032_telegram_workbench_admin"]) {
     for (const sql of readFileSync(new URL("../migrations/" + file + ".sql", import.meta.url), "utf8").split(";")) {
       if (sql.trim()) await db.prepare(sql).run();
     }
@@ -35,7 +36,7 @@ test("Telegram order messages, alerts, owner actions and recovery", async t => {
   const deliveries = [];
   const webhook = (update, secret = env.TELEGRAM_WEBHOOK_SECRET) => telegramOrderWebhook(env, new Request("https://test.example/api/telegram/orders", {
     method: "POST", headers: { "X-Telegram-Bot-Api-Secret-Token": secret }, body: JSON.stringify(update),
-  }), async input => { deliveries.push(input); return "邮件已发送"; });
+  }), async input => { deliveries.push(input); return "邮件已发送"; }, (chatId, destination) => createTelegramAdminLink(db, chatId, destination));
 
   await insert("historical", now - 60_000);
   await insert("private-order", now);
@@ -125,7 +126,20 @@ test("Telegram order messages, alerts, owner actions and recovery", async t => {
   assert.match(readyAlert.payload.text, /待发货.*0123/s);
   await webhook(partnerCallback(readyAlert.payload.reply_markup.inline_keyboard[0][0].callback_data));
   assert.match(events.at(-1).payload.reply_markup.inline_keyboard[0][0].text, /0123/);
+  assert.equal((await webhook(message(13, "/workbench"))).status, 204);
+  await db.prepare("UPDATE telegram_delivery_partners SET role='admin' WHERE chatId='13'").run();
+  await webhook(message(13, "/start"));
+  assert.match(events.at(-1).payload.text, /待核款.*待发货.*异常/s);
+  await webhook(partnerCallback("web:status=reported"));
+  const link = new URL(events.at(-1).payload.reply_markup.inline_keyboard[0][0].url);
+  assert.equal(link.pathname, "/api/admin/telegram-entry");
+  const ticket = link.hash.slice(1);
+  assert.deepEqual(await consumeTelegramAdminTicket(db, ticket), { chatId: "13", destination: "status=reported" });
+  assert.equal(await consumeTelegramAdminTicket(db, ticket), null);
+  await webhook(message(13, "/workbench"));
+  const pendingTicket = new URL(events.at(-1).payload.reply_markup.inline_keyboard[0][0].url).hash.slice(1);
   await webhook(message(42, "/revoke 13"));
+  assert.equal(await consumeTelegramAdminTicket(db, pendingTicket), null);
   assert.equal((await webhook(partnerCallback(partnerSend))).status, 204);
   await webhook(message(13, "/start"));
   assert.match(events.at(-1).payload.text, /需要店主授权/);

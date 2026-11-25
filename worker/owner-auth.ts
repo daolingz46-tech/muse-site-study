@@ -49,12 +49,25 @@ export async function createOwnerSession(env: OwnerAuthEnv, adminToken: string, 
   const adminHash = await sha256(adminToken);
   const admin = await env.DB.prepare("SELECT expiresAt FROM sessions WHERE hash=? AND expiresAt>?").bind(adminHash, Date.now()).first<{expiresAt:number}>();
   if (!admin || !same(await derive(password, credential.salt, credential.iterations), credential.digest)) return { ok: false, reason: "unauthorized" };
+  const setCookie = await issueOwnerSession(env, adminHash, admin.expiresAt);
+  return setCookie ? { ok: true, setCookie } : { ok: false, reason: "unauthorized" };
+}
+
+/** Issue an elevation only for a session issued to an active Telegram administrator. */
+export async function elevateTelegramOwnerSession(env: OwnerAuthEnv, adminHash: string, chatId: string) {
+  if (!parseCredential(env.OWNER_PASSWORD_HASH)) return null;
+  const admin = await env.DB.prepare(`SELECT s.expiresAt FROM sessions s JOIN telegram_delivery_partners p
+    ON p.chatId=s.telegramChatId AND p.role='admin' WHERE s.hash=? AND s.telegramChatId=? AND s.expiresAt>?`)
+    .bind(adminHash, chatId, Date.now()).first<{ expiresAt: number }>();
+  return admin ? issueOwnerSession(env, adminHash, admin.expiresAt) : null;
+}
+
+async function issueOwnerSession(env: OwnerAuthEnv, adminHash: string, adminExpiresAt: number) {
   const token = hex(crypto.getRandomValues(new Uint8Array(32)));
-  const now = Date.now(), expiresAt = Math.min(now + maxSessionMs, admin.expiresAt);
+  const now = Date.now(), expiresAt = Math.min(now + maxSessionMs, adminExpiresAt);
   const result = await env.DB.prepare("INSERT INTO owner_sessions(hash,adminHash,credentialVersion,expiresAt) SELECT ?,hash,?,? FROM sessions WHERE hash=? AND expiresAt>?")
     .bind(await sha256(token), await sha256(env.OWNER_PASSWORD_HASH!), expiresAt, adminHash, now).run();
-  if (!result.meta.changes) return { ok: false, reason: "unauthorized" };
-  return { ok: true, setCookie: ownerCookie(token, Math.max(0, Math.floor((expiresAt - now) / 1000))) };
+  return result.meta.changes ? ownerCookie(token, Math.max(0, Math.floor((expiresAt - now) / 1000))) : null;
 }
 
 /** Never accept an owner cookie without the exact still-valid admin session that created it. */
