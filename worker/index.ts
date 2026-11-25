@@ -1398,7 +1398,7 @@ const worker = {
       if (/^\/api\/payment-qr\/(wechat|alipay)$/.test(path) && request.method === "GET") {
         const imageUrl = new URL(`/sites/muse/${path.split("/").pop()}-collection.png`, url);
         const response = await env.ASSETS.fetch(new Request(imageUrl));
-        return withCors(new Response(response.body, { status: response.status, headers: { "Content-Type": "image/png", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } }));
+        return withCors(new Response(response.body, { status: response.status, headers: { "Content-Type": "image/png", "Cache-Control": response.ok ? "private, max-age=60" : "no-store", "X-Content-Type-Options": "nosniff" } }));
       }
       if (request.method !== "POST") throw new HttpError(405, "请求方式无效");
       const input = await body(request);

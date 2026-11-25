@@ -404,7 +404,7 @@ export function MuseStorefront({ initialProduct = "muse" }: { initialProduct?: P
               </div>
               <button className="muse-primary" type="submit">确认订单 <ArrowRight size={17}/></button>
             </form>
-          ) : step === "notice" ? <PurchaseNotice title={productTitle} terms={purchaseTerms} busy={creatingOrder} error={error} onBack={() => setStep("details")} onContinue={createOrder}/> : activeOrder ? <OrderPayment key={activeOrder.id} order={activeOrder} onBack={() => setStep("details")} onNotify={notify} onOrderUpdate={updateOrder}/> : null}
+          ) : step === "notice" ? <PurchaseNotice title={productTitle} terms={purchaseTerms} paymentQrUrl={storeApiUrl(`/api/payment-qr/${paymentMethod}`)} busy={creatingOrder} error={error} onBack={() => setStep("details")} onContinue={createOrder}/> : activeOrder ? <OrderPayment key={activeOrder.id} order={activeOrder} onBack={() => setStep("details")} onNotify={notify} onOrderUpdate={updateOrder}/> : null}
           </div>
           </div>
         </section>
