@@ -6,7 +6,8 @@ import { GPT_SUPPLIER_PRODUCTS, MUSE_ACCOUNT_SUPPLIER, MUSE_BASIC_SUPPLIER, SUPP
 import { deliveryEmail } from "./delivery-email";
 import { deriveAgentPassword, payoutDueAt } from "./agent-ledger";
 import { agentBalance, commissionReconciliation, withdrawalReservation } from "./agent-finance";
-import { createOwnerSession, hasOwnerSession, clearOwnerSession } from "./owner-auth";
+import { createOwnerSession, hasOwnerSession, clearOwnerSession, elevateTelegramOwnerSession } from "./owner-auth";
+import { consumeTelegramAdminTicket, createTelegramAdminLink, telegramAdminEntry } from "./telegram-admin";
 import { applyCommissionControl, type CommissionControlAction } from "./commission-controls";
 
 import { syncTelegramOrders, telegramOrderWebhook, type TelegramOrderEnv } from "./telegram-orders";
@@ -306,7 +307,26 @@ function adminSession(request: Request) { return cookie(request) || request.head
 function cookieHeader(request: Request, value: string, age: number) { const secure = new URL(request.url).protocol === "https:"; return `muse_admin=${value}; HttpOnly; SameSite=${secure ? "None" : "Lax"}; Path=/api/admin; Max-Age=${age}${secure ? "; Secure" : ""}`; }
 async function requireAdmin(env: Env, request: Request) {
   const session = adminSession(request);
-  if (!session || !await env.DB.prepare("SELECT hash FROM sessions WHERE hash=? AND expiresAt>?").bind(await hash(session), Date.now()).first()) throw new HttpError(401, "请登录工作台");
+  if (!session || !await env.DB.prepare(`SELECT hash FROM sessions WHERE hash=? AND expiresAt>?
+    AND (telegramChatId IS NULL OR EXISTS (SELECT 1 FROM telegram_delivery_partners WHERE chatId=telegramChatId AND role='admin'))`)
+    .bind(await hash(session), Date.now()).first()) throw new HttpError(401, "请登录工作台");
+}
+
+async function telegramAdminLogin(env: Env, request: Request) {
+  if (request.headers.get("Origin") !== new URL(request.url).origin) throw new HttpError(403, "请求来源无效");
+  await limit(env, request, "telegram-login", 15, 120);
+  const invite = await consumeTelegramAdminTicket(env.DB, (await body(request)).ticket);
+  if (!invite) throw new HttpError(401, "登录链接已失效，请回到 Bot 重新打开");
+  const session = await hash(crypto.randomUUID() + crypto.randomUUID());
+  const sessionHash = await hash(session);
+  const inserted = await env.DB.prepare(`INSERT INTO sessions(hash,expiresAt,telegramChatId)
+    SELECT ?,?,chatId FROM telegram_delivery_partners WHERE chatId=? AND role='admin'`)
+    .bind(sessionHash, Date.now() + 8 * 3600000, invite.chatId).run();
+  if (!inserted.meta.changes) throw new HttpError(401, "工作台权限已撤销");
+  const elevation = await elevateTelegramOwnerSession(env, sessionHash, invite.chatId);
+  const response = json({ destination: invite.destination }, 200, { "Set-Cookie": cookieHeader(request, session, 28800) });
+  if (elevation) response.headers.append("Set-Cookie", elevation);
+  return response;
 }
 function agentProducts() {
   return [
@@ -1274,6 +1294,8 @@ const worker = {
       return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
     };
     try {
+      if (path === "/api/admin/telegram-entry" && request.method === "GET" && url.hostname === "musetoken.store") return telegramAdminEntry();
+      if (path === "/api/admin/telegram-login" && request.method === "POST" && url.hostname === "musetoken.store") return await telegramAdminLogin(env, request);
       if (path === "/api/telegram/orders" && request.method === "POST") {
         const response = await telegramOrderWebhook(env, request, async input => {
           try {
@@ -1282,7 +1304,7 @@ const worker = {
           } catch (error) {
             return error instanceof HttpError ? error.message : "发送未确认，请在工作台核查发件箱和发货记录。";
           }
-        });
+        }, (chatId, destination) => createTelegramAdminLink(env.DB, chatId, destination));
         if (response.status === 200) syncTelegram();
         return response;
       }

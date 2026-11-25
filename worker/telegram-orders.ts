@@ -73,10 +73,15 @@ async function updateMessage(bot: Bot, method: string, payload: Record<string, u
   }
 }
 
-function messagePayload(order: Order, callbacks: boolean) {
+type WebButton = { text: string; url: string } | { text: string; callback_data: string };
+function webButton(text: string, destination: string, delegated: boolean): WebButton {
+  return delegated ? { text, callback_data: `web:${destination}` } : { text, url: workbench + (destination ? "#" + destination : "") };
+}
+
+function messagePayload(order: Order, callbacks: boolean, delegated: boolean) {
   const openLabel = order.status === "reported" ? "打开订单核款" : order.stage === "processing" ? "打开订单发货" : "打开订单";
   const inline_keyboard: { text: string; url?: string; callback_data?: string }[][] = [
-    [{ text: openLabel, url: `${workbench}#order=${order.ref}` }],
+    [webButton(openLabel, `order=${order.ref}`, delegated)],
   ];
   if (callbacks && order.status === "processing" && !order.contactedAt) {
     inline_keyboard.push([{ text: "标记已联系", callback_data: `contact:${order.ref}` }]);
@@ -99,14 +104,17 @@ export async function syncTelegramOrders(env: TelegramOrderEnv, startedAt = Date
   if (!bot) return;
   await Promise.all([
     syncOwnerOrders(env, bot, startedAt),
-    syncPartnerOrders(env.DB, bot),
+    syncPartnerOrders(env, bot),
   ]);
 }
 
-async function syncPartnerOrders(db: D1Database, owner: Bot) {
-  const { results: partners } = await db.prepare("SELECT chatId,approvedAt FROM telegram_delivery_partners").all<{ chatId: string; approvedAt: number }>();
-  await Promise.all(partners.map(async ({ chatId, approvedAt }) => {
+async function syncPartnerOrders(env: TelegramOrderEnv, owner: Bot) {
+  const db = env.DB;
+  const { results: partners } = await db.prepare("SELECT chatId,approvedAt,role FROM telegram_delivery_partners")
+    .all<{ chatId: string; approvedAt: number; role: string }>();
+  await Promise.all(partners.map(async ({ chatId, approvedAt, role }) => {
     const bot = { ...owner, chatId };
+    if (role === "admin") return syncOwnerOrders(env, bot, approvedAt, true);
     const now = Date.now(), leaseUntil = now + 240_000;
     await db.prepare("INSERT OR IGNORE INTO telegram_order_chats(chatId,startedAt) VALUES(?,?)").bind(chatId, approvedAt).run();
     const claim = await db.prepare("UPDATE telegram_order_chats SET leaseUntil=? WHERE chatId=? AND leaseUntil<=? RETURNING chatId")
@@ -122,7 +130,7 @@ async function syncPartnerOrders(db: D1Database, owner: Bot) {
         .bind(chatId, approvedAt, now).all<{ id: string; code: string; title: string; status: string }>();
       for (const order of orders) {
         if (Date.now() > leaseUntil - 30_000) break;
-        if (!await db.prepare("SELECT 1 FROM telegram_delivery_partners WHERE chatId=? AND approvedAt=?").bind(chatId, approvedAt).first()) break;
+        if (!await db.prepare("SELECT 1 FROM telegram_delivery_partners WHERE chatId=? AND approvedAt=? AND role='delivery'").bind(chatId, approvedAt).first()) break;
         await db.prepare("INSERT OR IGNORE INTO telegram_order_messages(chatId,orderId,ref) VALUES(?,?,?)")
           .bind(chatId, order.id, crypto.randomUUID().replaceAll("-", "")).run();
         try {
@@ -149,7 +157,7 @@ async function syncPartnerOrders(db: D1Database, owner: Bot) {
   }));
 }
 
-async function syncOwnerOrders(env: TelegramOrderEnv, bot: Bot, startedAt: number) {
+async function syncOwnerOrders(env: TelegramOrderEnv, bot: Bot, startedAt: number, delegated = false) {
   const db = env.DB;
   const now = Date.now();
   const leaseUntil = now + 240_000;
@@ -161,7 +169,8 @@ async function syncOwnerOrders(env: TelegramOrderEnv, bot: Bot, startedAt: numbe
   try {
     await db.prepare("DELETE FROM telegram_delivery_drafts WHERE expiresAt<=?").bind(now).run();
     const rows = await db.prepare(`SELECT o.id, o.code, o.title, o.amountCents, o.method, o.status, o.stage,
-      m.ref, m.messageId, m.snapshot, m.pinned, m.contactedAt,
+      m.ref, CASE WHEN ?=1 AND (m.snapshot='' OR m.snapshot LIKE 'partner:%') THEN NULL ELSE m.messageId END AS messageId,
+      m.snapshot, m.pinned, m.contactedAt,
       (o.stage IN ('processing','stock_issue') AND EXISTS
         (SELECT 1 FROM orders WHERE id=o.id AND product IN ('gpt','muse'))) AS canEmail
       FROM telegram_order_status o
@@ -170,14 +179,15 @@ async function syncOwnerOrders(env: TelegramOrderEnv, bot: Bot, startedAt: numbe
       AND (m.orderId IS NOT NULL OR o.createdAt>=? OR o.status IN ('reported','processing'))
       AND (m.messageId IS NULL OR m.snapshot != o.stage || ':' || COALESCE(m.contactedAt,0) || ':' || ? || ':mail')
       ORDER BY CASE WHEN o.status IN ('reported','processing') THEN 0 ELSE 1 END, o.updatedAt, o.id LIMIT 20`)
-      .bind(bot.chatId, claim.startedAt, now, claim.startedAt, Number(callbacks)).all<Order>();
+      .bind(Number(delegated), bot.chatId, delegated ? Math.max(startedAt, claim.startedAt) : claim.startedAt, now, claim.startedAt, Number(callbacks)).all<Order>();
     for (const order of rows.results) {
       if (Date.now() > leaseUntil - 30_000) break;
+      if (delegated && !await db.prepare("SELECT 1 FROM telegram_delivery_partners WHERE chatId=? AND role='admin'").bind(bot.chatId).first()) break;
       if (!order.ref) {
         order.ref = crypto.randomUUID().replaceAll("-", "");
         await db.prepare("INSERT INTO telegram_order_messages(chatId,orderId,ref) VALUES(?,?,?)").bind(bot.chatId, order.id, order.ref).run();
       }
-      const payload = messagePayload(order, callbacks);
+      const payload = messagePayload(order, callbacks, delegated);
       const snapshot = `${order.stage}:${order.contactedAt || 0}:${Number(callbacks)}:mail`;
       const pinned = order.status === "processing";
       try {
@@ -194,7 +204,7 @@ async function syncOwnerOrders(env: TelegramOrderEnv, bot: Bot, startedAt: numbe
             message_id: order.messageId, ...(pinned ? { disable_notification: true } : {}),
           }, pinned ? "message is already pinned" : "message is not pinned");
         }
-        if (order.snapshot && alertStages.has(order.stage) && !order.snapshot.startsWith(order.stage + ":")) {
+        if (order.snapshot && !order.snapshot.startsWith("partner:") && alertStages.has(order.stage) && !order.snapshot.startsWith(order.stage + ":")) {
           await telegram(bot, "sendMessage", {
             text: `${stages[order.stage]} · 订单码 ${order.code}`,
             reply_parameters: { message_id: order.messageId, allow_sending_without_reply: true },
@@ -318,7 +328,7 @@ async function handleDeliveryDraft(db: D1Database, bot: Bot, update: Update, sen
   return true;
 }
 
-export async function telegramOrderWebhook(env: TelegramOrderEnv, request: Request, sendDelivery?: ManualDelivery) {
+export async function telegramOrderWebhook(env: TelegramOrderEnv, request: Request, sendDelivery?: ManualDelivery, createAdminLink?: (chatId: string, destination: string) => Promise<string | null>) {
   const owner = configuredBot(env);
   if (!owner || !env.TELEGRAM_WEBHOOK_SECRET) return new Response(null, { status: 404 });
   if (request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.TELEGRAM_WEBHOOK_SECRET) {
@@ -334,9 +344,10 @@ export async function telegramOrderWebhook(env: TelegramOrderEnv, request: Reque
   const bot = { ...owner, chatId };
   const command = update?.message?.text?.trim() || "";
   const isOwner = chatId === owner.chatId;
+  const partner = isOwner ? null : await env.DB.prepare("SELECT role FROM telegram_delivery_partners WHERE chatId=?").bind(chatId).first<{ role: string }>();
+  const delegated = partner?.role === "admin";
   if (!isOwner) {
-    const approved = await env.DB.prepare("SELECT 1 FROM telegram_delivery_partners WHERE chatId=?").bind(chatId).first();
-    if (!approved) {
+    if (!partner) {
       if (command === "/start") await telegram(bot, "sendMessage", {
         text: `这个 Bot 需要店主授权。请把你的 Telegram ID 发给店主：${chatId}`,
         protect_content: true,
@@ -345,14 +356,15 @@ export async function telegramOrderWebhook(env: TelegramOrderEnv, request: Reque
     }
     const todo = command.match(/^\/todo(?:\s+(\d{4}))?$/);
     const todoButton = update?.callback_query?.data?.match(/^todo:(\d{4})$/);
-    if (command === "/start" || todo || todoButton) {
+    if (!delegated && (command === "/start" || todo || todoButton)) {
       if (todoButton && update?.callback_query) await telegram(bot, "answerCallbackQuery", {
         chat_id: undefined, callback_query_id: update.callback_query.id,
       });
       await showPartnerOrders(env.DB, bot, todo?.[1] || todoButton?.[1] || "");
       return new Response(null, { status: 200 });
     }
-  } else {
+  }
+  if (isOwner || delegated) {
     const manage = command.match(/^\/(allow|revoke)\s+([1-9]\d{0,15})$/);
     if (manage) {
       const [, action, partnerId] = manage;
@@ -360,18 +372,39 @@ export async function telegramOrderWebhook(env: TelegramOrderEnv, request: Reque
         "INSERT OR IGNORE INTO telegram_delivery_partners(chatId,approvedAt) VALUES(?,?)",
       ).bind(partnerId, Date.now()).run();
       if (action === "revoke") await env.DB.batch([
+        env.DB.prepare("DELETE FROM sessions WHERE telegramChatId=?").bind(partnerId),
         env.DB.prepare("DELETE FROM telegram_delivery_partners WHERE chatId=?").bind(partnerId),
         env.DB.prepare("DELETE FROM telegram_delivery_drafts WHERE chatId=?").bind(partnerId),
       ]);
       await telegram(bot, "sendMessage", {
-        text: action === "allow" ? `已授权 ${partnerId} 查看待邮件发货订单并发送交付邮件。请让对方再发 /start。` : `已撤销 ${partnerId} 的邮件发货权限。`,
+        text: action === "allow" ? `已授权 ${partnerId} 查看待邮件发货订单并发送交付邮件。请让对方再发 /start。` : `已撤销 ${partnerId} 的 Bot 和工作台权限。`,
         protect_content: true,
       });
       return new Response(null, { status: 200 });
     }
   }
   if (update && sendDelivery && await handleDeliveryDraft(env.DB, bot, update, sendDelivery)) return new Response(null, { status: 200 });
-  if (!isOwner) return new Response(null, { status: 204 });
+  if (!isOwner && !delegated) return new Response(null, { status: 204 });
+
+  const callback = update?.callback_query;
+  const openWeb = callback?.data?.match(/^web:(.*)$/);
+  if (delegated && createAdminLink && (openWeb || command === "/workbench")) {
+    if (callback) await telegram(bot, "answerCallbackQuery", {
+      chat_id: undefined, callback_query_id: callback.id,
+    });
+    const destination = openWeb?.[1] || "";
+    if (destination.startsWith("order=") && !await env.DB.prepare(
+      "SELECT 1 FROM telegram_order_messages WHERE chatId=? AND ref=?",
+    ).bind(chatId, destination.slice(6)).first()) return new Response(null, { status: 204 });
+    const link = await createAdminLink(chatId, destination);
+    if (link) await telegram(bot, "sendMessage", {
+      text: "工作台登录链接 · 2 分钟内打开，仅可使用一次。",
+      protect_content: true,
+      link_preview_options: { is_disabled: true },
+      reply_markup: { inline_keyboard: [[{ text: "登录工作台", url: link }]] },
+    });
+    return new Response(null, { status: 200 });
+  }
 
   if (update?.message?.text === "/todo" || update?.message?.text === "/start") {
     const counts = await env.DB.prepare(`SELECT
@@ -383,12 +416,12 @@ export async function telegramOrderWebhook(env: TelegramOrderEnv, request: Reque
       text: `📋 订单待办\n待核款 ${counts?.reported || 0} 笔\n待发货 ${counts?.processing || 0} 笔\n异常 ${counts?.attention || 0} 笔`,
       protect_content: true,
       reply_markup: { inline_keyboard: [
-        [{ text: "查看待核款", url: `${workbench}#status=reported` }, { text: "查看待发货", url: `${workbench}#status=delivery` }],
-        [{ text: "查看异常", url: `${workbench}#status=attention` }],
+        [webButton("查看待核款", "status=reported", delegated), webButton("查看待发货", "status=delivery", delegated)],
+        [webButton("查看异常", "status=attention", delegated)],
+        ...(delegated ? [[webButton("打开完整工作台", "", true)]] : []),
       ] },
     });
   }
-  const callback = update?.callback_query;
   const ref = callback?.data?.match(/^contact:([0-9a-f]{32})$/)?.[1];
   if (callback && ref && callback.message?.message_id) {
     const mark = await env.DB.prepare(`UPDATE telegram_order_messages SET contactedAt=COALESCE(contactedAt,?)
