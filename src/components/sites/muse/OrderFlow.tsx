@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { preload } from "react-dom";
 import Image from "next/image";
 import { ArrowLeft, ArrowRight, Check, CircleCheck, Clock3, Copy, Download, RefreshCw, ShoppingBag, X } from "lucide-react";
 import { formatMoney, orderHandlingTime, supportQQ, type OrderDetails } from "./catalog";
@@ -16,10 +17,11 @@ export type OrderStatus = "pending" | "reported" | "processing" | "complete" | "
 export function orderLink(order: Pick<StoreOrder, "id" | "token">) {
   return `${window.location.origin}${process.env.NEXT_PUBLIC_BASE_PATH || ""}/#order=${encodeURIComponent(order.id)}&token=${encodeURIComponent(order.token)}`;
 }
-export function PurchaseNotice({ onBack, onContinue, terms, title, busy = false, error = "" }: {
+export function PurchaseNotice({ onBack, onContinue, terms, title, paymentQrUrl, busy = false, error = "" }: {
   onBack: () => void; onContinue: () => void; terms: ReadonlyArray<{ title: string; body: string }>;
-  title: string; busy?: boolean; error?: string;
+  title: string; paymentQrUrl: string; busy?: boolean; error?: string;
 }) {
+  preload(paymentQrUrl, { as: "image" });
   const [seconds, setSeconds] = useState(5), [accepted, setAccepted] = useState(false);
   useEffect(() => { const start = Date.now(); const timer = window.setInterval(() => setSeconds(Math.max(0, 5 - Math.floor((Date.now() - start) / 1000))), 200); return () => window.clearInterval(timer); }, []);
   return <div className="muse-notice muse-step">
@@ -37,13 +39,24 @@ export function OrderPayment({ order, onBack, onNotify, onOrderUpdate }: {
   const [remaining, setRemaining] = useState(() => Math.max(0, Math.ceil((order.expiresAt - Date.now()) / 1000)));
   const [refreshing, setRefreshing] = useState(false), [paymentError, setPaymentError] = useState("");
   const [copied, setCopied] = useState(false), [remark, setRemark] = useState(false), [qrOpen, setQrOpen] = useState(false), [reporting, setReporting] = useState(false);
+  const [qrLoad, setQrLoad] = useState<{ src: string; status: "ready" | "error" } | null>(null);
+  const [qrRetry, setQrRetry] = useState(0);
   const inFlight = useRef(false), qrDialog = useRef<HTMLDialogElement>(null);
   const label = order.method === "wechat" ? "微信" : "支付宝", total = formatMoney(order.amountCents + order.feeCents);
   const expired = (order.status === "expired" || order.status === "cancelled") || (order.status === "pending" && remaining === 0);
   const canPay = order.status === "pending" && !expired;
+  const qrUrl = order.qrImageUrl;
+  const qrSrc = qrUrl && qrRetry ? `${qrUrl}${qrUrl.includes("?") ? "&" : "?"}retry=${qrRetry}` : qrUrl;
+  const qrStatus = qrLoad?.src === qrSrc ? qrLoad?.status : undefined;
+  if (canPay && qrSrc) preload(qrSrc, { as: "image" });
   const countdown = `${Math.floor(remaining / 60).toString().padStart(2, "0")}:${(remaining % 60).toString().padStart(2, "0")}`;
   useEffect(() => { const timer = window.setInterval(() => setRemaining(Math.max(0, Math.ceil((order.expiresAt - Date.now()) / 1000))), 1000); return () => window.clearInterval(timer); }, [order.expiresAt]);
   useEffect(() => { if (qrOpen && canPay) qrDialog.current?.showModal(); else qrDialog.current?.close(); }, [qrOpen, canPay]);
+  useEffect(() => {
+    if (!qrOpen || !canPay || !qrSrc || qrStatus) return;
+    const timer = window.setTimeout(() => setQrLoad({ src: qrSrc, status: "error" }), 12000);
+    return () => window.clearTimeout(timer);
+  }, [canPay, qrOpen, qrSrc, qrStatus]);
   const refresh = useCallback(async () => {
     if (inFlight.current) return; inFlight.current = true; setRefreshing(true);
     try { onOrderUpdate(await lookupStoreOrder(order.id, order.token)); setPaymentError(""); }
@@ -105,10 +118,15 @@ export function OrderPayment({ order, onBack, onNotify, onOrderUpdate }: {
       <button className="muse-dialog-x" type="button" aria-label="关闭收款码" onClick={() => setQrOpen(false)}><X size={18}/></button>
       <h2 id="qr-title">{label}扫码付款</h2><p className="muse-qr-total">请支付 <strong>¥{total}</strong></p>
       <div className="muse-qr-remark">付款备注必填：<b>{order.code}</b><button type="button" onClick={() => void copy(order.code, true)}>复制</button></div>
-      {order.qrImageUrl && <Image unoptimized className="muse-collection-image" src={order.qrImageUrl} width={280} height={280} alt={`${label}收款码`}/>}
+      {qrSrc && <>
+        {qrStatus !== "ready" && <p role="status">{qrStatus === "error" ? "收款码加载失败，请重试。" : "正在加载收款码…"}</p>}
+        {qrStatus === "error" && <div className="muse-order-tools"><button type="button" onClick={() => setQrRetry(Date.now())}><RefreshCw size={14}/>重新加载收款码</button></div>}
+        {qrStatus !== "error" && <Image key={qrSrc} unoptimized loading="eager" className="muse-collection-image" src={qrSrc} width={280} height={280} alt={`${label}收款码`}
+          onLoad={() => setQrLoad({ src: qrSrc, status: "ready" })} onError={() => setQrLoad({ src: qrSrc, status: "error" })}/>}
+      </>}
       <p>请在付款页面手动填写金额，并将 <strong>{order.code}</strong> 粘贴到「备注 / 付款说明」。</p>
       <p>同一部手机可长按保存收款码，再使用{label}扫一扫从相册识别。</p>
-      {order.qrImageUrl && <a className="muse-save-qr" href={order.qrImageUrl} download={`${label}收款码.png`}>保存收款码</a>}
+      {qrUrl && qrStatus === "ready" && <a className="muse-save-qr" href={qrSrc} download={`${label}收款码.png`}>保存收款码</a>}
       <button className="muse-primary" type="button" disabled={reporting} onClick={() => void report()}>{reporting ? "提交中…" : "我已付款，通知店主核对"}</button>
       {paymentError && <p className="muse-error" role="alert">{paymentError}</p>}
       <small>点击后进入待核实状态，实际到账以店主核查为准。</small>
