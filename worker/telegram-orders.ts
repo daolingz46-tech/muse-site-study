@@ -73,15 +73,12 @@ async function updateMessage(bot: Bot, method: string, payload: Record<string, u
   }
 }
 
-type WebButton = { text: string; url: string } | { text: string; callback_data: string };
-function webButton(text: string, destination: string, delegated: boolean): WebButton {
-  return delegated ? { text, callback_data: `web:${destination}` } : { text, url: workbench + (destination ? "#" + destination : "") };
-}
+type OrderButton = { text: string; url?: string; callback_data?: string };
 
-function messagePayload(order: Order, callbacks: boolean, delegated: boolean) {
+function messagePayload(order: Order, callbacks: boolean) {
   const openLabel = order.status === "reported" ? "打开订单核款" : order.stage === "processing" ? "打开订单发货" : "打开订单";
-  const inline_keyboard: { text: string; url?: string; callback_data?: string }[][] = [
-    [webButton(openLabel, `order=${order.ref}`, delegated)],
+  const inline_keyboard: OrderButton[][] = [
+    [callbacks ? { text: openLabel, callback_data: `order:${order.ref}` } : { text: openLabel, url: `${workbench}#order=${order.ref}` }],
   ];
   if (callbacks && order.status === "processing" && !order.contactedAt) {
     inline_keyboard.push([{ text: "标记已联系", callback_data: `contact:${order.ref}` }]);
@@ -177,7 +174,7 @@ async function syncOwnerOrders(env: TelegramOrderEnv, bot: Bot, startedAt: numbe
       LEFT JOIN telegram_order_messages m ON m.chatId=? AND m.orderId=o.id
       WHERE o.updatedAt>=? AND COALESCE(m.retryAt,0)<=?
       AND (m.orderId IS NOT NULL OR o.createdAt>=? OR o.status IN ('reported','processing'))
-      AND (m.messageId IS NULL OR m.snapshot != o.stage || ':' || COALESCE(m.contactedAt,0) || ':' || ? || ':mail')
+      AND (m.messageId IS NULL OR m.snapshot != o.stage || ':' || COALESCE(m.contactedAt,0) || ':' || ? || ':chat')
       ORDER BY CASE WHEN o.status IN ('reported','processing') THEN 0 ELSE 1 END, o.updatedAt, o.id LIMIT 20`)
       .bind(Number(delegated), bot.chatId, delegated ? Math.max(startedAt, claim.startedAt) : claim.startedAt, now, claim.startedAt, Number(callbacks)).all<Order>();
     for (const order of rows.results) {
@@ -187,8 +184,8 @@ async function syncOwnerOrders(env: TelegramOrderEnv, bot: Bot, startedAt: numbe
         order.ref = crypto.randomUUID().replaceAll("-", "");
         await db.prepare("INSERT INTO telegram_order_messages(chatId,orderId,ref) VALUES(?,?,?)").bind(bot.chatId, order.id, order.ref).run();
       }
-      const payload = messagePayload(order, callbacks, delegated);
-      const snapshot = `${order.stage}:${order.contactedAt || 0}:${Number(callbacks)}:mail`;
+      const payload = messagePayload(order, callbacks);
+      const snapshot = `${order.stage}:${order.contactedAt || 0}:${Number(callbacks)}:chat`;
       const pinned = order.status === "processing";
       try {
         if (order.messageId === null) {
@@ -232,6 +229,91 @@ async function syncOwnerOrders(env: TelegramOrderEnv, bot: Bot, startedAt: numbe
 }
 
 type ManualDelivery = (input: Record<string, unknown>) => Promise<string>;
+type UpdateOrder = (id: string, action: "confirm" | "complete") => Promise<string>;
+
+const queues = {
+  reported: { label: "待核款", filter: "o.status='reported'" },
+  delivery: { label: "待发货", filter: "o.status='processing' AND o.stage NOT IN ('purchase_unknown','mail_unknown','stock_issue')" },
+  attention: { label: "异常", filter: "o.stage IN ('purchase_unknown','mail_unknown','stock_issue')" },
+};
+
+async function showAdminQueue(db: D1Database, bot: Bot, key: keyof typeof queues, page: number) {
+  const queue = queues[key];
+  const { results } = await db.prepare(`SELECT o.id,o.code,o.title FROM telegram_order_status o
+    WHERE ${queue.filter} ORDER BY o.updatedAt,o.id LIMIT 9 OFFSET ?`).bind(page * 8)
+    .all<{ id: string; code: string; title: string }>();
+  const orders = results.slice(0, 8);
+  const keyboard: OrderButton[][] = [];
+  if (orders.length) {
+    await db.batch(orders.map(order => db.prepare("INSERT OR IGNORE INTO telegram_order_messages(chatId,orderId,ref) VALUES(?,?,?)")
+      .bind(bot.chatId, order.id, crypto.randomUUID().replaceAll("-", ""))));
+    const { results: rows } = await db.prepare(`SELECT orderId,ref FROM telegram_order_messages
+      WHERE chatId=? AND orderId IN (${orders.map(() => "?").join(",")})`)
+      .bind(bot.chatId, ...orders.map(order => order.id)).all<{ orderId: string; ref: string }>();
+    const refs = new Map(rows.map(row => [row.orderId, row.ref]));
+    for (const order of orders) keyboard.push([{
+      text: `${order.code} · ${order.title.replace(/\s+/g, " ").slice(0, 40)}`,
+      callback_data: `order:${refs.get(order.id)}`,
+    }]);
+  }
+  const navigation: OrderButton[] = [];
+  if (page > 0) navigation.push({ text: "上一页", callback_data: `queue:${key}:${page-1}` });
+  if (results.length > 8) navigation.push({ text: "下一页", callback_data: `queue:${key}:${page+1}` });
+  if (navigation.length) keyboard.push(navigation);
+  await telegram(bot, "sendMessage", {
+    text: orders.length ? `${queue.label}订单 · 第 ${page + 1} 页` : `当前没有${queue.label}订单。`,
+    protect_content: true, reply_markup: { inline_keyboard: keyboard },
+  });
+}
+
+async function handleAdminOrderActions(db: D1Database, bot: Bot, callback: NonNullable<Update["callback_query"]>, updateOrder: UpdateOrder) {
+  const queue = callback.data?.match(/^queue:(reported|delivery|attention):(\d{1,5})$/);
+  const command = callback.data?.match(/^(order|paid|charged):([0-9a-f]{32})$/);
+  if (!queue && !command) return false;
+  await telegram(bot, "answerCallbackQuery", { chat_id: undefined, callback_query_id: callback.id });
+  if (queue) {
+    await showAdminQueue(db, bot, queue[1] as keyof typeof queues, Number(queue[2]));
+    return true;
+  }
+  const [, action, ref] = command!;
+  const order = await db.prepare(`SELECT o.id,o.code,o.title,o.amountCents,o.method,o.status,o.stage,
+      base.product, base.target, m.contactedAt,
+      NOT EXISTS(SELECT 1 FROM supplier_fulfillment WHERE orderId=o.id)
+      AND NOT EXISTS(SELECT 1 FROM delivery_emails WHERE orderId=o.id) AS manualEmail
+    FROM telegram_order_messages m JOIN telegram_order_status o ON o.id=m.orderId
+    JOIN orders base ON base.id=o.id WHERE m.chatId=? AND m.ref=?`)
+    .bind(bot.chatId, ref).first<{ id: string; code: string; title: string; amountCents: number; method: string; status: string; stage: string; product: string; target: string; contactedAt: number | null; manualEmail: number }>();
+  const reply = (text: string, keyboard: OrderButton[][] = []) => telegram(bot, "sendMessage", {
+    text, protect_content: true, reply_markup: { inline_keyboard: keyboard },
+  });
+  if (!order) { await reply("订单不存在或消息已失效，请发 /todo 重新查看。"); return true; }
+  if (action !== "order") {
+    if ((action === "paid" && order.status !== "reported") || (action === "charged" && (order.status !== "processing" || order.product !== "muse-token"))) {
+      await reply("订单状态已变化，请重新查看。", [[{ text: "查看最新状态", callback_data: `order:${ref}` }]]);
+      return true;
+    }
+    await reply(await updateOrder(order.id, action === "paid" ? "confirm" : "complete"), [[{ text: "查看最新状态", callback_data: `order:${ref}` }]]);
+    return true;
+  }
+  const rows: OrderButton[][] = [];
+  const lines = [stages[order.stage], order.title.replace(/\s+/g, " ").slice(0, 160),
+    `订单码 ${order.code} · ¥${(order.amountCents / 100).toFixed(2)} · ${order.method === "alipay" ? "支付宝" : "微信支付"}`];
+  if (order.status === "reported") {
+    lines.push("请核对实际到账和付款备注后，再确认收款。");
+    rows.push([{ text: "确认已到账", callback_data: `paid:${ref}` }]);
+  }
+  if (order.status === "processing") {
+    if (order.product === "muse-token") {
+      lines.push(`Muse 邀请码：${order.target}`);
+      if (order.stage === "processing") rows.push([{ text: "确认充值已到账", callback_data: `charged:${ref}` }]);
+    } else if (order.manualEmail) {
+      rows.push([{ text: "手动邮件发货", callback_data: `mail:${ref}` }]);
+    }
+    if (!order.contactedAt) rows.push([{ text: "标记已联系", callback_data: `mark:${ref}` }]);
+  }
+  await reply(lines.join("\n"), rows);
+  return true;
+}
 
 async function showPartnerOrders(db: D1Database, bot: Bot, code: string) {
   const { results } = await db.prepare(`SELECT o.id,o.code,o.title FROM orders o
@@ -262,7 +344,7 @@ async function showPartnerOrders(db: D1Database, bot: Bot, code: string) {
     .bind(menu.message_id, bot.chatId, order.id)));
 }
 
-async function handleDeliveryDraft(db: D1Database, bot: Bot, update: Update, sendDelivery: ManualDelivery) {
+async function handleDeliveryDraft(db: D1Database, bot: Bot, update: Update, sendDelivery: ManualDelivery, admin: boolean) {
   const callback = update.callback_query;
   const action = callback?.data?.match(/^(mail|send|cancel):([0-9a-f]{32})$/);
   const now = Date.now();
@@ -273,11 +355,11 @@ async function handleDeliveryDraft(db: D1Database, bot: Bot, update: Update, sen
     if (kind === "mail") {
       const order = await db.prepare(`SELECT o.id, o.code, o.product FROM telegram_order_messages m
         JOIN orders o ON o.id=m.orderId
-        WHERE m.chatId=? AND m.ref=? AND m.messageId=? AND o.status='processing'
+        WHERE m.chatId=? AND m.ref=? AND (m.messageId=? OR ?=1) AND o.status='processing'
         AND o.product IN ('muse','gpt')
         AND NOT EXISTS (SELECT 1 FROM supplier_fulfillment WHERE orderId=o.id)
         AND NOT EXISTS (SELECT 1 FROM delivery_emails WHERE orderId=o.id)`)
-        .bind(bot.chatId, ref, callback.message?.message_id ?? 0).first<{id: string; code: string; product: string}>();
+        .bind(bot.chatId, ref, callback.message?.message_id ?? 0, Number(admin)).first<{id: string; code: string; product: string}>();
       if (!order) { await say("这笔订单暂不能手动邮件发货。请在工作台核查订单状态。"); return true; }
       const prompt = await say(order.product === "gpt"
         ? `订单 ${order.code} · 回复这条消息。第一行写实际采购货源编号（无编号的自定义商品填「手工交付」），下一行起粘贴卡密。需要补充教程时，空一行后填写。`
@@ -328,7 +410,7 @@ async function handleDeliveryDraft(db: D1Database, bot: Bot, update: Update, sen
   return true;
 }
 
-export async function telegramOrderWebhook(env: TelegramOrderEnv, request: Request, sendDelivery?: ManualDelivery, createAdminLink?: (chatId: string, destination: string) => Promise<string | null>) {
+export async function telegramOrderWebhook(env: TelegramOrderEnv, request: Request, sendDelivery?: ManualDelivery, createAdminLink?: (chatId: string, destination: string) => Promise<string | null>, updateOrder?: UpdateOrder) {
   const owner = configuredBot(env);
   if (!owner || !env.TELEGRAM_WEBHOOK_SECRET) return new Response(null, { status: 404 });
   if (request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.TELEGRAM_WEBHOOK_SECRET) {
@@ -383,10 +465,14 @@ export async function telegramOrderWebhook(env: TelegramOrderEnv, request: Reque
       return new Response(null, { status: 200 });
     }
   }
-  if (update && sendDelivery && await handleDeliveryDraft(env.DB, bot, update, sendDelivery)) return new Response(null, { status: 200 });
+  if (update && sendDelivery && await handleDeliveryDraft(env.DB, bot, update, sendDelivery, isOwner || delegated)) return new Response(null, { status: 200 });
   if (!isOwner && !delegated) return new Response(null, { status: 204 });
 
   const callback = update?.callback_query;
+  if (callback && updateOrder) {
+    const data = callback.data?.replace(/^web:order=/, "order:").replace(/^web:status=(reported|delivery|attention)$/, "queue:$1:0");
+    if (await handleAdminOrderActions(env.DB, bot, { ...callback, data }, updateOrder)) return new Response(null, { status: 200 });
+  }
   const openWeb = callback?.data?.match(/^web:(.*)$/);
   if (delegated && createAdminLink && (openWeb || command === "/workbench")) {
     if (callback) await telegram(bot, "answerCallbackQuery", {
@@ -416,18 +502,18 @@ export async function telegramOrderWebhook(env: TelegramOrderEnv, request: Reque
       text: `📋 订单待办\n待核款 ${counts?.reported || 0} 笔\n待发货 ${counts?.processing || 0} 笔\n异常 ${counts?.attention || 0} 笔`,
       protect_content: true,
       reply_markup: { inline_keyboard: [
-        [webButton("查看待核款", "status=reported", delegated), webButton("查看待发货", "status=delivery", delegated)],
-        [webButton("查看异常", "status=attention", delegated)],
-        ...(delegated ? [[webButton("打开完整工作台", "", true)]] : []),
+        [{ text: "查看待核款", callback_data: "queue:reported:0" }, { text: "查看待发货", callback_data: "queue:delivery:0" }],
+        [{ text: "查看异常", callback_data: "queue:attention:0" }],
       ] },
     });
   }
-  const ref = callback?.data?.match(/^contact:([0-9a-f]{32})$/)?.[1];
+  const contact = callback?.data?.match(/^(contact|mark):([0-9a-f]{32})$/);
+  const ref = contact?.[2];
   if (callback && ref && callback.message?.message_id) {
     const mark = await env.DB.prepare(`UPDATE telegram_order_messages SET contactedAt=COALESCE(contactedAt,?)
-      WHERE chatId=? AND ref=? AND messageId=? AND EXISTS
+      WHERE chatId=? AND ref=? AND (messageId=? OR ?=1) AND EXISTS
       (SELECT 1 FROM orders WHERE id=orderId AND status='processing')
-      RETURNING orderId`).bind(Date.now(), bot.chatId, ref, callback.message.message_id).first();
+      RETURNING orderId`).bind(Date.now(), bot.chatId, ref, callback.message.message_id, Number(contact?.[1] === "mark")).first();
     await telegram(bot, "answerCallbackQuery", { chat_id: undefined, callback_query_id: callback.id, text: mark ? "已记录联系状态" : "订单状态已变化，请刷新工作台" });
   }
   return new Response(null, { status: callback && ref ? 200 : 204 });

@@ -36,7 +36,12 @@ test("Telegram order messages, alerts, owner actions and recovery", async t => {
   const deliveries = [];
   const webhook = (update, secret = env.TELEGRAM_WEBHOOK_SECRET) => telegramOrderWebhook(env, new Request("https://test.example/api/telegram/orders", {
     method: "POST", headers: { "X-Telegram-Bot-Api-Secret-Token": secret }, body: JSON.stringify(update),
-  }), async input => { deliveries.push(input); return "邮件已发送"; }, (chatId, destination) => createTelegramAdminLink(db, chatId, destination));
+  }), async input => { deliveries.push(input); return "邮件已发送"; }, (chatId, destination) => createTelegramAdminLink(db, chatId, destination), async (id, action) => {
+    assert.equal(id, "private-order");
+    assert.equal(action, "confirm");
+    await change("processing");
+    return "已核实收款";
+  });
 
   await insert("historical", now - 60_000);
   await insert("private-order", now);
@@ -45,7 +50,7 @@ test("Telegram order messages, alerts, owner actions and recovery", async t => {
   const sent = events[0].payload;
   assert.match(sent.text, /待付款/);
   assert.equal(sent.protect_content, true);
-  assert.match(sent.reply_markup.inline_keyboard[0][0].url, /#order=[0-9a-f]{32}$/);
+  assert.match(sent.reply_markup.inline_keyboard[0][0].callback_data, /^order:[0-9a-f]{32}$/);
   assert.doesNotMatch(JSON.stringify(sent), /private-order|private@example/);
   events.length = 0;
 
@@ -55,6 +60,16 @@ test("Telegram order messages, alerts, owner actions and recovery", async t => {
   assert.equal(events[1].payload.reply_parameters.message_id, 123);
   assert.match(events[0].payload.text, /待核款/);
   assert.equal(events[0].payload.message_id, 123);
+  const ownerAction = data => ({ callback_query: {
+    id: "callback", from: { id: 42 }, data, message: { chat: { type: "private", id: 42 }, message_id: 123 },
+  } });
+  await webhook(ownerAction(events[1].payload.reply_markup.inline_keyboard[0][0].callback_data));
+  assert.match(events.at(-1).payload.text, /核对实际到账/);
+  const confirm = events.at(-1).payload.reply_markup.inline_keyboard[0][0].callback_data;
+  await webhook(ownerAction(confirm));
+  assert.match(events.at(-1).payload.text, /已核实收款/);
+  await webhook(ownerAction(confirm));
+  assert.match(events.at(-1).payload.text, /订单状态已变化/);
   events.length = 0;
 
   await change("processing");
@@ -131,10 +146,12 @@ test("Telegram order messages, alerts, owner actions and recovery", async t => {
   await webhook(message(13, "/start"));
   assert.match(events.at(-1).payload.text, /待核款.*待发货.*异常/s);
   await webhook(partnerCallback("web:status=reported"));
+  assert.match(events.at(-1).payload.text, /当前没有待核款订单/);
+  await webhook(message(13, "/workbench"));
   const link = new URL(events.at(-1).payload.reply_markup.inline_keyboard[0][0].url);
   assert.equal(link.pathname, "/api/admin/telegram-entry");
   const ticket = link.hash.slice(1);
-  assert.deepEqual(await consumeTelegramAdminTicket(db, ticket), { chatId: "13", destination: "status=reported" });
+  assert.deepEqual(await consumeTelegramAdminTicket(db, ticket), { chatId: "13", destination: "" });
   assert.equal(await consumeTelegramAdminTicket(db, ticket), null);
   await webhook(message(13, "/workbench"));
   const pendingTicket = new URL(events.at(-1).payload.reply_markup.inline_keyboard[0][0].url).hash.slice(1);
