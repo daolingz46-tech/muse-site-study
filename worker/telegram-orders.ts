@@ -97,6 +97,59 @@ function messagePayload(order: Order, callbacks: boolean) {
 export async function syncTelegramOrders(env: TelegramOrderEnv, startedAt = Date.now()) {
   const bot = configuredBot(env);
   if (!bot) return;
+  await Promise.all([
+    syncOwnerOrders(env, bot, startedAt),
+    syncPartnerOrders(env.DB, bot),
+  ]);
+}
+
+async function syncPartnerOrders(db: D1Database, owner: Bot) {
+  const { results: partners } = await db.prepare("SELECT chatId,approvedAt FROM telegram_delivery_partners").all<{ chatId: string; approvedAt: number }>();
+  await Promise.all(partners.map(async ({ chatId, approvedAt }) => {
+    const bot = { ...owner, chatId };
+    const now = Date.now(), leaseUntil = now + 240_000;
+    await db.prepare("INSERT OR IGNORE INTO telegram_order_chats(chatId,startedAt) VALUES(?,?)").bind(chatId, approvedAt).run();
+    const claim = await db.prepare("UPDATE telegram_order_chats SET leaseUntil=? WHERE chatId=? AND leaseUntil<=? RETURNING chatId")
+      .bind(leaseUntil, chatId, now).first();
+    if (!claim) return;
+    try {
+      const { results: orders } = await db.prepare(`SELECT o.id,o.code,o.title,o.status
+        FROM orders o LEFT JOIN telegram_order_messages m ON m.chatId=? AND m.orderId=o.id
+        WHERE o.updatedAt>=? AND COALESCE(m.retryAt,0)<=?
+        AND (o.status IN ('pending','reported') OR (o.status='processing' AND o.product IN ('muse','gpt')))
+        AND COALESCE(m.snapshot,'') != 'partner:' || o.status
+        ORDER BY CASE o.status WHEN 'reported' THEN 0 WHEN 'processing' THEN 1 ELSE 2 END,o.updatedAt,o.id LIMIT 20`)
+        .bind(chatId, approvedAt, now).all<{ id: string; code: string; title: string; status: string }>();
+      for (const order of orders) {
+        if (Date.now() > leaseUntil - 30_000) break;
+        if (!await db.prepare("SELECT 1 FROM telegram_delivery_partners WHERE chatId=? AND approvedAt=?").bind(chatId, approvedAt).first()) break;
+        await db.prepare("INSERT OR IGNORE INTO telegram_order_messages(chatId,orderId,ref) VALUES(?,?,?)")
+          .bind(chatId, order.id, crypto.randomUUID().replaceAll("-", "")).run();
+        try {
+          await telegram(bot, "sendMessage", {
+            text: [stages[order.status], order.title.replace(/\s+/g, " ").slice(0, 160), `订单码 ${order.code}`].join("\n"),
+            protect_content: true,
+            ...(order.status === "processing" ? { reply_markup: { inline_keyboard: [[
+              { text: "查看待发货订单", callback_data: `todo:${order.code}` },
+            ]] } } : {}),
+          });
+          await db.prepare("UPDATE telegram_order_messages SET snapshot=?,retryAt=0 WHERE chatId=? AND orderId=?")
+            .bind(`partner:${order.status}`, chatId, order.id).run();
+        } catch (error) {
+          const retryAfter = error instanceof TelegramError ? error.retryAfter : 0;
+          await db.prepare("UPDATE telegram_order_messages SET retryAt=? WHERE chatId=? AND orderId=?")
+            .bind(Date.now() + Math.max(60, retryAfter) * 1000, chatId, order.id).run();
+          console.error("telegram_partner_notification_failed");
+          if (retryAfter) break;
+        }
+      }
+    } finally {
+      await db.prepare("UPDATE telegram_order_chats SET leaseUntil=0 WHERE chatId=? AND leaseUntil=?").bind(chatId, leaseUntil).run();
+    }
+  }));
+}
+
+async function syncOwnerOrders(env: TelegramOrderEnv, bot: Bot, startedAt: number) {
   const db = env.DB;
   const now = Date.now();
   const leaseUntil = now + 240_000;
@@ -291,8 +344,12 @@ export async function telegramOrderWebhook(env: TelegramOrderEnv, request: Reque
       return new Response(null, { status: 204 });
     }
     const todo = command.match(/^\/todo(?:\s+(\d{4}))?$/);
-    if (command === "/start" || todo) {
-      await showPartnerOrders(env.DB, bot, todo?.[1] || "");
+    const todoButton = update?.callback_query?.data?.match(/^todo:(\d{4})$/);
+    if (command === "/start" || todo || todoButton) {
+      if (todoButton && update?.callback_query) await telegram(bot, "answerCallbackQuery", {
+        chat_id: undefined, callback_query_id: update.callback_query.id,
+      });
+      await showPartnerOrders(env.DB, bot, todo?.[1] || todoButton?.[1] || "");
       return new Response(null, { status: 200 });
     }
   } else {

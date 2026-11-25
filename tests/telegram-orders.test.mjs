@@ -114,6 +114,17 @@ test("Telegram order messages, alerts, owner actions and recovery", async t => {
   await webhook(partnerCallback(partnerSend));
   assert.equal(deliveries.at(-1).card, "PARTNER-CARD");
   assert.equal(deliveries.length, 2);
+  await change("reported");
+  await Promise.all([syncTelegramOrders(env), syncTelegramOrders(env)]);
+  const partnerAlerts = events.filter(event => event.method === "sendMessage" && event.payload.chat_id === "13");
+  assert.equal(partnerAlerts.filter(event => event.payload.text.includes("待核款")).length, 1);
+  assert.doesNotMatch(JSON.stringify(partnerAlerts), /private@example|private-order|\/admin\//);
+  await change("processing");
+  await syncTelegramOrders(env);
+  const readyAlert = events.findLast(event => event.method === "sendMessage" && event.payload.chat_id === "13");
+  assert.match(readyAlert.payload.text, /待发货.*0123/s);
+  await webhook(partnerCallback(readyAlert.payload.reply_markup.inline_keyboard[0][0].callback_data));
+  assert.match(events.at(-1).payload.reply_markup.inline_keyboard[0][0].text, /0123/);
   await webhook(message(42, "/revoke 13"));
   assert.equal((await webhook(partnerCallback(partnerSend))).status, 204);
   await webhook(message(13, "/start"));
