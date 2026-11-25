@@ -598,6 +598,39 @@ async function sendManualDelivery(env: Env, input: Record<string, unknown>) {
   return json({ ok: true, sentAt: now, to: order.target, resent: resend || Boolean(previous) });
 }
 
+async function updateAdminOrder(env: Env, input: Record<string, unknown>, requireStatus?: string) {
+  const row = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(str(input.id, 64)).first<Row>();
+  if (!row) throw new HttpError(404, "订单不存在");
+  if (requireStatus && (row.status !== requireStatus || (input.action === "complete" && row.product !== "muse-token"))) {
+    throw new HttpError(409, "订单状态已变化，请重新查看。");
+  }
+  const now = Date.now(); let sql: string; let args: (string | number | null)[];
+  if (input.action === "cancel") {
+    if (!["pending","expired","reported"].includes(row.status) || row.paidAt) throw new HttpError(409,"只能取消尚未确认收款的订单，请刷新核查");
+    sql="UPDATE orders SET status='cancelled',updatedAt=? WHERE id=? AND status IN ('pending','expired','reported') AND paidAt IS NULL"; args=[now,row.id];
+  } else if (input.action === "confirm") {
+    if (!["pending", "reported", "expired"].includes(row.status)) throw new HttpError(409, "订单状态已更新，请刷新");
+    const reference = input.reference ? str(input.reference, 100) : null; if (reference && reference.length < 6) throw new HttpError(400, "支付交易单号格式不正确");
+    sql = "UPDATE orders SET status='processing',paidAt=?,reference=?,updatedAt=? WHERE id=? AND status=?"; args = [now, reference, now, row.id, row.status];
+  } else if (input.action === "complete") {
+    if (row.status !== "processing") throw new HttpError(409, "请先核对并确认收款");
+    if (row.product === "gpt") throw new HttpError(409, "GPT 订单请使用采购并发邮件按钮");
+    if (row.product === "muse-token") { const task = await env.DB.prepare("SELECT state FROM supplier_fulfillment WHERE orderId=?").bind(row.id).first<{state:string}>(); if (task && task.state !== "ready") throw new HttpError(409, "采购结果待核查，请先核查采购状态"); }
+    let delivery: string | null = null;
+    if (row.product === "muse") { const d = input.delivery as Record<string, unknown> | undefined; const email = str(d?.email, 254), password = str(d?.password, 256), codeUrl = str(d?.codeUrl, 1000); if (!email || !password || !/^https:\/\//.test(codeUrl)) throw new HttpError(400, "请填写交付账号、密码和 HTTPS 接码链接"); delivery = JSON.stringify({ email, password, codeUrl }); }
+    if (input.checked !== true) throw new HttpError(400, "请确认已经完成充值或交付");
+    sql = "UPDATE orders SET status='complete',completedAt=?,delivery=?,updatedAt=? WHERE id=? AND status=?" + (row.product === "muse-token" ? " AND NOT EXISTS (SELECT 1 FROM supplier_fulfillment WHERE orderId=orders.id AND state != 'ready')" : ""); args = [now, delivery, now, row.id, row.status];
+  } else throw new HttpError(400, "操作无效");
+  try {
+    const result = await env.DB.batch([
+      env.DB.prepare(sql).bind(...args),
+      env.DB.prepare("INSERT INTO audit(orderId,action,createdAt) SELECT ?,?,? WHERE changes()=1").bind(row.id, String(input.action), now),
+    ]);
+    if (!result[0].meta.changes) throw new HttpError(409, "订单状态已更新，请刷新");
+  } catch (error) { if (error instanceof HttpError) throw error; if (String(error).includes("UNIQUE")) throw new HttpError(409, "该支付交易单号已用于其他订单，请核对"); throw error; }
+  return json({ ok: true });
+}
+
 async function admin(env: Env, request: Request, path: string, syncTelegram: () => void) {
   if ((path === "/api/admin/login" || path === "/api/admin/mini-login") && request.method === "POST") {
     const miniLogin = path.endsWith("/mini-login");
@@ -1239,33 +1272,7 @@ async function authenticatedAdmin(env: Env, request: Request, path: string) {
     return json({ ok: true });
   }
   if (path === "/api/admin/update" && request.method === "POST") {
-    const input = await body(request); const row = await env.DB.prepare("SELECT * FROM orders WHERE id=?").bind(str(input.id, 64)).first<Row>();
-    if (!row) throw new HttpError(404, "订单不存在");
-    const now = Date.now(); let sql: string; let args: (string | number | null)[];
-    if (input.action === "cancel") {
-      if (!["pending","expired","reported"].includes(row.status) || row.paidAt) throw new HttpError(409,"只能取消尚未确认收款的订单，请刷新核查");
-      sql="UPDATE orders SET status='cancelled',updatedAt=? WHERE id=? AND status IN ('pending','expired','reported') AND paidAt IS NULL"; args=[now,row.id];
-    } else if (input.action === "confirm") {
-      if (!["pending", "reported", "expired"].includes(row.status)) throw new HttpError(409, "订单状态已更新，请刷新");
-      const reference = input.reference ? str(input.reference, 100) : null; if (reference && reference.length < 6) throw new HttpError(400, "支付交易单号格式不正确");
-      sql = "UPDATE orders SET status='processing',paidAt=?,reference=?,updatedAt=? WHERE id=? AND status=?"; args = [now, reference, now, row.id, row.status];
-    } else if (input.action === "complete") {
-      if (row.status !== "processing") throw new HttpError(409, "请先核对并确认收款");
-      if (row.product === "gpt") throw new HttpError(409, "GPT 订单请使用采购并发邮件按钮");
-      if (row.product === "muse-token") { const task = await env.DB.prepare("SELECT state FROM supplier_fulfillment WHERE orderId=?").bind(row.id).first<{state:string}>(); if (task && task.state !== "ready") throw new HttpError(409, "采购结果待核查，请先核查采购状态"); }
-      let delivery: string | null = null;
-      if (row.product === "muse") { const d = input.delivery as Record<string, unknown> | undefined; const email = str(d?.email, 254), password = str(d?.password, 256), codeUrl = str(d?.codeUrl, 1000); if (!email || !password || !/^https:\/\//.test(codeUrl)) throw new HttpError(400, "请填写交付账号、密码和 HTTPS 接码链接"); delivery = JSON.stringify({ email, password, codeUrl }); }
-      if (input.checked !== true) throw new HttpError(400, "请确认已经完成充值或交付");
-      sql = "UPDATE orders SET status='complete',completedAt=?,delivery=?,updatedAt=? WHERE id=? AND status=?" + (row.product === "muse-token" ? " AND NOT EXISTS (SELECT 1 FROM supplier_fulfillment WHERE orderId=orders.id AND state != 'ready')" : ""); args = [now, delivery, now, row.id, row.status];
-    } else throw new HttpError(400, "操作无效");
-    try {
-      const result = await env.DB.batch([
-        env.DB.prepare(sql).bind(...args),
-        env.DB.prepare("INSERT INTO audit(orderId,action,createdAt) SELECT ?,?,? WHERE changes()=1").bind(row.id, String(input.action), now),
-      ]);
-      if (!result[0].meta.changes) throw new HttpError(409, "订单状态已更新，请刷新");
-    } catch (error) { if (error instanceof HttpError) throw error; if (String(error).includes("UNIQUE")) throw new HttpError(409, "该支付交易单号已用于其他订单，请核对"); throw error; }
-    return json({ ok: true });
+    return updateAdminOrder(env, await body(request));
   }
   throw new HttpError(404, "接口不存在");
 }
@@ -1304,7 +1311,14 @@ const worker = {
           } catch (error) {
             return error instanceof HttpError ? error.message : "发送未确认，请在工作台核查发件箱和发货记录。";
           }
-        }, (chatId, destination) => createTelegramAdminLink(env.DB, chatId, destination));
+        }, (chatId, destination) => createTelegramAdminLink(env.DB, chatId, destination), async (id, action) => {
+          try {
+            await updateAdminOrder(env, { id, action, checked: true }, action === "confirm" ? "reported" : "processing");
+            return action === "confirm" ? "已核实收款，可以继续交付。" : "已确认充值到账。";
+          } catch (error) {
+            return error instanceof HttpError ? error.message : "操作结果待确认，请重新查看订单。";
+          }
+        });
         if (response.status === 200) syncTelegram();
         return response;
       }
