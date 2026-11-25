@@ -11,7 +11,7 @@ test("Telegram order messages, alerts, owner actions and recovery", async t => {
   }] }));
   t.after(() => mf.dispose());
   const db = await mf.getD1Database("DB");
-  for (const file of ["0001_orders", "0007_delivery_tutorial", "0009_supplier_fulfillment", "0010_stock_notice", "0026_telegram_orders"]) {
+  for (const file of ["0001_orders", "0007_delivery_tutorial", "0009_supplier_fulfillment", "0010_stock_notice", "0026_telegram_orders", "0030_telegram_delivery_drafts"]) {
     for (const sql of readFileSync(new URL("../migrations/" + file + ".sql", import.meta.url), "utf8").split(";")) {
       if (sql.trim()) await db.prepare(sql).run();
     }
@@ -32,9 +32,10 @@ test("Telegram order messages, alerts, owner actions and recovery", async t => {
   ).bind(id, id, "input", "secret", id === "historical" ? "0456" : "0123", createdAt, now + 60_000, createdAt).run();
   const change = status => db.prepare("UPDATE orders SET status=?,updatedAt=? WHERE id='private-order'").bind(status, Date.now()).run();
   const methods = () => events.map(event => event.method);
+  const deliveries = [];
   const webhook = (update, secret = env.TELEGRAM_WEBHOOK_SECRET) => telegramOrderWebhook(env, new Request("https://test.example/api/telegram/orders", {
     method: "POST", headers: { "X-Telegram-Bot-Api-Secret-Token": secret }, body: JSON.stringify(update),
-  }));
+  }), async input => { deliveries.push(input); return "邮件已发送"; });
 
   await insert("historical", now - 60_000);
   await insert("private-order", now);
@@ -59,6 +60,7 @@ test("Telegram order messages, alerts, owner actions and recovery", async t => {
   await syncTelegramOrders(env);
   assert.deepEqual(methods(), ["editMessageText", "pinChatMessage"]);
   const data = events[0].payload.reply_markup.inline_keyboard[1][0].callback_data;
+  const mail = events[0].payload.reply_markup.inline_keyboard[2][0].callback_data;
   const callback = (id, message_id = 123) => ({
     callback_query: { id: "callback", from: { id }, data, message: { chat: { type: "private", id: 42 }, message_id } },
   });
@@ -71,6 +73,24 @@ test("Telegram order messages, alerts, owner actions and recovery", async t => {
   await webhook(callback(42));
   assert.equal((await db.prepare("SELECT contactedAt FROM telegram_order_messages").first()).contactedAt, recorded);
   assert.ok(recorded > 0);
+  events.length = 0;
+
+  const mailCallback = data => ({ callback_query: { ...callback(42).callback_query, data } });
+  await webhook(mailCallback(mail));
+  assert.equal(events.at(-1).payload.reply_markup.force_reply, true);
+  await webhook({ message: {
+    chat: { type: "private", id: 42 }, from: { id: 42 }, text: "FIXTURE-CARD",
+    message_id: 124, reply_to_message: { message_id: 123 },
+  } });
+  assert.equal(deliveries.length, 0);
+  assert.equal(events.at(-2).method, "deleteMessage");
+  assert.doesNotMatch(JSON.stringify(events), /FIXTURE-CARD|private@example/);
+  const send = events.at(-1).payload.reply_markup.inline_keyboard[0][0].callback_data;
+  await Promise.all([webhook(mailCallback(send)), webhook(mailCallback(send))]);
+  assert.equal(deliveries.length, 1);
+  assert.equal(deliveries[0].id, "private-order");
+  assert.equal(deliveries[0].card, "FIXTURE-CARD");
+  assert.equal((await db.prepare("SELECT COUNT(*) AS count FROM telegram_delivery_drafts").first()).count, 0);
   events.length = 0;
 
   await db.prepare("INSERT INTO supplier_fulfillment(orderId,state,updatedAt) VALUES('private-order','purchase_unknown',?)").bind(now).run();
