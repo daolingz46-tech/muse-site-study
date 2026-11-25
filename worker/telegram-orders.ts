@@ -170,6 +170,35 @@ export async function syncTelegramOrders(env: TelegramOrderEnv, startedAt = Date
 
 type ManualDelivery = (input: Record<string, unknown>) => Promise<string>;
 
+async function showPartnerOrders(db: D1Database, bot: Bot, code: string) {
+  const { results } = await db.prepare(`SELECT o.id,o.code,o.title FROM orders o
+    WHERE o.status='processing' AND o.product IN ('muse','gpt') AND (?='' OR o.code=?)
+    AND NOT EXISTS (SELECT 1 FROM supplier_fulfillment WHERE orderId=o.id)
+    AND NOT EXISTS (SELECT 1 FROM delivery_emails WHERE orderId=o.id)
+    ORDER BY o.paidAt,o.id LIMIT 11`).bind(code, code).all<{ id: string; code: string; title: string }>();
+  if (!results.length) {
+    await telegram(bot, "sendMessage", { text: "没有可手动邮件发货的订单。", protect_content: true });
+    return;
+  }
+  const orders = results.slice(0, 10);
+  await db.batch(orders.map(order => db.prepare("INSERT OR IGNORE INTO telegram_order_messages(chatId,orderId,ref) VALUES(?,?,?)")
+    .bind(bot.chatId, order.id, crypto.randomUUID().replaceAll("-", ""))));
+  const { results: messages } = await db.prepare(`SELECT orderId,ref FROM telegram_order_messages
+    WHERE chatId=? AND orderId IN (${orders.map(() => "?").join(",")})`)
+    .bind(bot.chatId, ...orders.map(order => order.id)).all<{ orderId: string; ref: string }>();
+  const refs = new Map(messages.map(row => [row.orderId, row.ref]));
+  const menu = await telegram<{message_id: number}>(bot, "sendMessage", {
+    text: "待邮件发货 · 请选择订单。可发 /todo 加 4 位订单码查询指定订单。",
+    protect_content: true,
+    reply_markup: { inline_keyboard: orders.map(order => [{
+      text: `${order.code} · ${order.title.replace(/\s+/g, " ").slice(0, 40)}`,
+      callback_data: `mail:${refs.get(order.id)}`,
+    }]) },
+  });
+  await db.batch(orders.map(order => db.prepare("UPDATE telegram_order_messages SET messageId=? WHERE chatId=? AND orderId=?")
+    .bind(menu.message_id, bot.chatId, order.id)));
+}
+
 async function handleDeliveryDraft(db: D1Database, bot: Bot, update: Update, sendDelivery: ManualDelivery) {
   const callback = update.callback_query;
   const action = callback?.data?.match(/^(mail|send|cancel):([0-9a-f]{32})$/);
@@ -237,18 +266,55 @@ async function handleDeliveryDraft(db: D1Database, bot: Bot, update: Update, sen
 }
 
 export async function telegramOrderWebhook(env: TelegramOrderEnv, request: Request, sendDelivery?: ManualDelivery) {
-  const bot = configuredBot(env);
-  if (!bot || !env.TELEGRAM_WEBHOOK_SECRET) return new Response(null, { status: 404 });
+  const owner = configuredBot(env);
+  if (!owner || !env.TELEGRAM_WEBHOOK_SECRET) return new Response(null, { status: 404 });
   if (request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.TELEGRAM_WEBHOOK_SECRET) {
     return new Response(null, { status: 403 });
   }
   const update = await request.json().catch(() => null) as Update | null;
   const event = update?.callback_query || update?.message;
   const chat = update?.callback_query ? update.callback_query.message?.chat : update?.message?.chat;
-  if (chat?.type !== "private" || String(chat.id) !== bot.chatId || String(event?.from?.id) !== bot.chatId) {
+  const chatId = String(chat?.id);
+  if (chat?.type !== "private" || !/^[1-9]\d{0,15}$/.test(chatId) || String(event?.from?.id) !== chatId) {
     return new Response(null, { status: 204 });
   }
+  const bot = { ...owner, chatId };
+  const command = update?.message?.text?.trim() || "";
+  const isOwner = chatId === owner.chatId;
+  if (!isOwner) {
+    const approved = await env.DB.prepare("SELECT 1 FROM telegram_delivery_partners WHERE chatId=?").bind(chatId).first();
+    if (!approved) {
+      if (command === "/start") await telegram(bot, "sendMessage", {
+        text: `这个 Bot 需要店主授权。请把你的 Telegram ID 发给店主：${chatId}`,
+        protect_content: true,
+      });
+      return new Response(null, { status: 204 });
+    }
+    const todo = command.match(/^\/todo(?:\s+(\d{4}))?$/);
+    if (command === "/start" || todo) {
+      await showPartnerOrders(env.DB, bot, todo?.[1] || "");
+      return new Response(null, { status: 200 });
+    }
+  } else {
+    const manage = command.match(/^\/(allow|revoke)\s+([1-9]\d{0,15})$/);
+    if (manage) {
+      const [, action, partnerId] = manage;
+      if (action === "allow" && partnerId !== owner.chatId) await env.DB.prepare(
+        "INSERT OR IGNORE INTO telegram_delivery_partners(chatId,approvedAt) VALUES(?,?)",
+      ).bind(partnerId, Date.now()).run();
+      if (action === "revoke") await env.DB.batch([
+        env.DB.prepare("DELETE FROM telegram_delivery_partners WHERE chatId=?").bind(partnerId),
+        env.DB.prepare("DELETE FROM telegram_delivery_drafts WHERE chatId=?").bind(partnerId),
+      ]);
+      await telegram(bot, "sendMessage", {
+        text: action === "allow" ? `已授权 ${partnerId} 查看待邮件发货订单并发送交付邮件。请让对方再发 /start。` : `已撤销 ${partnerId} 的邮件发货权限。`,
+        protect_content: true,
+      });
+      return new Response(null, { status: 200 });
+    }
+  }
   if (update && sendDelivery && await handleDeliveryDraft(env.DB, bot, update, sendDelivery)) return new Response(null, { status: 200 });
+  if (!isOwner) return new Response(null, { status: 204 });
 
   if (update?.message?.text === "/todo" || update?.message?.text === "/start") {
     const counts = await env.DB.prepare(`SELECT

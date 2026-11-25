@@ -11,7 +11,7 @@ test("Telegram order messages, alerts, owner actions and recovery", async t => {
   }] }));
   t.after(() => mf.dispose());
   const db = await mf.getD1Database("DB");
-  for (const file of ["0001_orders", "0007_delivery_tutorial", "0009_supplier_fulfillment", "0010_stock_notice", "0026_telegram_orders", "0030_telegram_delivery_drafts"]) {
+  for (const file of ["0001_orders", "0007_delivery_tutorial", "0009_supplier_fulfillment", "0010_stock_notice", "0026_telegram_orders", "0030_telegram_delivery_drafts", "0031_telegram_delivery_partners"]) {
     for (const sql of readFileSync(new URL("../migrations/" + file + ".sql", import.meta.url), "utf8").split(";")) {
       if (sql.trim()) await db.prepare(sql).run();
     }
@@ -91,6 +91,33 @@ test("Telegram order messages, alerts, owner actions and recovery", async t => {
   assert.equal(deliveries[0].id, "private-order");
   assert.equal(deliveries[0].card, "FIXTURE-CARD");
   assert.equal((await db.prepare("SELECT COUNT(*) AS count FROM telegram_delivery_drafts").first()).count, 0);
+  events.length = 0;
+
+  const message = (id, text) => ({ message: { chat: { type: "private", id }, from: { id }, text } });
+  await webhook(message(13, "/start"));
+  assert.match(events.at(-1).payload.text, /需要店主授权.*13/);
+  assert.doesNotMatch(events.at(-1).payload.text, /0123|测试商品/);
+  await webhook(message(13, "/allow 13"));
+  assert.equal(await db.prepare("SELECT chatId FROM telegram_delivery_partners").first(), null);
+  await webhook(message(42, "/allow 13"));
+  await webhook(message(13, "/todo 0123"));
+  const menu = events.at(-1).payload;
+  assert.equal(menu.chat_id, "13");
+  assert.match(menu.reply_markup.inline_keyboard[0][0].text, /0123/);
+  assert.doesNotMatch(JSON.stringify(menu), /private-order|private@example|\/admin\//);
+  const partnerCallback = data => ({ callback_query: {
+    ...callback(13).callback_query, data, message: { chat: { type: "private", id: 13 }, message_id: 123 },
+  } });
+  await webhook(partnerCallback(menu.reply_markup.inline_keyboard[0][0].callback_data));
+  await webhook({ message: { ...message(13, "PARTNER-CARD").message, message_id: 125, reply_to_message: { message_id: 123 } } });
+  const partnerSend = events.at(-1).payload.reply_markup.inline_keyboard[0][0].callback_data;
+  await webhook(partnerCallback(partnerSend));
+  assert.equal(deliveries.at(-1).card, "PARTNER-CARD");
+  assert.equal(deliveries.length, 2);
+  await webhook(message(42, "/revoke 13"));
+  assert.equal((await webhook(partnerCallback(partnerSend))).status, 204);
+  await webhook(message(13, "/start"));
+  assert.match(events.at(-1).payload.text, /需要店主授权/);
   events.length = 0;
 
   await db.prepare("INSERT INTO supplier_fulfillment(orderId,state,updatedAt) VALUES('private-order','purchase_unknown',?)").bind(now).run();
